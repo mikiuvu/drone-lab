@@ -25,4 +25,6 @@ int main() {
   assert(std::abs(value.pose_covariance[11]-.001)<1e-8);
   assert(value.pose_covariance[2]==0&&value.pose_covariance[7]==0);
   assert(value.quality>0);
+  assert(value.velocity_covariance[0]>=10000&&value.velocity_covariance[6]>=10000);
+  assert(std::abs(value.velocity_covariance[11]-.001)<1e-8);
 }

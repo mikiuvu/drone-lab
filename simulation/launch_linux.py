@@ -5,6 +5,7 @@ This manager's pose knowledge is confined to one-time spawning and evaluation.
 
 import argparse
 import json
+import math
 import os
 import signal
 import subprocess
@@ -416,7 +417,14 @@ def main():
                 [
                     "param set EKF2_GPS_CTRL 0",
                     "param set SENS_EN_GPSSIM 0",
-                    "param set EKF2_EV_CTRL " + ("2" if args.vertical_only else "3"),
+                    "param set EKF2_EV_CTRL "
+                    + (
+                        "2"
+                        if args.vertical_only
+                        else "7"
+                        if config.get("optical_flow", {}).get("enabled", True)
+                        else "3"
+                    ),
                     "param set EKF2_HGT_REF 3",
                     "param set EKF2_BARO_CTRL 0",
                     "param set EKF2_EV_DELAY 0",
@@ -432,6 +440,14 @@ def main():
                 params += (
                     ROOT / "models" / "generated_micro" / "px4_micro_reference.params"
                 ).read_text(encoding="utf-8")
+            for name, value in config.get("px4_parameters", {}).items():
+                if (
+                    not name.replace("_", "").isalnum()
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                ):
+                    raise ValueError("Invalid PX4 parameter override")
+                params += f"\nparam set {name} {value}\n"
             (hooks / "px4-rc.params").write_text(params, encoding="utf-8")
             if count > 10:
                 mavlink_script = PX4 / "ROMFS/px4fmu_common/init.d-posix/px4-rc.mavlink"

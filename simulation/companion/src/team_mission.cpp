@@ -39,6 +39,9 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
     if (!finite(config_.homes[i]) || !finite(config_.assembly[i])) throw std::invalid_argument("航点无效");
     config_.assembly[i].z=config_.cruise_z_m;
   }
+  if(config_.completed_holding.empty())config_.completed_holding=config_.assembly;
+  if(config_.completed_holding.size()!=n||!std::isfinite(config_.contact_exit_side))throw std::invalid_argument("退出集结点配置无效");
+  for(auto&p:config_.completed_holding){if(!finite(p))throw std::invalid_argument("退出集结点无效");p.z=config_.cruise_z_m;}
   for (const auto& p : config_.transit_waypoints) if (!finite(p)) throw std::invalid_argument("航路点无效");
   if (!config_.explicit_formation_offsets) {
     config_.formation_offsets.resize(n); double cx = 0, cy = 0;
@@ -130,6 +133,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       if(config_.pipelined_contact){const auto&s=status_[a];const double dx=s.x_m-config_.approach.x,dy=s.y_m-config_.approach.y;
         const double forward=dx*std::cos(config_.approach.yaw)+dy*std::sin(config_.approach.yaw);
         const double lateral=-dx*std::sin(config_.approach.yaw)+dy*std::cos(config_.approach.yaw);
+        if(turn_+1==static_cast<int>(config_.order.size())&&validForBarrier(a,sim,wall)&&forward<-.12){++turn_;enter(TeamPhase::RETURN_ALL,sim);break;}
         if(validForBarrier(a,sim,wall)&&forward<-.25)retreat_assembly_=true;
         if(validForBarrier(a,sim,wall)&&retreat_assembly_&&forward<-.25&&std::abs(lateral)>.18){if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);}
       }else if(barrier(near(a,retreat_assembly_?config_.assembly[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
@@ -152,7 +156,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       else if(!status_[i].xy_valid) c.degraded_reason="水平定位恢复中";
       else c.degraded_reason="飞控连接恢复中";
     }
-    TeamPoint p=config_.assembly[i];
+    TeamPoint p=std::find(completed_.begin(),completed_.end(),static_cast<int>(i))!=completed_.end()?config_.completed_holding[i]:config_.assembly[i];
     const bool returning=phase_==TeamPhase::RETURN_ALL||phase_==TeamPhase::ABORT_RETURN;
     if(phase_==TeamPhase::WAIT_READY||phase_==TeamPhase::TAKEOFF||returning||phase_==TeamPhase::LAND_ALL||phase_==TeamPhase::COMPLETE||phase_==TeamPhase::ABORTED){
       p=config_.homes[i];
@@ -162,14 +166,14 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     if(route_index>=0&&route_index<static_cast<int>(config_.transit_waypoints.size())){
       p=config_.transit_waypoints[route_index];p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;p.yaw=config_.homes[i].yaw;
     } else if(static_cast<int>(i)==c.active_vehicle) {
-      p=phase_==TeamPhase::RETREAT&&retreat_assembly_?config_.assembly[i]:config_.approach;
+      p=phase_==TeamPhase::RETREAT&&retreat_assembly_?config_.completed_holding[i]:config_.approach;
       if(phase_==TeamPhase::RETREAT&&config_.pipelined_contact&&!retreat_assembly_){p.x-=.45*std::cos(p.yaw);p.y-=.45*std::sin(p.yaw);}
     }
     if(config_.pipelined_contact&&(phase_==TeamPhase::CONTACT||phase_==TeamPhase::RETREAT)&&
        turn_+1<static_cast<int>(config_.order.size())&&config_.order[turn_+1]==static_cast<int>(i)) {
       const double heading=config_.approach.yaw;
       const double side=(config_.assembly[i].y-config_.approach.y)*std::cos(heading)-(config_.assembly[i].x-config_.approach.x)*std::sin(heading);
-      const double lateral=side>=0?.25:-.25;
+      const double lateral=config_.contact_exit_side!=0?-std::copysign(.25,config_.contact_exit_side):(side>=0?.25:-.25);
       p=config_.approach;p.x-=.15*std::cos(heading)+lateral*std::sin(heading);p.y+=lateral*std::cos(heading)-.15*std::sin(heading);
     }
     if(c.degraded&&seen_[i])p=holds_[i];

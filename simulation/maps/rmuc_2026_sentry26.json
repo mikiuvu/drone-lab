@@ -97,8 +97,8 @@
   },
   "team_mission": {
     "cruise_z_m": 0.75,
-    "cruise_speed_mps": 0.25,
-    "contact_speed_mps": 0.2,
+    "cruise_speed_mps": 4,
+    "contact_speed_mps": 0.25,
     "return_tolerance_m": 0.14,
     "home_ground_z_m": 0.5,
     "team": "red",
@@ -109,15 +109,15 @@
       "source": "Official RM2026 Figures 4-1/4-7, matched to Sentry26 mesh"
     },
     "approach": {
-      "x": 10.85,
+      "x": 11.06,
       "y": 0,
-      "z": 0.65,
+      "z": 0.58,
       "yaw": 0
     },
     "target": {
-      "x": 11.2361166,
+      "x": 11.21736351335351,
       "y": 0,
-      "z": 0.65
+      "z": 0.58
     },
     "order": [
       0,
@@ -129,22 +129,22 @@
       {
         "id": 0,
         "x": 9.9,
-        "y": -0.65
+        "y": 0.65
       },
       {
         "id": 1,
         "x": 9.9,
-        "y": 0.65
+        "y": 1.0
       },
       {
         "id": 2,
         "x": 10.5,
-        "y": -0.65
+        "y": 0.65
       },
       {
         "id": 3,
         "x": 10.5,
-        "y": 0.65
+        "y": 1.0
       }
     ],
     "formation_offsets": [
@@ -179,41 +179,55 @@
         "x": 1,
         "y": 0,
         "z": 0.75
-      },
-      {
-        "x": 1.0,
-        "y": -2.5,
-        "z": 0.75
-      },
-      {
-        "x": 3.0,
-        "y": -2.5,
-        "z": 0.75
-      },
-      {
-        "x": 4.5,
-        "y": -1.5,
-        "z": 0.75
-      },
-      {
-        "x": 6,
-        "y": -1,
-        "z": 0.75
-      },
-      {
-        "x": 8,
-        "y": -1,
-        "z": 0.75
-      },
-      {
-        "x": 10,
-        "y": 0,
-        "z": 0.75
       }
     ],
     "loss_abort_s": 15,
     "body_clearance_m": 0.016,
-    "contact_radius_m": 0.052
+    "contact_radius_m": 0.052,
+    "position_gain": 2.5,
+    "climb_speed_mps": 0.6,
+    "descent_speed_mps": 0.4,
+    "landing_speed_mps": 0.22,
+    "yaw_gain": 3.0,
+    "yaw_rate_limit_rad_s": 2.0,
+    "stable_s": 0.05,
+    "route_tolerance_m": 0.5,
+    "route_speed_tolerance_mps": 5.5,
+    "fly_through_route": true,
+    "velocity_damping": 0.5,
+    "pipelined_contact": true,
+    "impact_settle_s": 0.15,
+    "touchdown_descent_mps": 1.0,
+    "impact_acceleration_mps2": 0.5,
+    "impact_proximity_m": 0.14,
+    "impact_recovery_s": 0.7,
+    "impact_pitch_rad": 0.18,
+    "touchdown_thrust": 0.04,
+    "directional_impact": true,
+    "impact_roll_rad": 0.12,
+    "contact_exit_side": -1,
+    "completed_holding": [
+      {
+        "id": 0,
+        "x": 9.9,
+        "y": -1.0
+      },
+      {
+        "id": 1,
+        "x": 9.9,
+        "y": -0.65
+      },
+      {
+        "id": 2,
+        "x": 10.5,
+        "y": -1.0
+      },
+      {
+        "id": 3,
+        "x": 10.5,
+        "y": -0.65
+      }
+    ]
   },
   "optical_flow": {
     "enabled": true,
@@ -221,5 +235,14 @@
     "scale_error": 0.005,
     "drop_probability": 0.01
   },
-  "uwb_anchors": []
+  "uwb_anchors": [],
+  "px4_parameters": {
+    "COM_SPOOLUP_TIME": 0.5,
+    "MPC_TKO_RAMP_T": 0.5,
+    "LNDMC_TRIG_TIME": 0.3,
+    "MPC_XY_VEL_P_ACC": 4.0,
+    "MPC_XY_VEL_D_ACC": 0.3,
+    "MC_ROLL_P": 6.0,
+    "MC_PITCH_P": 6.0
+  }
 }

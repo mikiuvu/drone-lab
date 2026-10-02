@@ -99,7 +99,17 @@ void odometry(Udp&sock,int port,const companion::Estimate&e){
   const Eigen::Vector3d p=(a*Eigen::Vector3d(e.pose.x_m,e.pose.y_m,e.pose.z_m)).eval();
   const Eigen::Vector3d v=(b*r.transpose()*e.velocity_enu_mps).eval();
   mavlink_odometry_t d{};d.time_usec=e.sim_time_us;d.frame_id=MAV_FRAME_LOCAL_FRD;d.child_frame_id=MAV_FRAME_BODY_FRD;d.x=p.x();d.y=p.y();d.z=p.z();d.q[0]=q.w();d.q[1]=q.x();d.q[2]=q.y();d.q[3]=q.z();d.vx=v.x();d.vy=v.y();d.vz=v.z();d.rollspeed=d.pitchspeed=d.yawspeed=0;d.estimator_type=MAV_ESTIMATOR_TYPE_VISION;d.reset_counter=0;d.quality=e.z_valid?(e.xy_valid?100:80):0;
-  Eigen::Matrix<double,6,6>pc=Eigen::Matrix<double,6,6>::Zero(),vc=pc;pc.block<3,3>(0,0)=a*e.covariance.block<3,3>(0,0)*a.transpose();if(!e.xy_valid){for(int axis=0;axis<2;++axis){pc.row(axis).setZero();pc.col(axis).setZero();pc(axis,axis)=10000.0;}}pc(3,3)=pc(4,4)=0.02;pc(5,5)=std::max(0.01,e.covariance(3,3));vc.block<3,3>(0,0)=b*r.transpose()*e.covariance.block<3,3>(4,4)*r*b;vc(3,3)=vc(4,4)=vc(5,5)=0.1;int k=0;for(int row=0;row<6;++row)for(int col=row;col<6;++col){d.pose_covariance[k]=pc(row,col);d.velocity_covariance[k]=vc(row,col);++k;}mavlink_message_t msg;mavlink_msg_odometry_encode(200,191,&msg,&d);sendMav(sock,msg,port);
+  Eigen::Matrix<double,6,6>pc=Eigen::Matrix<double,6,6>::Zero(),vc=pc;
+  Eigen::Matrix3d velocity_covariance=e.covariance.block<3,3>(4,4);
+  pc.block<3,3>(0,0)=a*e.covariance.block<3,3>(0,0)*a.transpose();
+  if(!e.xy_valid)for(int axis=0;axis<2;++axis){
+    pc.row(axis).setZero();pc.col(axis).setZero();pc(axis,axis)=10000.0;
+    velocity_covariance.row(axis).setZero();velocity_covariance.col(axis).setZero();velocity_covariance(axis,axis)=10000.0;
+  }
+  pc(3,3)=pc(4,4)=0.02;pc(5,5)=std::max(0.01,e.covariance(3,3));
+  vc.block<3,3>(0,0)=b*r.transpose()*velocity_covariance*r*b;vc(3,3)=vc(4,4)=vc(5,5)=0.1;
+  int k=0;for(int row=0;row<6;++row)for(int col=row;col<6;++col){d.pose_covariance[k]=pc(row,col);d.velocity_covariance[k]=vc(row,col);++k;}
+  mavlink_message_t msg;mavlink_msg_odometry_encode(200,191,&msg,&d);sendMav(sock,msg,port);
 }
 }
 
@@ -116,9 +126,14 @@ int main(int argc,char**argv){try{
   std::vector<int> vehicle_ids;for(const auto&spawn:map_settings.at("spawns"))vehicle_ids.push_back(spawn.at("id").get<int>());
   if(armor_enabled&&std::find(vehicle_ids.begin(),vehicle_ids.end(),o.mission_vehicle)==vehicle_ids.end())throw std::runtime_error("mission explorer is not in fleet");
   const auto team_settings=map_settings.value("team_mission",json::object());
+  for(const char* key:{"position_gain","cruise_speed_mps","climb_speed_mps","descent_speed_mps","landing_speed_mps","touchdown_descent_mps","yaw_gain","yaw_rate_limit_rad_s","impact_acceleration_mps2","impact_proximity_m"})
+    if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<=0))throw std::runtime_error(std::string("invalid team_mission.")+key);
+  for(const char* key:{"velocity_damping","impact_settle_s","impact_recovery_s","impact_pitch_rad","impact_roll_rad","touchdown_thrust"})
+    if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<0))throw std::runtime_error(std::string("invalid team_mission.")+key);
+  if(team_settings.value("impact_pitch_rad",0.0)>=companion::kPi/2||team_settings.value("impact_roll_rad",0.0)>=companion::kPi/2||team_settings.value("touchdown_thrust",0.0)>1)throw std::runtime_error("invalid recovery attitude or thrust");
   std::unique_ptr<Udp> team;
   if(team_enabled)team=std::make_unique<Udp>(18000+o.vehicle);
-  json team_command;Clock::time_point team_rx{};uint64_t team_sequence=0,impact_seq=0,last_impact_us=0;
+  json team_command;Clock::time_point team_rx{};uint64_t team_sequence=0,impact_seq=0,last_impact_us=0,contact_enter_us=0;
   bool team_disarm=false,team_complete=false,landed=false,landing_recorded=false;
 
 
@@ -145,7 +160,9 @@ int main(int argc,char**argv){try{
         if(cmd.value("kind","")!="team_command"||cmd.value("vehicle",-1)!=o.vehicle)continue;
         auto sequence=cmd.at("sequence").get<uint64_t>();if(sequence<=team_sequence)continue;
         bool finite=true;for(const char*key:{"target_x_m","target_y_m","target_z_m","target_yaw_rad","contact_speed_mps"})finite=finite&&cmd.contains(key)&&cmd.at(key).is_number()&&std::isfinite(cmd.at(key).get<double>());
-        if(!finite)continue;team_command=std::move(cmd);team_sequence=sequence;team_rx=Clock::now();
+        if(!finite)continue;
+        if(cmd.value("phase","")=="CONTACT"&&team_command.value("phase","")!="CONTACT")contact_enter_us=cmd.at("sim_time_us").get<uint64_t>();
+        team_command=std::move(cmd);team_sequence=sequence;team_rx=Clock::now();
       }catch(const std::exception&){}
     }
     for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;sim_us=std::max(sim_us,stamp);obs_rx=Clock::now();if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);else if(auto t=companion::parseTofDatagram(s,o.vehicle)){if(!team_enabled||!last_impact_us||stamp>last_impact_us+400000)fusion(estimator.fuseTof(*t),"tof",stamp);}else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);}}catch(const std::exception&){} }
@@ -171,10 +188,13 @@ int main(int argc,char**argv){try{
         Eigen::Vector3d specific_flu(i.xacc,-i.yacc,-i.zacc);
         const double acceleration_yaw=estimator.estimate().pose.yaw_rad;
         Eigen::Vector3d raw_linear=rotation(roll,-pitch,acceleration_yaw)*specific_flu+Eigen::Vector3d(0,0,-9.80665);
-        if(team_enabled&&team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&armed&&sim_us>last_impact_us+1000000){
+        if(team_enabled&&team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&armed&&sim_us>last_impact_us+1000000&&sim_us>contact_enter_us+150000){
           const auto estimate=estimator.estimate();
           const double tx=team_settings.value("target",json::object()).value("x",0.0),ty=team_settings.value("target",json::object()).value("y",0.0);
-          if(std::hypot(estimate.pose.x_m-tx,estimate.pose.y_m-ty)<.35&&raw_linear.head<2>().norm()>2.0){++impact_seq;last_impact_us=sim_us;estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()}});}
+          const double heading=team_settings.value("approach",json::object()).value("yaw",0.0);
+          const double deceleration=-raw_linear.x()*std::cos(heading)-raw_linear.y()*std::sin(heading);
+          const double impulse=team_settings.value("directional_impact",false)?deceleration:raw_linear.head<2>().norm();
+          if(std::hypot(estimate.pose.x_m-tx,estimate.pose.y_m-ty)<team_settings.value("impact_proximity_m",.35)&&impulse>team_settings.value("impact_acceleration_mps2",2.0)){++impact_seq;last_impact_us=sim_us;estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
         }
         if(!bias_ready&&!armed&&age(bias_start)<2.0&&raw_linear.allFinite()&&raw_linear.norm()<40){
           bias_sum+=raw_linear; ++bias_samples; imu_linear_bias=bias_sum/static_cast<double>(bias_samples);
@@ -214,23 +234,26 @@ int main(int argc,char**argv){try{
         if(command_fresh){
           team_disarm=team_command.value("disarm",false);team_complete=team_command.value("complete",false);
           Eigen::Vector3d delta(team_command.at("target_x_m").get<double>()-e.pose.x_m,team_command.at("target_y_m").get<double>()-e.pose.y_m,team_command.at("target_z_m").get<double>()-e.pose.z_m);
-          Eigen::Vector3d desired=delta*.65;
+          Eigen::Vector3d desired=delta*team_settings.value("position_gain",.65);
+          desired.head<2>()-=team_settings.value("velocity_damping",0.0)*e.velocity_enu_mps.head<2>();
           double max_speed=team_settings.value("cruise_speed_mps",.35);if(!e.xy_valid)max_speed=std::min(max_speed,.12);
           double horizontal=desired.head<2>().norm();if(horizontal>max_speed)desired.head<2>()*=max_speed/horizontal;
-          desired.z()=std::clamp(desired.z(),-.20,.35);
-          if(intention.mode=="LAND_ALL")desired.z()=landed?0.0:-.12;
+          desired.z()=std::clamp(desired.z(),-team_settings.value("descent_speed_mps",.20),team_settings.value("climb_speed_mps",.35));
+          if(intention.mode=="LAND_ALL")desired.z()=landed?0.0:-team_settings.value("landing_speed_mps",.12);
           const bool touchdown_zone=intention.mode=="LAND_ALL"&&e.pose.z_m<team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.03;
           if(touchdown_zone)desired.head<2>().setZero();
+          if(touchdown_zone&&!landed)desired.z()=-team_settings.value("touchdown_descent_mps",team_settings.value("landing_speed_mps",.12));
           if(intention.mode=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle){
             const double heading=team_command.at("target_yaw_rad").get<double>();
-            const double speed=std::clamp(team_command.at("contact_speed_mps").get<double>(),0.0,.5);
+            const double speed=std::max(0.0,team_command.at("contact_speed_mps").get<double>());
             desired.x()=std::cos(heading)*speed;desired.y()=std::sin(heading)*speed;
           }
           intention.velocity_flu_mps=rotation(0,0,-e.pose.yaw_rad)*desired;
           double heading=team_command.at("target_yaw_rad").get<double>();
-          intention.yaw_rate_ref_rad_s=std::clamp(companion::wrapAngle(heading-e.pose.yaw_rad)*.8,-.5,.5);
+          const double yaw_limit=team_settings.value("yaw_rate_limit_rad_s",.5);
+          intention.yaw_rate_ref_rad_s=std::clamp(companion::wrapAngle(heading-e.pose.yaw_rad)*team_settings.value("yaw_gain",.8),-yaw_limit,yaw_limit);
           if(touchdown_zone)intention.yaw_rate_ref_rad_s=0;
-          if(intention.mode=="WAIT_READY"||intention.mode=="HOLD"||(last_impact_us&&sim_us<last_impact_us+400000)||team_disarm||team_complete){intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
+          if(intention.mode=="WAIT_READY"||intention.mode=="HOLD"||(last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_settle_s",.4)*1e6))||team_disarm||team_complete){intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
         }
         team->send(json{{"schema",1},{"kind","team_status"},{"vehicle",o.vehicle},{"sim_time_us",sim_us},{"x_m",e.pose.x_m},{"y_m",e.pose.y_m},{"z_m",e.pose.z_m},{"yaw_rad",e.pose.yaw_rad},{"vx_mps",e.velocity_enu_mps.x()},{"vy_mps",e.velocity_enu_mps.y()},{"vz_mps",e.velocity_enu_mps.z()},{"xy_valid",e.xy_valid||e.flow_valid},{"z_valid",e.z_valid},{"ready",team_ready},{"xy_reason",e.localization_mode},{"flow_valid",e.flow_valid},{"position_confidence",e.position_confidence},{"armed",armed},{"landed",landed},{"impact_seq",impact_seq}}.dump(),18100);
       }
@@ -240,15 +263,26 @@ int main(int argc,char**argv){try{
       if(target_sys&&live&&e.z_valid)odometry(mav,o.remote,e);
       if(o.offboard&&target_sys&&live){
         mavlink_message_t msg;
-        const bool attitude_hold=team_enabled&&armed&&(!e.xy_valid&&!e.flow_valid);
+        const bool impact_recovery=team_enabled&&armed&&last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_recovery_s",0.0)*1e6);
+        const bool touchdown=team_enabled&&armed&&team_command.value("phase","")=="LAND_ALL"&&team_settings.contains("touchdown_thrust")&&e.z_valid&&
+            e.pose.z_m<team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.015&&std::abs(e.velocity_enu_mps.z())<.25;
+        const bool attitude_hold=team_enabled&&armed&&((!e.xy_valid&&!e.flow_valid)||impact_recovery||touchdown);
         if(attitude_hold){
           const Eigen::Vector3d body_velocity=rotation(0,0,-e.pose.yaw_rad)*e.velocity_enu_mps;
-          const double brake_roll=std::clamp(.6*body_velocity.y()/9.80665,-.06,.06);
-          const double brake_pitch=std::clamp(.6*body_velocity.x()/9.80665,-.06,.06);
+          double recovery_roll=0.0;
+          if(impact_recovery)for(const auto&point:team_settings.value("assembly",json::array()))if(point.value("id",-1)==o.vehicle){
+            const double heading=team_settings.value("approach",json::object()).value("yaw",0.0);
+            const double side=(point.value("y",e.pose.y_m)-e.pose.y_m)*std::cos(heading)-(point.value("x",e.pose.x_m)-e.pose.x_m)*std::sin(heading);
+            recovery_roll=-std::copysign(team_settings.value("impact_roll_rad",0.0),side);
+          }
+          if(impact_recovery&&team_settings.value("contact_exit_side",0.0)!=0)recovery_roll=-std::copysign(team_settings.value("impact_roll_rad",0.0),team_settings.at("contact_exit_side").get<double>());
+          const double brake_roll=touchdown?0.0:(impact_recovery?recovery_roll:std::clamp(.6*body_velocity.y()/9.80665,-.06,.06));
+          const double brake_pitch=touchdown?0.0:(impact_recovery?team_settings.value("impact_pitch_rad",.2):std::clamp(.6*body_velocity.x()/9.80665,-.06,.06));
           const double search_yaw=yaw;
           const Eigen::Quaterniond q(rotation(brake_roll,brake_pitch,search_yaw));float quaternion[4]={static_cast<float>(q.w()),static_cast<float>(q.x()),static_cast<float>(q.y()),static_cast<float>(q.z())};
           double zref=team_command.value("target_z_m",e.pose.z_m);
-          double thrust=std::clamp(.454545+.12*(zref-e.pose.z_m)-.08*e.velocity_enu_mps.z(),.25,.65);
+          double thrust=std::clamp(.454545/(std::cos(brake_pitch)*std::cos(brake_roll))+.12*(zref-e.pose.z_m)-.08*e.velocity_enu_mps.z(),.25,.65);
+          if(touchdown)thrust=team_settings.at("touchdown_thrust").get<double>();
           const float body_thrust[3]={0,0,0};
           mavlink_msg_set_attitude_target_pack(200,191,&msg,static_cast<uint32_t>(sim_us/1000),target_sys,target_comp,7,quaternion,0,0,0,thrust,body_thrust);
         }else{

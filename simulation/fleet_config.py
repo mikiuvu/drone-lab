@@ -52,6 +52,14 @@ def configure_fleet(config, vehicle_count=None, enable_anchors=None):
                 for i, (x, y) in enumerate(offsets)
             ]
             mission["order"] = list(range(count))
+            if "completed_holding" in mission:
+                holding_y = sum(p["y"] for p in mission["completed_holding"]) / len(
+                    mission["completed_holding"]
+                )
+                mission["completed_holding"] = [
+                    {"id": i, "x": center_x + x * 0.65, "y": holding_y + y * 0.65}
+                    for i, (x, y) in enumerate(offsets)
+                ]
     if sorted(s["id"] for s in spawns) != list(range(count)):
         raise ValueError("SITL vehicle IDs must be contiguous from zero")
     result["vehicle_count"] = count

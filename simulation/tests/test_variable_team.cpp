@@ -17,7 +17,10 @@ void fullMission(int count, bool fast=false) {
   auto c=config(count);
   c.pipelined_contact=c.fly_through_route=fast;
   c.route_speed_tolerance_mps=3.5;
-  if(fast)for(int i=0;i<count;++i)c.assembly[i]={1,3.5+i*.3,1.2,0};
+  if(fast){
+    c.contact_exit_side=-1;
+    for(int i=0;i<count;++i){c.assembly[i]={1,3.5+i*.3,1.2,0};c.completed_holding.push_back({1,2.5-i*.3,1.2,0});}
+  }
   TeamMission mission(c);
   std::vector<TeamVehicleStatus> states(count);
   for(int i=0;i<count;++i){auto&s=states[i];s.vehicle=i;s.x_m=c.homes[i].x;s.z_m=.5125;s.xy_valid=s.z_valid=s.ready=s.flow_valid=true;}

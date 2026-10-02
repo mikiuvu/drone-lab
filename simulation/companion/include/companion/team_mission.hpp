@@ -18,6 +18,8 @@ struct TeamMissionConfig {
   double route_tolerance_m = .10, route_speed_tolerance_mps = .30;
   bool fly_through_route = false;
   bool pipelined_contact = false;
+  double contact_exit_side = 0;
+  std::vector<TeamPoint> completed_holding;
   double home_ground_z_m = .5;
   double body_clearance_m = .0125;
   uint64_t freshness_us = 1000000, stable_us = 500000;

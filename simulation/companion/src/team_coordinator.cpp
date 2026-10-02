@@ -113,6 +113,8 @@ TeamMissionConfig readConfig(const std::string& path) {
   if (m.contains("loss_abort_s")) { const double seconds=number(m,"loss_abort_s");if(seconds<1||seconds>30)throw std::invalid_argument("失联中止时间超出范围");c.loss_abort_us=static_cast<uint64_t>(seconds*1e6); }
   pointsById(map.at("spawns"),c.homes,c.home_ground_z_m+.0125);
   pointsById(m.at("assembly"),c.assembly,c.cruise_z_m);
+  if(m.contains("completed_holding"))pointsById(m.at("completed_holding"),c.completed_holding,c.cruise_z_m);
+  c.contact_exit_side=m.value("contact_exit_side",0.0);
   c.approach = point(m.at("approach"),c.cruise_z_m);
   c.target = point(m.at("target"),c.approach.z);
   const auto& order = m.at("order");
