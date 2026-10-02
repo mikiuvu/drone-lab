@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <string>
@@ -150,8 +151,8 @@ class SensorGateway final
       }
     }
 
-    if (vehicleCount_ < 1 || vehicleCount_ > 4 || udpBasePort_ < 1 ||
-        udpBasePort_ > 65532)
+    if (vehicleCount_ < 1 || udpBasePort_ < 1 ||
+        udpBasePort_ + vehicleCount_ > 65536)
     {
       std::cerr << "vehicle count or UDP port is outside the supported range\n";
       return false;
@@ -171,6 +172,9 @@ class SensorGateway final
       return false;
     }
 
+    cameraMutex_=std::make_unique<std::mutex[]>(vehicleCount_);
+    cameraSequence_=std::make_unique<std::atomic<uint64_t>[]>(vehicleCount_);
+    for(int i=0;i<vehicleCount_;++i)cameraSequence_[i]=0;
     for (int vehicle = 0; vehicle < vehicleCount_; ++vehicle)
     {
       for (int sensor = 0; sensor < 3; ++sensor)
@@ -488,8 +492,8 @@ class SensorGateway final
   private: double tofMixedPixelProbability_{0.05};
   private: double tofMixedPixelThresholdM_{0.10};
   private: uint64_t seed_{0x544f465f53494dULL};
-  private: std::array<std::mutex, 4> cameraMutex_{};
-  private: std::array<std::atomic<uint64_t>, 4> cameraSequence_{};
+  private: std::unique_ptr<std::mutex[]> cameraMutex_;
+  private: std::unique_ptr<std::atomic<uint64_t>[]> cameraSequence_;
 };
 
 }  // namespace

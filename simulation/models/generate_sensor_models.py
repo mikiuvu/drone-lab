@@ -235,7 +235,11 @@ def generate(args):
             "calibration_status": "reference only; not tuned to DM-FC01",
         })
     output.mkdir(parents=True, exist_ok=True)
-    for vehicle in range(4):
+    vehicle_count = getattr(args, "vehicle_count", 4)
+    if vehicle_count < 1:
+        raise ValueError("vehicle_count must be positive")
+    contract["vehicle_count"] = vehicle_count
+    for vehicle in range(vehicle_count):
         model_dir = output / f"micro_{vehicle}"
         model_dir.mkdir(exist_ok=True)
         root = ET.Element("sdf", {"version": "1.9"})
@@ -362,6 +366,7 @@ def generate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output")
+    parser.add_argument("--vehicle-count", type=int, default=4)
     parser.add_argument("--base-model")
     parser.add_argument("--base-link", default="base_link")
     parser.add_argument("--expected-gz-commit")

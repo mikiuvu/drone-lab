@@ -12,6 +12,11 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+try:
+    from simulation.fleet_config import configure_fleet
+except ImportError:
+    from fleet_config import configure_fleet
+
 ROOT = Path(__file__).resolve().parent
 PX4 = Path("/home/devcontainers/drone-sim/PX4-Autopilot")
 SENSORS = Path("/home/devcontainers/drone-sim/build-sensors")
@@ -38,8 +43,12 @@ def environment(dynamics="micro", horizontal=False):
     return env
 
 
-def prepare_world(output, map_path):
-    config = json.loads(map_path.read_text(encoding="utf-8"))
+def prepare_world(output, map_path, config=None):
+    config = (
+        configure_fleet(json.loads(map_path.read_text(encoding="utf-8")))
+        if config is None
+        else config
+    )
     tree = ET.parse(map_path.parent / config["world_file"])
     world = tree.getroot().find("world")
     ET.SubElement(
@@ -57,6 +66,22 @@ def prepare_world(output, map_path):
     ET.SubElement(plugin, "publish_hz").text = "50"
     ET.SubElement(plugin, "port_base").text = "16000"
     ET.SubElement(plugin, "seed").text = "2027"
+    ET.SubElement(plugin, "vehicle_count").text = str(len(config["spawns"]))
+    flow = config.get("optical_flow", {})
+    ET.SubElement(plugin, "flow_enabled").text = str(flow.get("enabled", True)).lower()
+    for key, default in (
+        ("noise_std_mps", 0.015),
+        ("scale_error", 0.005),
+        ("drop_probability", 0.01),
+    ):
+        ET.SubElement(plugin, "flow_" + key).text = str(flow.get(key, default))
+    anchors = config.get("uwb_anchors", [])
+    ET.SubElement(plugin, "anchor_count").text = str(len(anchors))
+    for i, anchor in enumerate(anchors):
+        ET.SubElement(plugin, f"anchor_{i}_id").text = str(anchor["id"])
+        ET.SubElement(plugin, f"anchor_{i}_position").text = " ".join(
+            str(anchor[k]) for k in ("x", "y", "z")
+        )
     if "terrain_triangles_file" in config:
         ET.SubElement(plugin, "terrain_triangles_file").text = str(
             (map_path.parent / config["terrain_triangles_file"]).resolve()
@@ -205,6 +230,9 @@ def main():
     parser.add_argument("--gui", action="store_true")
     parser.add_argument("--dynamics", choices=["micro", "x500"], default="micro")
     parser.add_argument("--horizontal-tof", action="store_true")
+    parser.add_argument("--vehicle-count", type=int)
+    parser.add_argument("--uwb-anchors", action="store_true")
+    parser.add_argument("--flow-disable", action="store_true")
     parser.add_argument(
         "--companions",
         action="store_true",
@@ -255,7 +283,19 @@ def main():
             raise SystemExit("Missing build artifact: " + str(path))
     run_dir = ROOT / "runtime" / time.strftime("run_%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=False)
-    world_name, config = prepare_world(run_dir / "world.sdf", args.map.resolve())
+    config = configure_fleet(
+        json.loads(args.map.read_text(encoding="utf-8")),
+        args.vehicle_count,
+        args.uwb_anchors,
+    )
+    count = len(config["spawns"])
+    if count > 245:
+        raise SystemExit("PX4 MAVLink system IDs permit at most 245 local instances")
+    if args.flow_disable:
+        config["optical_flow"]["enabled"] = False
+    world_name, config = prepare_world(
+        run_dir / "world.sdf", args.map.resolve(), config
+    )
     if args.mission == "team_contact" and "team_mission" not in config:
         raise SystemExit("Selected map has no team_mission configuration")
     model_folder = (
@@ -268,12 +308,32 @@ def main():
             encoding="utf-8"
         )
     )
+    source_model = ROOT / "models" / model_folder / "micro_0/model.sdf"
+    for i in range(count):
+        destination = ROOT / "models" / model_folder / f"micro_{i}"
+        if not (destination / "model.sdf").exists():
+            destination.mkdir(parents=True, exist_ok=True)
+            tree = ET.parse(source_model)
+            for element in tree.iter():
+                for key, value in list(element.attrib.items()):
+                    element.set(key, value.replace("micro_0", f"micro_{i}"))
+                if element.text:
+                    element.text = element.text.replace(
+                        "vehicle_0", f"vehicle_{i}"
+                    ).replace("micro_0", f"micro_{i}")
+            tree.write(
+                destination / "model.sdf", encoding="utf-8", xml_declaration=True
+            )
+            (destination / "model.config").write_text(
+                f'<model><name>micro_{i}</name><version>1</version><sdf version="1.9">model.sdf</sdf></model>',
+                encoding="utf-8",
+            )
     settings = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
     settings["mission"]["mode"] = (
         "team_contact" if args.mission == "team_contact" else "localization"
     )
     if args.mission == "hover":
-        config["vehicle_waypoints"] = {str(i): [] for i in range(4)}
+        config["vehicle_waypoints"] = {str(i): [] for i in range(count)}
     # Keep relative terrain paths valid when making a per-run map snapshot.
     if "terrain_triangles_file" in config:
         config["terrain_triangles_file"] = str(
@@ -328,13 +388,19 @@ def main():
         items.append(
             start_one(
                 "sensors",
-                [SENSORS / "sensor_gateway", "--runtime-dir", run_dir / "camera"],
+                [
+                    SENSORS / "sensor_gateway",
+                    "--runtime-dir",
+                    run_dir / "camera",
+                    "--vehicle-count",
+                    str(count),
+                ],
                 env,
                 run_dir,
             )
         )
         write_status(items, run_dir, config)
-        for i in range(4):
+        for i in range(count):
             directory = (
                 Path("/home/devcontainers/drone-sim/runtime")
                 / run_dir.name
@@ -365,6 +431,20 @@ def main():
                     ROOT / "models" / "generated_micro" / "px4_micro_reference.params"
                 ).read_text(encoding="utf-8")
             (hooks / "px4-rc.params").write_text(params, encoding="utf-8")
+            if count > 10:
+                mavlink_script = PX4 / "ROMFS/px4fmu_common/init.d-posix/px4-rc.mavlink"
+                lines = mavlink_script.read_text(encoding="utf-8").splitlines()
+                lines = [
+                    line
+                    for line in lines
+                    if "udp_offboard_port_remote=14549" not in line
+                ]
+                content = (
+                    "\n".join(lines)
+                    .replace("14580+px4_instance", "22000+px4_instance")
+                    .replace("14540+px4_instance", "23000+px4_instance")
+                )
+                (hooks / "px4-rc.mavlink").write_text(content + "\n", encoding="utf-8")
             pe = dict(
                 env,
                 PX4_SYS_AUTOSTART="4001",
@@ -439,7 +519,7 @@ def main():
                     )
                 )
                 write_status(items, run_dir, config)
-            for i in range(4):
+            for i in range(count):
                 command = [
                     binary,
                     "--vehicle",
@@ -455,6 +535,13 @@ def main():
                 ]
                 if args.fly:
                     command += ["--offboard", "--arm"]
+                if count > 10:
+                    command += [
+                        "--mavlink-local-port",
+                        str(23000 + i),
+                        "--mavlink-remote-port",
+                        str(22000 + i),
+                    ]
                 items.append(start_one(f"companion_{i}", command, env, run_dir))
                 write_status(items, run_dir, config)
         print(

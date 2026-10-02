@@ -5,6 +5,8 @@
 #include <random>
 #include <string>
 #include <memory>
+#include <vector>
+#include <gz/math/Vector3.hh>
 
 #include <gz/sim/System.hh>
 #include <gz/sim/Types.hh>
@@ -16,9 +18,7 @@ namespace drone_sim
 
 /// Gazebo-side peer observation publisher.
 ///
-/// Model poses are read only inside this plugin. The public UDP stream contains
-/// pairwise UWB-like observations and the separately authorized scalar height
-/// assistance field; it never contains a vehicle's global x, y, yaw or velocity.
+/// Publishes module-level optical-flow velocity, UWB ranges and scalar height.
 class PeerHeightSystem final : public gz::sim::System,
                                public gz::sim::ISystemConfigure,
                                public gz::sim::ISystemPostUpdate
@@ -40,6 +40,8 @@ class PeerHeightSystem final : public gz::sim::System,
   {
     std::string modelName;
     gz::sim::Entity modelEntity{gz::sim::kNullEntity};
+    gz::math::Vector3d previousPosition;
+    int64_t previousTimeUs{-1};
   };
 
   private: void RefreshEntities(const gz::sim::EntityComponentManager &_ecm);
@@ -48,7 +50,13 @@ class PeerHeightSystem final : public gz::sim::System,
   private: bool Send(int _vehicle, const std::string &_json) const;
   private: static int64_t SimTimeUs(const gz::sim::UpdateInfo &_info);
 
-  private: std::array<Vehicle, 4> vehicles_{};
+  private: std::vector<Vehicle> vehicles_;
+  private: struct Anchor { int id; gz::math::Vector3d position; };
+  private: std::vector<Anchor> anchors_;
+  private: bool flowEnabled_{true};
+  private: double flowNoiseStdMps_{0.015};
+  private: double flowScaleError_{0.005};
+  private: double flowDropProbability_{0.01};
   private: int socketFd_{-1};
   private: std::string destinationHost_{"127.0.0.1"};
   private: int portBase_{16000};

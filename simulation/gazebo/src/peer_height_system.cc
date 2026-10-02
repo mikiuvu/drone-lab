@@ -72,11 +72,26 @@ void PeerHeightSystem::Configure(
   destinationHost_ = GetOr<std::string>(_sdf, "destination_host", destinationHost_);
   portBase_ = GetOr<int>(_sdf, "port_base", portBase_);
   const auto publishHz = GetOr<double>(_sdf, "publish_hz", 50.0);
+  const int vehicleCount=GetOr<int>(_sdf,"vehicle_count",4);
   if (!std::isfinite(publishHz) || publishHz <= 0.0 || publishHz > 1000.0 ||
-      portBase_ < 1 || portBase_ > 65532)
+      vehicleCount<1||portBase_ < 1 || portBase_+vehicleCount > 65536)
   {
     std::cerr << "peer_height_system: invalid publish_hz or port_base\n";
     return;
+  }
+  vehicles_.resize(vehicleCount);
+  flowEnabled_=GetOr<bool>(_sdf,"flow_enabled",true);
+  flowNoiseStdMps_=GetOr<double>(_sdf,"flow_noise_std_mps",.015);
+  flowScaleError_=GetOr<double>(_sdf,"flow_scale_error",.005);
+  flowDropProbability_=GetOr<double>(_sdf,"flow_drop_probability",.01);
+  if(!std::isfinite(flowNoiseStdMps_)||flowNoiseStdMps_<0||!std::isfinite(flowScaleError_)||!std::isfinite(flowDropProbability_)||flowDropProbability_<0||flowDropProbability_>1)throw std::invalid_argument("invalid optical flow parameters");
+  const int anchorCount=GetOr<int>(_sdf,"anchor_count",0);
+  if(anchorCount<0)throw std::invalid_argument("invalid anchor count");
+  for(int i=0;i<anchorCount;++i){
+    const auto prefix="anchor_"+std::to_string(i);
+    Anchor anchor{GetOr<int>(_sdf,prefix+"_id",i),GetOr<gz::math::Vector3d>(_sdf,prefix+"_position",gz::math::Vector3d::Zero)};
+    if(anchor.id<0||!anchor.position.IsFinite())throw std::invalid_argument("invalid anchor");
+    anchors_.push_back(anchor);
   }
   publishPeriodUs_ = publishHz > 0.0
       ? static_cast<int64_t>(std::llround(1.0e6 / publishHz)) : 20000;
@@ -134,7 +149,7 @@ void PeerHeightSystem::Configure(
   seed_ = GetOr<uint64_t>(_sdf, "seed", seed_);
   random_.seed(seed_);
 
-  for (int i = 0; i < 4; ++i)
+  for (size_t i = 0; i < vehicles_.size(); ++i)
   {
     const auto index = std::to_string(i);
     vehicles_[i].modelName = GetOr<std::string>(
@@ -160,7 +175,7 @@ void PeerHeightSystem::Configure(
   }
 
   std::cerr << "peer_height_system: UDP observations to " << destinationHost_
-            << ':' << portBase_ << ".." << portBase_ + 3
+            << ':' << portBase_ << ".." << portBase_ + vehicles_.size()-1
             << ", height assist at " << publishHz << " Hz\n";
 }
 
@@ -193,7 +208,7 @@ int64_t PeerHeightSystem::SimTimeUs(const gz::sim::UpdateInfo &_info)
 
 bool PeerHeightSystem::Send(int _vehicle, const std::string &_json) const
 {
-  if (socketFd_ < 0 || _vehicle < 0 || _vehicle >= 4)
+  if (socketFd_ < 0 || _vehicle < 0 || static_cast<size_t>(_vehicle) >= vehicles_.size())
     return false;
 
   sockaddr_in destination{};
@@ -217,10 +232,10 @@ void PeerHeightSystem::Publish(
     return;
   if (lastPublishSimUs_ >= 0 && simUs < lastPublishSimUs_)
     random_.seed(seed_);
-  std::array<gz::math::Pose3d, 4> poses{};
-  std::array<bool, 4> poseValid{};
+  std::vector<gz::math::Pose3d> poses(vehicles_.size());
+  std::vector<bool> poseValid(vehicles_.size(),false);
 
-  for (int i = 0; i < 4; ++i)
+  for (size_t i = 0; i < vehicles_.size(); ++i)
   {
     if (vehicles_[i].modelEntity == gz::sim::kNullEntity)
       continue;
@@ -236,8 +251,10 @@ void PeerHeightSystem::Publish(
   std::normal_distribution<double> bearingNoise(0.0, bearingNoiseStdRad_);
   std::normal_distribution<double> nlosRangeNoise(0.0, 1.0);
   std::bernoulli_distribution nlosDrop(nlosDropProbability_);
+  std::normal_distribution<double> flowNoise(0,flowNoiseStdMps_);
+  std::bernoulli_distribution flowDrop(flowDropProbability_);
 
-  for (int i = 0; i < 4; ++i)
+  for (size_t i = 0; i < vehicles_.size(); ++i)
   {
     if (!poseValid[i])
       continue;
@@ -255,7 +272,35 @@ void PeerHeightSystem::Publish(
       Send(i, height.str());
     }
 
-    for (int j = 0; j < 4; ++j)
+    auto&vehicle=vehicles_[i];
+    if(flowEnabled_&&vehicle.previousTimeUs>=0&&simUs>vehicle.previousTimeUs){
+      const double dt=(simUs-vehicle.previousTimeUs)*1e-6;
+      if(dt<.25){
+        const auto velocity=poses[i].Rot().Inverse().RotateVector((poses[i].Pos()-vehicle.previousPosition)/dt);
+        const bool valid=!flowDrop(random_)&&std::abs(poses[i].Rot().Roll())<.65&&std::abs(poses[i].Rot().Pitch())<.65;
+        std::ostringstream flow;
+        flow<<std::setprecision(9)<<"{\"schema\":1,\"kind\":\"optical_flow\",\"vehicle\":"<<i<<",\"sim_time_us\":"<<simUs
+            <<",\"vx_body_mps\":"<<velocity.X()*(1+flowScaleError_)+flowNoise(random_)
+            <<",\"vy_body_mps\":"<<velocity.Y()*(1+flowScaleError_)+flowNoise(random_)
+            <<",\"quality\":"<<(valid?.95:0)<<",\"variance_m2s2\":"<<std::max(.0004,flowNoiseStdMps_*flowNoiseStdMps_)
+            <<",\"source\":\"SIM_FLOW_MODULE\"}";
+        Send(i,flow.str());
+      }
+    }
+    vehicle.previousPosition=poses[i].Pos();vehicle.previousTimeUs=simUs;
+    for(const auto&anchor:anchors_){
+      const auto delta=anchor.position-poses[i].Pos();
+      const Eigen::Vector3d from(poses[i].Pos().X(),poses[i].Pos().Y(),poses[i].Pos().Z());
+      const Eigen::Vector3d to(anchor.position.X(),anchor.position.Y(),anchor.position.Z());
+      const bool nlos=TerrainOccludesPeer(terrainMap_.get(),from,to);
+      const bool valid=!terrainLoadFailed_&&delta.Length()<=rangeMaxM_&&!dropout(random_);
+      const double range=std::max(.01,delta.Length()+rangeNoise(random_)+(nlos?nlosRangeBiasM_:0));
+      std::ostringstream message;message<<std::setprecision(9)<<"{\"schema\":1,\"kind\":\"uwb_anchor\",\"vehicle\":"<<i<<",\"anchor_id\":"<<anchor.id
+         <<",\"sim_time_us\":"<<simUs<<",\"range_m\":"<<range<<",\"variance_m2\":"<<(nlos?.25:.0025)<<",\"quality\":"<<(nlos?.25:.95)
+         <<",\"valid\":"<<(valid?"true":"false")<<"}";
+      Send(i,message.str());
+    }
+    for (size_t j = 0; j < vehicles_.size(); ++j)
     {
       if (i == j || !poseValid[j])
         continue;
@@ -301,6 +346,7 @@ void PeerHeightSystem::Publish(
           << ",\"range_m\":" << range
           << ",\"bearing_rad\":" << bearing
           << ",\"nlos\":" << (nlos ? "true" : "false")
+          << ",\"quality\":" << (nlos ? .25 : .95)
           << ",\"valid\":" << (valid ? "true" : "false") << "}\n";
       Send(i, uwb.str());
     }
