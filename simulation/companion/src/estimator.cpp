@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_set>
 #include <Eigen/Cholesky>
 #include <Eigen/Eigenvalues>
 #include <Eigen/Geometry>
@@ -15,16 +16,17 @@ double huber(double e,double s) { const double a=std::abs(e)/s; return a<=2.5?1.
 }
 
 Estimator::Estimator(EstimatorConfig c):config_(std::move(c)) {
-  if(config_.vehicle_id<0||config_.vehicle_id>=4||config_.tof_sigma_m<=0||!config_.initial_covariance.allFinite()) throw std::invalid_argument("invalid estimator config");
+  if(config_.vehicle_id<0||config_.tof_sigma_m<=0||!config_.initial_covariance.allFinite()) throw std::invalid_argument("invalid estimator config");
   reset();
 }
 void Estimator::reset(uint64_t now) {
   state_=Estimate{}; state_.vehicle_id=config_.vehicle_id; state_.pose=config_.initial_pose; state_.covariance=config_.initial_covariance;
   state_.covariance(2,2)=std::max(state_.covariance(2,2),config_.initial_z_sigma_m*config_.initial_z_sigma_m); state_.initialized=true; state_.xy_valid=true; state_.sim_time_us=now;
-  last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=0; local_tof_rank_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.fill(0); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero();
+  assimilated_tof_us_.fill(0);
+  last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; local_tof_rank_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
 }
 bool Estimator::fresh(uint64_t t,uint64_t timeout) const { return t&&t<=state_.sim_time_us&&state_.sim_time_us-t<=timeout; }
-Estimate Estimator::estimate() const { Estimate e=state_; e.xy_structural_valid=fresh(last_absolute_us_,config_.terrain?std::min<uint64_t>(config_.prediction_timeout_us,500000):config_.prediction_timeout_us)&&e.covariance(0,0)+e.covariance(1,1)<2.0; const bool within_spawn_window=startup_sim_us_!=0&&state_.sim_time_us>=startup_sim_us_&&state_.sim_time_us-startup_sim_us_<=config_.spawn_prior_timeout_us; e.spawn_prior_valid=!e.xy_structural_valid&&within_spawn_window&&e.covariance(0,0)+e.covariance(1,1)<=config_.spawn_prior_xy_variance_limit; e.xy_peer_valid=!e.xy_structural_valid&&fresh(last_peer_xy_us_,config_.peer_timeout_us*2)&&local_tof_rank_>=1&&fresh(last_local_tof_us_,config_.tof_timeout_us*2)&&fresh(last_imu_us_,200000)&&e.covariance(0,0)+e.covariance(1,1)<=config_.spawn_prior_xy_variance_limit; e.xy_valid=e.xy_structural_valid||e.xy_peer_valid||e.spawn_prior_valid; e.z_valid=fresh(last_height_us_,config_.height_timeout_us)||fresh(last_baro_us_,500000); e.height_assisted=fresh(last_height_us_,config_.height_timeout_us); e.vz_derived_from_height=e.height_assisted&&state_.vz_derived_from_height; return e; }
+Estimate Estimator::estimate() const { Estimate e=state_; e.xy_structural_valid=fresh(last_absolute_us_,config_.terrain?std::min<uint64_t>(config_.prediction_timeout_us,500000):config_.prediction_timeout_us)&&e.covariance(0,0)+e.covariance(1,1)<2.0; const bool flow=fresh(last_flow_us_,config_.flow_timeout_us)&&flow_valid_&&e.covariance(0,0)+e.covariance(1,1)<=config_.flow_xy_covariance_limit; const bool within_spawn_window=startup_sim_us_!=0&&state_.sim_time_us>=startup_sim_us_&&state_.sim_time_us-startup_sim_us_<=config_.spawn_prior_timeout_us; e.spawn_prior_valid=!e.xy_structural_valid&&within_spawn_window&&e.covariance(0,0)+e.covariance(1,1)<=config_.spawn_prior_xy_variance_limit; e.xy_peer_valid=!e.xy_structural_valid&&fresh(last_peer_xy_us_,config_.peer_timeout_us*2)&&e.covariance(0,0)+e.covariance(1,1)<=config_.spawn_prior_xy_variance_limit; e.flow_valid=flow; e.xy_valid=e.xy_structural_valid||e.xy_peer_valid||e.spawn_prior_valid||flow; e.z_valid=fresh(last_height_us_,config_.height_timeout_us)||fresh(last_baro_us_,500000); e.height_assisted=fresh(last_height_us_,config_.height_timeout_us); e.vz_derived_from_height=e.height_assisted&&state_.vz_derived_from_height; e.position_confidence=std::exp(-0.5*std::max(0.0,e.covariance(0,0)+e.covariance(1,1))); e.localization_mode=e.xy_structural_valid?"STRUCTURAL":(e.xy_peer_valid?"PEER_REFERENCE":(flow?"FLOW_DRIFT":"SPAWN_PRIOR")); return e; }
 void Estimator::advanceTo(uint64_t now) {
   if(!now||now<=state_.sim_time_us) return;
   if(state_.sim_time_us==0){state_.sim_time_us=now;if(!startup_sim_us_)startup_sim_us_=now;return;}
@@ -78,8 +80,11 @@ bool Estimator::terrainObservation(const TofFrame& f,int cell,const Pose3& pose,
   return std::isfinite(o.residual) && std::abs(o.residual)<=config_.terrain_plane_gate_m && o.jacobian.allFinite();
 }
 void Estimator::update(const Eigen::MatrixXd&h,const Eigen::VectorXd&r,const Eigen::MatrixXd&rc){
+  if (h.cols()!=7 || h.rows()==0 || r.size()!=h.rows() || rc.rows()!=h.rows() || rc.cols()!=h.rows() ||
+      !h.allFinite() || !r.allFinite() || !rc.allFinite()) return;
   const Eigen::Matrix<double,7,7> p=state_.covariance;
   const Eigen::MatrixXd s=h*p*h.transpose()+rc;
+  if (!s.allFinite()) return;
   const Eigen::MatrixXd k=p*h.transpose()*s.ldlt().solve(Eigen::MatrixXd::Identity(s.rows(),s.cols()));
   const Eigen::VectorXd d=k*r;
   state_.pose.x_m+=d(0);state_.pose.y_m+=d(1);state_.pose.z_m+=d(2);state_.pose.yaw_rad=wrapAngle(state_.pose.yaw_rad+d(3));state_.velocity_enu_mps+=d.segment<3>(4);
@@ -107,7 +112,8 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     info.setZero(); Eigen::Vector3d gradient=Eigen::Vector3d::Zero();
     count=0;sum_squared=0; int independent_normals=0; Eigen::Vector3d first_normal=Eigen::Vector3d::Zero();
     for(const auto& cached:tof_cache_) {
-      if(cached.sensor_index<0 || !fresh(cached.sim_time_us,config_.tof_timeout_us))continue;
+      if(cached.sensor_index<0 || !fresh(cached.sim_time_us,config_.tof_timeout_us) ||
+         cached.sim_time_us<=assimilated_tof_us_[cached.sensor_index])continue;
       // Avoid fitting a moving scene at different poses as though it were simultaneous.
       const double age=(state_.sim_time_us-cached.sim_time_us)*1e-6;
       Pose3 exposure_pose=working;
@@ -147,6 +153,9 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     if(step.norm()<1e-5)break;
   }
   const Eigen::Vector3d shift(working.x_m-prior.x_m,working.y_m-prior.y_m,wrapAngle(working.yaw_rad-prior.yaw_rad));
+  if (!std::isfinite(sum_squared) || count < 1 || std::sqrt(sum_squared/count) > (config_.terrain ? config_.terrain_plane_gate_m : 0.20)) {
+    report.gated=true; report.degenerate=true; report.reason="tof_residual_gate"; return report;
+  }
   if(config_.terrain && (shift.head<2>().norm()>config_.terrain_max_translation_update_m || std::abs(shift.z())>config_.terrain_max_yaw_update_rad)) {
     report.gated=true; report.degenerate=true; report.reason="terrain_update_trust_region"; return report;
   }
@@ -171,27 +180,103 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     residual(row)=modes.col(axis).dot(shift);noise(row,row)=std::max(1.0/values(axis),1e-4);++row;
   }
   update(h,residual,noise);state_.degenerate_geometry=rank<3;
+  // Each depth frame contributes information once, including a cached frame
+  // waiting for another sensor to resolve the structural geometry.
+  for(const auto& cached:tof_cache_)
+    if(cached.sensor_index>=0 && fresh(cached.sim_time_us,config_.tof_timeout_us))
+      assimilated_tof_us_[cached.sensor_index]=cached.sim_time_us;
   // Old information cannot turn a currently unobservable axis into a fresh
   // absolute reference for the whole swarm.
-  if(rank>=3)last_absolute_us_=frame.sim_time_us;
+  Eigen::Matrix2d xy_information=info.block<2,2>(0,0);
+  if (info(2,2)>1e-9) xy_information-=info.block<2,1>(0,2)*info.block<1,2>(2,0)/info(2,2);
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> xy_solver(xy_information);
+  const bool xy_observable=xy_solver.info()==Eigen::Success && xy_solver.eigenvalues()(0)>threshold;
+  if(xy_observable) {
+    last_absolute_us_=frame.sim_time_us;
+    state_.reference_origin=config_.vehicle_id; state_.reference_seq=++next_reference_seq_;
+    state_.reference_time_us=frame.sim_time_us; state_.reference_hops=0; state_.reference_path={config_.vehicle_id};
+  }
   local_tof_rank_=rank; last_local_tof_us_=frame.sim_time_us;
   report.accepted=true;report.degenerate=rank<3;report.inliers=count;
   report.innovation_norm=std::sqrt(sum_squared/count);report.reason=(config_.terrain?"terrain_point_to_plane_rank_":"point_to_line_rank_")+std::to_string(rank)+"_cumulative_"+std::to_string(cumulative_rank);
   return report;
 }
+
+FusionReport Estimator::fuseOpticalFlow(const FlowSample& sample) {
+  FusionReport report;
+  if (!sample.sim_time_us || sample.sim_time_us <= last_flow_us_ ||
+      !std::isfinite(sample.vx_body_mps) || !std::isfinite(sample.vy_body_mps) ||
+      !std::isfinite(sample.quality) || !std::isfinite(sample.variance_m2s2) ||
+      sample.quality < 0.0 || sample.quality > 1.0 || sample.variance_m2s2 <= 0.0) {
+    report.stale=true; report.reason="flow_invalid_or_duplicate"; return report;
+  }
+  advanceTo(sample.sim_time_us);
+  if (sample.quality < 0.5 || !fresh(sample.sim_time_us, config_.flow_timeout_us)) {
+    report.gated=true; report.reason="flow_quality_gate"; return report;
+  }
+  const Eigen::Matrix3d r=rotation(state_.pose.roll_rad,state_.pose.pitch_rad,state_.pose.yaw_rad);
+  const Eigen::Vector2d measured(sample.vx_body_mps,sample.vy_body_mps);
+  Eigen::Matrix<double,2,7> h=Eigen::Matrix<double,2,7>::Zero();
+  h.block<2,3>(0,4)=r.transpose().topRows<2>();
+  const Eigen::Vector2d residual=measured-h.block<2,3>(0,4)*state_.velocity_enu_mps;
+  Eigen::Matrix2d noise=Eigen::Matrix2d::Identity()*std::max(sample.variance_m2s2,1e-6)/sample.quality;
+  update(h,residual,noise);
+  last_flow_us_=sample.sim_time_us; flow_valid_=true; state_.flow_valid=true;
+  report.accepted=true; report.innovation_norm=residual.norm(); report.reason="optical_flow_velocity";
+  return report;
+}
+
+FusionReport Estimator::fuseAnchorRange(const AnchorRangeSample& sample) {
+  FusionReport report;
+  const auto anchor=config_.uwb_anchors.find(sample.anchor_id);
+  if (anchor==config_.uwb_anchors.end() || !sample.valid || !sample.sim_time_us ||
+      !std::isfinite(sample.range_m)||!std::isfinite(sample.variance_m2)||!std::isfinite(sample.quality)||
+      sample.sim_time_us<=last_anchor_us_[sample.anchor_id] || sample.range_m<=0.0 ||
+      sample.variance_m2<=0.0 || sample.quality<=0.0 || sample.quality>1.0 ||
+      !anchor->second.allFinite()) { report.stale=true; report.reason="anchor_invalid_or_unknown"; return report; }
+  advanceTo(sample.sim_time_us);
+  if (!fresh(sample.sim_time_us,config_.anchor_timeout_us)) {
+    report.stale=true; report.reason="anchor_stale"; return report;
+  }
+  const Eigen::Vector3d p(state_.pose.x_m,state_.pose.y_m,state_.pose.z_m);
+  const Eigen::Vector3d delta=anchor->second-p; const double predicted=delta.norm();
+  if (!std::isfinite(predicted) || predicted<0.1) { report.gated=true; report.reason="anchor_geometry"; return report; }
+  Eigen::Matrix<double,1,7> h=Eigen::Matrix<double,1,7>::Zero(); h.block<1,3>(0,0)=-delta.transpose()/predicted;
+  Eigen::VectorXd residual(1); residual(0)=sample.range_m-predicted;
+  Eigen::MatrixXd noise(1,1); noise(0,0)=std::max(sample.variance_m2,1e-6)/sample.quality;
+  const double innovation=(h*state_.covariance*h.transpose()+noise)(0,0);
+  if (!std::isfinite(innovation) || residual(0)*residual(0)/innovation>13.82 || std::abs(residual(0))>1.5) { report.gated=true; report.reason="anchor_innovation_gated"; return report; }
+  update(h,residual,noise); last_anchor_us_[sample.anchor_id]=sample.sim_time_us;
+  accepted_anchors_[sample.anchor_id]={anchor->second,sample.sim_time_us,sample.quality};
+  Eigen::Matrix2d geometry=Eigen::Matrix2d::Zero();
+  bool all_high_quality=true; size_t fresh_count=0;
+  for (const auto& item:accepted_anchors_) if(fresh(item.second.sim_time_us,config_.anchor_timeout_us)) { ++fresh_count; all_high_quality=all_high_quality&&item.second.quality>=0.5; const Eigen::Vector2d d=item.second.position.head<2>()-p.head<2>(); const double n=d.norm(); if(n>0.1) geometry+=d*d.transpose()/(n*n); }
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(geometry);
+  const bool full_xy=solver.info()==Eigen::Success && solver.eigenvalues()(0)>0.25 && fresh_count>=2 && all_high_quality && sample.quality>=0.5;
+  if (full_xy) { last_absolute_us_=sample.sim_time_us; state_.reference_origin=config_.vehicle_id; state_.reference_seq=++next_reference_seq_; state_.reference_time_us=sample.sim_time_us; state_.reference_hops=0; state_.reference_path={config_.vehicle_id}; }
+  report.accepted=true; report.innovation_norm=std::abs(residual(0)); report.reason=full_xy?"uwb_anchor_absolute":"uwb_anchor_range"; return report;
+}
+
 FusionReport Estimator::fuseUwb(const UwbPeerSample& sample,const PeerEstimate& peer) {
   FusionReport report;
+  const bool has_reference=peer.reference_origin>=0 && peer.reference_seq>0 && peer.reference_time_us>0 && peer.reference_hops>=0;
+  bool loop=false; bool duplicate_path=false;
+  std::unordered_set<int> path_ids;
+  for(int id:peer.reference_path) { if(id==config_.vehicle_id) loop=true; if(!path_ids.insert(id).second) duplicate_path=true; }
+  if (has_reference && (peer.reference_time_us>peer.sim_time_us || peer.sim_time_us-peer.reference_time_us>config_.peer_timeout_us)) { report.stale=true; report.reason="reference_stale"; return report; }
+  if (loop || duplicate_path || (has_reference && seen_reference_seq_[peer.reference_origin]>=peer.reference_seq)) { report.gated=true; report.reason=loop?"reference_path_loop":(duplicate_path?"reference_path_duplicate":"reference_already_seen"); return report; }
   // A currently well-constrained map solution takes precedence over reused,
   // correlated peer poses. Peers support gaps instead of repeatedly shifting
   // every independently localized member with the same common error.
   if(config_.terrain && estimate().xy_structural_valid && local_tof_rank_>=3) {
     report.gated=true;report.reason="independent_map_preferred";return report;
   }
-  if(!peer.xy_structural_valid){report.gated=true;report.reason="peer_without_independent_structure";return report;}
+  if(!peer.xy_structural_valid && !has_reference){report.gated=true;report.reason="peer_without_reference";return report;}
   if(!sample.valid || peer.source!="ESTIMATE" || peer.vehicle_id==config_.vehicle_id ||
-     sample.peer_id!=peer.vehicle_id || sample.peer_id<0 || sample.peer_id>=4 ||
+     !std::isfinite(sample.quality)||!std::isfinite(peer.pose.x_m)||!std::isfinite(peer.pose.y_m)||!std::isfinite(peer.pose.z_m)||
+     sample.peer_id!=peer.vehicle_id || sample.peer_id<0 || sample.quality<=0.0 || sample.quality>1.0 ||
      sample.sim_time_us<=last_uwb_us_[sample.peer_id] || !peer.pose_covariance.allFinite() ||
-     !peer.velocity_enu_mps.allFinite() || !std::isfinite(sample.range_m) ||
+     !peer.velocity_enu_mps.allFinite() || !std::isfinite(sample.range_m) || sample.range_m<=0.0 ||
      !std::isfinite(sample.bearing_rad)) {
     report.stale=true;report.reason="uwb_or_peer_invalid";return report;
   }
@@ -222,8 +307,8 @@ FusionReport Estimator::fuseUwb(const UwbPeerSample& sample,const PeerEstimate& 
   // Reused peer estimates can be correlated; conservative inflation does not
   // claim a new absolute anchor or guaranteed covariance consistency.
   Eigen::Matrix2d noise=2*j*peer.pose_covariance*j.transpose();
-  noise(0,0)+=std::pow(config_.uwb_range_sigma_m,2)+.25*peer_age*peer_age;
-  noise(1,1)+=std::pow(config_.uwb_bearing_sigma_rad,2);
+  noise(0,0)+=(std::pow(config_.uwb_range_sigma_m,2)+.25*peer_age*peer_age)/sample.quality;
+  noise(1,1)+=std::pow(config_.uwb_bearing_sigma_rad,2)/sample.quality;
   const Eigen::Matrix2d innovation=h*state_.covariance*h.transpose()+noise;
   const double mahalanobis=residual.dot(innovation.ldlt().solve(residual));
   if(!std::isfinite(mahalanobis)||mahalanobis>13.82||std::abs(residual(0))>1||std::abs(residual(1))>.65) {
@@ -232,11 +317,14 @@ FusionReport Estimator::fuseUwb(const UwbPeerSample& sample,const PeerEstimate& 
   update(h,residual,noise);
   state_.covariance(0,0)=std::max(state_.covariance(0,0),config_.uwb_xy_covariance_floor_m2);
   state_.covariance(1,1)=std::max(state_.covariance(1,1),config_.uwb_xy_covariance_floor_m2);
-  const bool trusted_peer=peer.xy_structural_valid && !peer.xy_peer_valid &&
-      peer.pose_covariance(0,0)+peer.pose_covariance(1,1)<=config_.spawn_prior_xy_variance_limit;
-  const bool own_baseline=local_tof_rank_>=1 && fresh(last_local_tof_us_,config_.tof_timeout_us*2);
-  const bool fresh_heading=fresh(last_imu_us_,200000);
-  if(trusted_peer && own_baseline && fresh_heading) last_peer_xy_us_=sample.sim_time_us;
+  if (has_reference && (state_.reference_origin!=peer.reference_origin || peer.reference_time_us>state_.reference_time_us || peer.reference_seq>state_.reference_seq)) {
+    state_.reference_origin=peer.reference_origin; state_.reference_seq=peer.reference_seq; state_.reference_time_us=peer.reference_time_us;
+    state_.reference_hops=peer.reference_hops+1; state_.reference_path=peer.reference_path; state_.reference_path.push_back(config_.vehicle_id);
+    last_peer_xy_us_=sample.sim_time_us;
+  } else if (peer.xy_structural_valid) {
+    last_peer_xy_us_=sample.sim_time_us;
+  }
+  if (has_reference) seen_reference_seq_[peer.reference_origin]=std::max(seen_reference_seq_[peer.reference_origin],peer.reference_seq);
   report.accepted=true;report.innovation_norm=residual.norm();
   report.reason="peer_estimate_relative_constraint";return report;
 }

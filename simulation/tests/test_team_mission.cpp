@@ -2,6 +2,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 using namespace companion;
 namespace {
 void check(bool condition, const char* message) {
@@ -9,7 +10,7 @@ void check(bool condition, const char* message) {
 }
 TeamMissionConfig config(bool transit = false) {
   TeamMissionConfig c; c.stable_us = 200000;
-  for (int i = 0; i < kTeamSize; ++i) {
+  for (int i = 0; i < 4; ++i) {
     c.homes[i] = {double(i)-1.5,0,.5125,0};
     c.assembly[i] = {double(i)-1.5,4,1.2,0};
   }
@@ -19,11 +20,11 @@ TeamMissionConfig config(bool transit = false) {
 }
 struct Fixture {
   TeamMissionConfig c; TeamMission mission;
-  std::array<TeamVehicleStatus,kTeamSize> states{};
+  std::vector<TeamVehicleStatus> states{4};
   uint64_t now = 1000000, wall = 1000000;
-  std::array<TeamCommand,kTeamSize> commands{};
+  std::vector<TeamCommand> commands{4};
   explicit Fixture(bool transit = false) : c(config(transit)), mission(c) {
-    for (int i = 0; i < kTeamSize; ++i) {
+    for (int i = 0; i < 4; ++i) {
       states[i].vehicle = i; states[i].xy_valid = states[i].z_valid = states[i].ready = true;
       set(i,c.homes[i]);
     }
@@ -33,24 +34,24 @@ struct Fixture {
   }
   void tick(int omitted = -1, uint64_t dt = 100000) {
     now += dt; wall += dt;
-    for (int i = 0; i < kTeamSize; ++i) if (i != omitted) {
+    for (int i = 0; i < 4; ++i) if (i != omitted) {
       states[i].sim_time_us = now; check(mission.updateStatus(states[i],wall),"有效状态被拒绝");
     }
     commands = mission.step(now,wall);
   }
   void settle(int omitted = -1) { for (int j = 0; j < 4; ++j) tick(omitted); }
   void follow() {
-    for (int i = 0; i < kTeamSize; ++i)
+    for (int i = 0; i < 4; ++i)
       set(i,{commands[i].target_x_m,commands[i].target_y_m,commands[i].target_z_m,commands[i].target_yaw_rad});
   }
   void takeoff() {
     settle(); check(mission.phase() == TeamPhase::TAKEOFF,"就绪阶段未完成");
-    for (int i = 0; i < kTeamSize; ++i) { states[i].armed = true; auto p = c.homes[i]; p.z = c.cruise_z_m; set(i,p); }
+    for (int i = 0; i < 4; ++i) { states[i].armed = true; auto p = c.homes[i]; p.z = c.cruise_z_m; set(i,p); }
     settle();
   }
   void contact() {
     takeoff(); check(mission.phase() == TeamPhase::ASSEMBLE,"起飞阶段未完成");
-    for (int i = 0; i < kTeamSize; ++i) set(i,c.assembly[i]);
+    for (int i = 0; i < 4; ++i) set(i,c.assembly[i]);
     settle(); check(mission.phase() == TeamPhase::APPROACH,"集合阶段未完成");
     set(0,c.approach); settle(); check(mission.phase() == TeamPhase::CONTACT,"接近阶段未完成");
   }
@@ -74,12 +75,12 @@ void physicalContactAndTimeout() {
   f.set(0,f.c.target); f.states[1].impact_seq = 1; f.settle();
   check(f.mission.phase() == TeamPhase::CONTACT && f.mission.completed().empty(),"距离或其他机碰撞被计为成功");
   for (int i = 0; i < 610; ++i) f.tick();
-  check(f.mission.phase() == TeamPhase::ABORT_RETURN && f.mission.aborted() &&
-        f.mission.completed().empty(),"接触超时被计为成功");
+  check(f.mission.phase() == TeamPhase::CONTACT && !f.mission.aborted() &&
+        f.mission.completed().empty(),"健康车辆被默认阶段期限中止或未接触却成功");
 }
 void sequentialAndLanding() {
   Fixture f; f.contact();
-  for (int active = 0; active < kTeamSize; ++active) {
+  for (int active = 0; active < 4; ++active) {
     check(f.mission.activeVehicle() == active,"轮次机号错误");
     f.set(active,f.c.target);
     ++f.states[active].impact_seq; f.tick();
@@ -115,27 +116,20 @@ void sequentialAndLanding() {
 }
 void staleAndAbort() {
   Fixture f; f.contact();
-  for (int i = 0; i < 12; ++i) f.tick(3);
-  check(f.mission.paused() && f.commands[0].contact_speed_mps == 0,"状态过期未暂停接触");
-  const double hold = f.commands[0].target_x_m;
-  for (int i = 0; i < 10; ++i) f.tick(3);
-  check(f.commands[0].target_x_m == hold && f.mission.completed().empty(),"暂停目标漂移");
-  ++f.states[0].impact_seq; f.tick();
-  check(f.mission.phase() == TeamPhase::CONTACT && f.mission.completed().empty(),"暂停期间碰撞被计为成功");
-  for (int i = 0; i < 65; ++i) f.tick(3);
-  check(f.mission.aborted() && f.mission.paused(),"长期数据中断未中止");
-  f.tick(); check(f.mission.phase() == TeamPhase::ABORT_RETURN && !f.mission.paused(),"恢复后未中止返航");
-  f.follow(); f.settle(); check(f.mission.phase() == TeamPhase::LAND_ALL,"中止归位后未降落");
-  f.follow();
-  for (auto& s : f.states) s.landed = true;
-  for (int i = 0; i < 12; ++i) f.tick(3);
-  check(f.mission.phase() == TeamPhase::LAND_ALL,"缺失状态仍然完成着陆");
-  f.tick(); f.settle();
-  check(f.mission.phase() == TeamPhase::ABORTED,"中止着陆错误");
-  for (const auto& c : f.commands) check(c.disarm && !c.complete,"中止被计为任务成功");
-  Fixture frozen; frozen.contact();
-  frozen.wall += 2000000; frozen.commands = frozen.mission.step(frozen.now,frozen.wall);
-  check(frozen.mission.paused(),"仿真时钟冻结时未按接收时间检查过期");
+  for (int i=0;i<12;++i)f.tick(3);
+  check(!f.mission.paused()&&f.commands[3].degraded,"失联未限定到单机");
+  check(!f.commands[0].degraded&&f.commands[0].contact_speed_mps>0,"正常机被无关失联阻断");
+  const double hold=f.commands[3].target_x_m;
+  for(int i=0;i<10;++i)f.tick(3);
+  check(f.commands[3].target_x_m==hold,"失联机恢复点漂移");
+  f.tick();check(!f.commands[3].degraded,"恢复机仍然被阻断");
+  for(int i=0;i<65;++i)f.tick(3);
+  check(f.mission.partial()&&!f.mission.aborted()&&f.mission.skipped().size()==1,"长期失联没有记录部分任务");
+  f.tick();check(!f.commands[3].degraded,"失联恢复后不能继续接收指令");
+  check(f.mission.completed().empty(),"失联被计为撞击成功");
+  Fixture frozen;frozen.contact();frozen.wall+=2000000;
+  frozen.commands=frozen.mission.step(frozen.now,frozen.wall);
+  for(const auto&c:frozen.commands)check(c.degraded&&c.contact_speed_mps==0,"冻结时钟仍执行接触");
 }
 void transitAndReverse() {
   Fixture f(true); f.takeoff();
@@ -146,7 +140,7 @@ void transitAndReverse() {
   f.follow(); f.settle(); check(f.commands[0].target_y_m == 2,"航路顺序错误");
   f.follow(); f.settle(); check(f.mission.phase() == TeamPhase::ASSEMBLE,"航路完成未集合");
   f.follow(); f.settle();
-  for (int i = 0; i < kTeamSize; ++i) {
+  for (int i = 0; i < 4; ++i) {
     f.set(i,f.c.approach); f.settle(); f.set(i,f.c.target); ++f.states[i].impact_seq; f.tick();
     f.set(i,f.c.approach); f.settle(); f.set(i,f.c.assembly[i]); f.settle();
   }
@@ -182,3 +176,6 @@ int main() {
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
+
+
+

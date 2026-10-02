@@ -28,6 +28,16 @@ bool finiteArray64(const json& value, const char* key) {
   return true;
 }
 
+bool finiteOptionalArray(const json& value, const char* key, std::vector<int>& output) {
+  if (!value.contains(key)) return true;
+  if (!value[key].is_array()) return false;
+  for (const auto& item : value[key]) {
+    if (!item.is_number_integer()) return false;
+    output.push_back(item.get<int>());
+  }
+  return true;
+}
+
 }  // namespace
 
 std::optional<TofFrame> parseTofDatagram(const std::string& payload, int expected_vehicle) {
@@ -60,6 +70,24 @@ std::optional<TofFrame> parseTofDatagram(const std::string& payload, int expecte
   }
 }
 
+std::optional<FlowSample> parseOpticalFlowDatagram(const std::string& payload,
+                                                   int expected_vehicle) {
+  try {
+    const json value = json::parse(payload);
+    if (!schema1(value) || value.value("kind", "") != "optical_flow" ||
+        value.value("vehicle", -1) != expected_vehicle ||
+        !finiteNumber(value, "sim_time_us") || !finiteNumber(value, "vx_body_mps") ||
+        !finiteNumber(value, "vy_body_mps") || !finiteNumber(value, "quality") ||
+        !finiteNumber(value, "variance_m2s2") ||
+        !value["sim_time_us"].is_number_unsigned() || value["sim_time_us"]==0) return std::nullopt;
+    FlowSample result{value["sim_time_us"].get<uint64_t>(), value["vx_body_mps"].get<double>(),
+                      value["vy_body_mps"].get<double>(), value["quality"].get<double>(),
+                      value["variance_m2s2"].get<double>()};
+    if (result.quality < 0.0 || result.quality > 1.0 || result.variance_m2s2 <= 0.0) return std::nullopt;
+    return result;
+  } catch (...) { return std::nullopt; }
+}
+
 std::optional<UwbPeerSample> parseUwbDatagram(const std::string& payload,
                                               int expected_vehicle) {
   try {
@@ -76,11 +104,31 @@ std::optional<UwbPeerSample> parseUwbDatagram(const std::string& payload,
     result.range_m = value["range_m"].get<double>();
     result.bearing_rad = value["bearing_rad"].get<double>();
     result.valid = value.value("valid", true);
-    if (result.peer_id < 0 || result.range_m <= 0.0) return std::nullopt;
+    result.quality = value.value("quality", 1.0);
+    result.nlos = value.value("nlos", false);
+    if (result.peer_id < 0 || result.range_m <= 0.0 || result.quality < 0.0 || result.quality > 1.0) return std::nullopt;
     return result;
   } catch (...) {
     return std::nullopt;
   }
+}
+
+std::optional<AnchorRangeSample> parseAnchorRangeDatagram(const std::string& payload,
+                                                          int expected_vehicle) {
+  try {
+    const json value = json::parse(payload);
+    if (!schema1(value) || value.value("kind", "") != "uwb_anchor" ||
+        value.value("vehicle", -1) != expected_vehicle || !finiteNumber(value, "sim_time_us") ||
+        !finiteNumber(value, "range_m") || !finiteNumber(value, "variance_m2") ||
+        !finiteNumber(value, "quality") || !value["sim_time_us"].is_number_unsigned() ||
+        value["sim_time_us"]==0) return std::nullopt;
+    AnchorRangeSample result{value["sim_time_us"].get<uint64_t>(), value.value("anchor_id", -1),
+                             value["range_m"].get<double>(), value["variance_m2"].get<double>(),
+                             value["quality"].get<double>(), value.value("valid", true)};
+    if (result.anchor_id < 0 || result.range_m <= 0.0 || result.variance_m2 <= 0.0 ||
+        result.quality < 0.0 || result.quality > 1.0) return std::nullopt;
+    return result;
+  } catch (...) { return std::nullopt; }
 }
 
 std::optional<HeightAssistSample> parseHeightAssistDatagram(
@@ -126,6 +174,11 @@ std::optional<PeerEstimate> parsePeerEstimateDatagram(const std::string& payload
     result.height_assisted = value.value("height_assisted", false);
     result.xy_structural_valid = value.value("xy_structural_valid", false);
     result.xy_peer_valid = value.value("xy_peer_valid", false);
+    result.reference_origin = value.value("reference_origin", -1);
+    result.reference_seq = value.value("reference_seq", uint64_t(0));
+    result.reference_time_us = value.value("reference_time_us", uint64_t(0));
+    result.reference_hops = value.value("reference_hops", 0);
+    if (!finiteOptionalArray(value, "reference_path", result.reference_path)) return std::nullopt;
     result.source = "ESTIMATE";
     if (value.contains("pose_covariance") && value["pose_covariance"].is_array() &&
         value["pose_covariance"].size() == 9) {
@@ -163,6 +216,14 @@ std::string serializeEstimateDatagram(const Estimate& estimate) {
       {"xy_peer_valid", estimate.xy_peer_valid},
       {"spawn_prior_valid", estimate.spawn_prior_valid},
       {"degenerate_geometry", estimate.degenerate_geometry},
+      {"flow_valid", estimate.flow_valid},
+      {"position_confidence", estimate.position_confidence},
+      {"localization_mode", estimate.localization_mode},
+      {"reference_origin", estimate.reference_origin},
+      {"reference_seq", estimate.reference_seq},
+      {"reference_time_us", estimate.reference_time_us},
+      {"reference_hops", estimate.reference_hops},
+      {"reference_path", estimate.reference_path},
       {"pose_covariance", json::array()},
   };
   for (int row = 0; row < 3; ++row) {

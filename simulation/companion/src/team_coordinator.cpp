@@ -50,9 +50,9 @@ uint64_t integer(const json& j, const char* key) {
     throw std::invalid_argument(std::string("整数字段无效：")+key);
   return v.get<uint64_t>();
 }
-int vehicleId(const json& j, const char* key) {
+int vehicleId(const json& j, const char* key, size_t count) {
   const auto id = integer(j,key);
-  if (id >= kTeamSize) throw std::invalid_argument("机号超出范围");
+  if (id >= count) throw std::invalid_argument("机号超出范围");
   return static_cast<int>(id);
 }
 bool boolean(const json& j, const char* key) {
@@ -65,11 +65,11 @@ TeamPoint point(const json& j, double defaultZ) {
   p.yaw = j.contains("yaw") ? number(j,"yaw") : 0;
   return p;
 }
-void pointsById(const json& entries, std::array<TeamPoint,kTeamSize>& result, double z) {
-  if (!entries.is_array() || entries.size() != kTeamSize) throw std::invalid_argument("必须配置四个机号");
-  std::array<bool,kTeamSize> seen{};
+void pointsById(const json& entries, std::vector<TeamPoint>& result, double z) {
+  if (!entries.is_array() || entries.empty()) throw std::invalid_argument("必须配置至少一个机号");
+  result.assign(entries.size(), {}); std::vector<bool> seen(entries.size());
   for (const auto& entry : entries) {
-    const int id = vehicleId(entry,"id");
+    const int id = vehicleId(entry,"id",entries.size());
     if (seen[id]) throw std::invalid_argument("机号重复");
     seen[id] = true; result[id] = point(entry,z);
   }
@@ -96,15 +96,21 @@ TeamMissionConfig readConfig(const std::string& path) {
   if (m.contains("return_tolerance_m")) c.return_tolerance_m = number(m,"return_tolerance_m");
   if (m.contains("home_ground_z_m")) c.home_ground_z_m = number(m,"home_ground_z_m");
   if (m.contains("body_clearance_m")) c.body_clearance_m=number(m,"body_clearance_m");
+  if (m.contains("stage_timeout_s")) {
+    const double seconds=number(m,"stage_timeout_s");
+    if(seconds<0 || seconds>86400) throw std::invalid_argument("阶段超时时间超出范围");
+    c.stage_timeout_us=static_cast<uint64_t>(seconds*1e6);
+  }
   if (m.contains("loss_abort_s")) { const double seconds=number(m,"loss_abort_s");if(seconds<1||seconds>30)throw std::invalid_argument("失联中止时间超出范围");c.loss_abort_us=static_cast<uint64_t>(seconds*1e6); }
   pointsById(map.at("spawns"),c.homes,c.home_ground_z_m+.0125);
   pointsById(m.at("assembly"),c.assembly,c.cruise_z_m);
   c.approach = point(m.at("approach"),c.cruise_z_m);
   c.target = point(m.at("target"),c.approach.z);
   const auto& order = m.at("order");
-  if (!order.is_array() || order.size() != kTeamSize) throw std::invalid_argument("接触顺序无效");
-  for (int i = 0; i < kTeamSize; ++i) {
-    json id = {{"id",order[i]}}; c.order[i] = vehicleId(id,"id");
+  if (!order.is_array() || order.size() != c.homes.size()) throw std::invalid_argument("接触顺序无效");
+  c.order.clear();
+  for (const auto& value : order) {
+    json id = {{"id",value}}; c.order.push_back(vehicleId(id,"id",c.homes.size()));
   }
   if (m.contains("transit_waypoints")) {
     if (!m.at("transit_waypoints").is_array()) throw std::invalid_argument("航路配置无效");
@@ -119,23 +125,29 @@ TeamVehicleStatus readStatus(const char* data, int length) {
   const json j = json::parse(data,data+length);
   if (!j.is_object() || integer(j,"schema") != 1 || j.at("kind") != "team_status")
     throw std::invalid_argument("状态报文格式无效");
-  TeamVehicleStatus s; s.vehicle = vehicleId(j,"vehicle");
+  TeamVehicleStatus s; s.vehicle = vehicleId(j,"vehicle",static_cast<size_t>(std::numeric_limits<int>::max()));
   s.sim_time_us = integer(j,"sim_time_us"); s.impact_seq = integer(j,"impact_seq");
   s.x_m = number(j,"x_m"); s.y_m = number(j,"y_m"); s.z_m = number(j,"z_m");
   s.vx_mps = number(j,"vx_mps"); s.vy_mps = number(j,"vy_mps"); s.vz_mps = number(j,"vz_mps");
-  s.yaw_rad = number(j,"yaw_rad"); s.xy_valid = boolean(j,"xy_valid");
+  s.yaw_rad = number(j,"yaw_rad");
+  s.xy_valid = boolean(j,"xy_valid");
+  s.flow_valid = j.contains("flow_valid") ? boolean(j,"flow_valid") : false;
+  s.xy_valid = s.xy_valid || s.flow_valid;
   s.z_valid = boolean(j,"z_valid"); s.ready = boolean(j,"ready"); s.armed = boolean(j,"armed");
   s.landed = j.contains("landed") ? boolean(j,"landed") : false;
+  s.xy_reason = j.contains("localization_mode") ? j.at("localization_mode").get<std::string>() :
+      (j.contains("xy_reason") ? j.at("xy_reason").get<std::string>() : "");
   return s;
 }
 json commandJson(const TeamCommand& c) {
   return {{"schema",1},{"kind","team_command"},{"vehicle",c.vehicle},
       {"sim_time_us",c.sim_time_us},{"sequence",c.sequence},
-      {"phase",c.paused && c.phase != TeamPhase::WAIT_READY ? "PAUSED" : teamPhaseName(c.phase)},
+      {"phase",c.degraded && c.phase != TeamPhase::WAIT_READY ? "HOLD" : teamPhaseName(c.phase)},
       {"mission_phase",teamPhaseName(c.phase)},
       {"active_vehicle",c.active_vehicle},{"target_x_m",c.target_x_m},{"target_y_m",c.target_y_m},
       {"target_z_m",c.target_z_m},{"target_yaw_rad",c.target_yaw_rad},
-      {"contact_speed_mps",c.contact_speed_mps},{"paused",c.paused},
+      {"contact_speed_mps",c.contact_speed_mps},{"paused",c.degraded},
+      {"degraded",c.degraded},{"degraded_reason",c.degraded_reason},{"skipped",c.skipped},
       {"disarm",c.disarm},{"complete",c.complete}};
 }
 void atomicStatus(const std::string& path, const json& status) {
@@ -200,9 +212,10 @@ int main(int argc, char** argv) {
     if (bind(udp.fd,reinterpret_cast<sockaddr*>(&local),sizeof(local)) != 0)
       throw std::runtime_error("无法绑定 UDP 18100");
     std::signal(SIGINT,stop); std::signal(SIGTERM,stop);
-    uint64_t sim = 0, lastEmit = 0, rejected = 0;
-    std::array<bool,kTeamSize> seen{};
-    std::array<uint64_t,kTeamSize> received{}, stamps{};
+    uint64_t sim = 0, lastEmit = 0, rejected = 0, telemetry_errors = 0, send_errors = 0;
+    const size_t team_count = mission.statuses().size();
+    std::vector<bool> seen(team_count);
+    std::vector<uint64_t> received(team_count), stamps(team_count);
     while (running) {
       fd_set reads; FD_ZERO(&reads); FD_SET(udp.fd,&reads); timeval wait{0,20000};
       const int selected = select(static_cast<int>(udp.fd)+1,&reads,nullptr,nullptr,&wait);
@@ -236,20 +249,32 @@ int main(int argc, char** argv) {
         sockaddr_in peer{}; peer.sin_family = AF_INET; peer.sin_port = htons(static_cast<uint16_t>(18000+c.vehicle));
         peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         if (sendto(udp.fd,payload.data(),static_cast<int>(payload.size()),0,
-            reinterpret_cast<sockaddr*>(&peer),sizeof(peer)) < 0) throw std::runtime_error("无法发送队伍指令");
+            reinterpret_cast<sockaddr*>(&peer),sizeof(peer)) < 0) ++send_errors;
         const int id = c.vehicle;
-        vehicles.push_back({{"vehicle",id},{"seen",seen[id]},
-            {"fresh",seen[id] && wall-received[id] <= 1000000 && sim-stamps[id] <= 1000000}});
+        const auto& status = mission.statuses()[id];
+        vehicles.push_back({{"vehicle",id},{"seen",static_cast<bool>(seen[id])},
+            {"fresh",seen[id] && wall-received[id] <= 1000000 && sim-stamps[id] <= 1000000},
+            {"ready",status.ready},{"xy_valid",status.xy_valid},{"z_valid",status.z_valid},
+            {"degraded",c.degraded},{"degraded_reason",c.degraded_reason},{"skipped",c.skipped}});
       }
-      const json snapshot = {{"schema",1},{"sim_time_us",sim},{"sequence",commands[0].sequence},
+      const json snapshot = {{"schema",1},{"sim_time_us",sim},{"sequence",commands.empty()?0:commands[0].sequence},
           {"phase",mission.paused() && mission.phase() != TeamPhase::WAIT_READY ? "PAUSED" : teamPhaseName(mission.phase())},
           {"mission_phase",teamPhaseName(mission.phase())},{"active_vehicle",mission.activeVehicle()},
           {"completed",mission.completed()},{"paused",mission.paused()},{"aborted",mission.aborted()},
-          {"complete",mission.phase() == TeamPhase::COMPLETE},{"reason",mission.reason()},
-          {"rejected_datagrams",rejected},{"vehicles",vehicles},{"commands",targets}};
+          {"complete",mission.phase() == TeamPhase::COMPLETE},{"partial",mission.partial()},{"skipped",mission.skipped()},{"reason",mission.reason()},
+          {"rejected_datagrams",rejected},{"telemetry_errors",telemetry_errors},{"send_errors",send_errors},{"vehicles",vehicles},{"commands",targets}};
       log << snapshot.dump() << '\n'; log.flush();
-      if (!log) throw std::runtime_error("任务日志写入失败");
-      atomicStatus(joinPath(runtime,"team_status.json"),snapshot);
+      if (!log) {
+        ++telemetry_errors;
+        log.close(); log.clear();
+        log.open(joinPath(runtime,"team_mission.jsonl"),std::ios::binary | std::ios::app);
+      }
+      try { atomicStatus(joinPath(runtime,"team_status.json"),snapshot); }
+      catch (const std::exception& e) {
+        ++telemetry_errors;
+        if (telemetry_errors==1 || telemetry_errors%100==0)
+          std::cerr << "任务状态写入错误：" << e.what() << '\n';
+      }
     }
     return 0;
   } catch (const std::exception& e) {

@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <Eigen/Core>
@@ -62,11 +63,30 @@ struct TofFrame {
   std::array<uint8_t, kTofCellCount> valid{};
 };
 
+struct FlowSample {
+  uint64_t sim_time_us{0};
+  double vx_body_mps{0.0};
+  double vy_body_mps{0.0};
+  double quality{0.0};
+  double variance_m2s2{0.0};
+};
+
 struct UwbPeerSample {
   uint64_t sim_time_us{0};
   int peer_id{-1};
   double range_m{0.0};
   double bearing_rad{0.0};
+  bool valid{false};
+  double quality{1.0};
+  bool nlos{false};
+};
+
+struct AnchorRangeSample {
+  uint64_t sim_time_us{0};
+  int anchor_id{-1};
+  double range_m{0.0};
+  double variance_m2{0.0};
+  double quality{1.0};
   bool valid{false};
 };
 
@@ -97,6 +117,11 @@ struct PeerEstimate {
   bool height_assisted{false};
   bool xy_structural_valid{false};
   bool xy_peer_valid{false};
+  int reference_origin{-1};
+  uint64_t reference_seq{0};
+  uint64_t reference_time_us{0};
+  int reference_hops{0};
+  std::vector<int> reference_path;
   std::string source;
 };
 
@@ -126,9 +151,13 @@ struct EstimatorConfig {
   double initial_z_sigma_m{0.50};
   double floor_z_m{0.0};
   uint64_t prediction_timeout_us{5000000};
+  uint64_t flow_timeout_us{500000};
+  double flow_xy_covariance_limit{4.0};
+  uint64_t anchor_timeout_us{500000};
   uint64_t spawn_prior_timeout_us{4000000};
   double spawn_prior_xy_variance_limit{0.40};
   bool use_baro_fallback{true};
+  std::unordered_map<int, Eigen::Vector3d> uwb_anchors;
 };
 
 struct Estimate {
@@ -148,6 +177,14 @@ struct Estimate {
   bool vz_derived_from_height{false};
   bool degenerate_geometry{false};
   bool stale_input{false};
+  bool flow_valid{false};
+  double position_confidence{0.0};
+  std::string localization_mode{"SPAWN_PRIOR"};
+  int reference_origin{-1};
+  uint64_t reference_seq{0};
+  uint64_t reference_time_us{0};
+  int reference_hops{0};
+  std::vector<int> reference_path;
   std::string source{"ESTIMATE"};
 };
 

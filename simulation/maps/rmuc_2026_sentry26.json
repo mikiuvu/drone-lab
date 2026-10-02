@@ -211,10 +211,15 @@
         "z": 0.75
       }
     ],
-    "scan_yaw_rate_rad_s": 0.25,
     "loss_abort_s": 15,
     "body_clearance_m": 0.016,
-    "contact_radius_m": 0.052,
-    "map_heading": true
-  }
+    "contact_radius_m": 0.052
+  },
+  "optical_flow": {
+    "enabled": true,
+    "noise_std_mps": 0.015,
+    "scale_error": 0.005,
+    "drop_probability": 0.01
+  },
+  "uwb_anchors": []
 }
