@@ -513,6 +513,8 @@ class GazeboPanel(QWidget):
             "PAUSED": "任务暂停",
         }
         text = phases.get(phase, "等待任务阶段" if not phase else f"任务阶段：{phase}")
+        if team.get("flight_elapsed_s", 0) > 0:
+            text += f" · 飞行计时 {team['flight_elapsed_s']:.1f} s"
         active = team.get("active_vehicle")
         if type(active) is int and active >= 0:
             text += f" · 当前机 {active}"

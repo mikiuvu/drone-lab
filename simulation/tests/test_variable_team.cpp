@@ -13,8 +13,12 @@ TeamMissionConfig config(int count) {
   return c;
 }
 
-void fullMission(int count) {
-  auto c=config(count);TeamMission mission(c);
+void fullMission(int count, bool fast=false) {
+  auto c=config(count);
+  c.pipelined_contact=c.fly_through_route=fast;
+  c.route_speed_tolerance_mps=3.5;
+  if(fast)for(int i=0;i<count;++i)c.assembly[i]={1,3.5+i*.3,1.2,0};
+  TeamMission mission(c);
   std::vector<TeamVehicleStatus> states(count);
   for(int i=0;i<count;++i){auto&s=states[i];s.vehicle=i;s.x_m=c.homes[i].x;s.z_m=.5125;s.xy_valid=s.z_valid=s.ready=s.flow_valid=true;}
   std::vector<TeamCommand> commands;
@@ -29,6 +33,7 @@ void fullMission(int count) {
           s.x_m=c.target.x;s.y_m=c.target.y;s.z_m=c.target.z;++s.impact_seq;
         }
         if(cmd.phase==TeamPhase::LAND_ALL)s.landed=true;
+        s.vx_mps=fast&&cmd.phase==TeamPhase::TRANSIT?2.0:0.0;
       }
       s.sim_time_us=tick*100000;assert(mission.updateStatus(s,tick*100000));
     }
@@ -38,6 +43,10 @@ void fullMission(int count) {
     if(mission.phase()==TeamPhase::RETURN_ALL){assert(mission.completed().size()==static_cast<size_t>(count));reached_return=true;}
     if(mission.phase()==TeamPhase::COMPLETE){
       assert(reached_return&&!mission.partial());
+      assert(mission.flightElapsedSeconds()>0);
+      const auto elapsed=mission.flightElapsedSeconds();
+      mission.step(tick*100000+1000000,tick*100000+1000000);
+      assert(mission.flightElapsedSeconds()==elapsed);
       for(const auto&cmd:commands)assert(cmd.complete&&cmd.disarm);
       return;
     }
@@ -79,4 +88,4 @@ void missingVehicleAndRecovery() {
   assert(empty.phase()==TeamPhase::WAIT_READY && empty.completed().empty());
 }
 
-int main(){for(int n:{1,4,6,12})fullMission(n);individualDegradation();missingVehicleAndRecovery();}
+int main(){for(int n:{1,4,6,12}){fullMission(n);fullMission(n,true);}individualDegradation();missingVehicleAndRecovery();}

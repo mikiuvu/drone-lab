@@ -31,6 +31,8 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
       config_.cruise_z_m <= config_.home_ground_z_m + config_.body_clearance_m ||
       !std::isfinite(config_.contact_speed_mps) || config_.contact_speed_mps <= 0 ||
       !std::isfinite(config_.return_tolerance_m) || config_.return_tolerance_m <= 0 ||
+      !std::isfinite(config_.route_tolerance_m) || config_.route_tolerance_m<=0 ||
+      !std::isfinite(config_.route_speed_tolerance_mps) || config_.route_speed_tolerance_mps<=0 ||
       !config_.freshness_us || !config_.stable_us || !config_.loss_abort_us ||
       !finite(config_.approach) || !finite(config_.target)) throw std::invalid_argument("任务参数无效");
   for (size_t i = 0; i < n; ++i) {
@@ -84,6 +86,7 @@ bool TeamMission::near(int i, const TeamPoint& p, bool xy) const {
 bool TeamMission::barrier(bool ok, uint64_t now) { if (!ok) { stable_=false; return false; } if (!stable_) { stable_=true; stable_start_=now; } return now-stable_start_ >= config_.stable_us; }
 void TeamMission::enter(TeamPhase p, uint64_t now) {
   phase_=p; phase_start_=now; stable_=false;
+  if((p==TeamPhase::COMPLETE||p==TeamPhase::ABORTED)&&flight_start_)flight_end_=now;
   if (p==TeamPhase::CONTACT && activeVehicle()>=0) impact_baseline_=status_[activeVehicle()].impact_seq;
   if (p==TeamPhase::RETREAT) retreat_assembly_=false;
   if (p==TeamPhase::RETURN_ALL || p==TeamPhase::ABORT_RETURN)
@@ -100,11 +103,16 @@ int TeamMission::activeVehicle() const { return (phase_==TeamPhase::APPROACH || 
 
 std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   clock_=std::max(clock_,sim); sim=clock_;wall_clock_=wall;
+  if(!flight_start_)for(size_t i=0;i<status_.size();++i)
+    if(validForBarrier(static_cast<int>(i),sim,wall)&&status_[i].armed&&status_[i].z_m>config_.home_ground_z_m+config_.body_clearance_m+.03){flight_start_=sim;break;}
   for (size_t i=0;i<status_.size();++i) { if (!validForBarrier(static_cast<int>(i),sim,wall)) { if (!loss_start_[i]) loss_start_[i]=wall; } else loss_start_[i]=0; }
   skipUnrecoverable(wall);
   const bool terminal=phase_==TeamPhase::COMPLETE||phase_==TeamPhase::ABORTED;
   auto allNear=[&](bool home, bool landing=false){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=home?config_.homes[i]:config_.assembly[i];p.z=home?(landing?config_.home_ground_z_m+config_.body_clearance_m:config_.cruise_z_m):config_.cruise_z_m;if(!near(static_cast<int>(i),p,home&&landing?false:true))return false;}return any;};
-  auto routeNear=[&](int k){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=config_.transit_waypoints[k];p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;if(!near(static_cast<int>(i),p))return false;}return any;};
+  auto routeNear=[&](int k){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=config_.transit_waypoints[k];p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;
+    if(!config_.fly_through_route){if(!near(static_cast<int>(i),p))return false;}
+    else {const auto&s=status_[i];if(!validForBarrier(static_cast<int>(i),sim,wall)||std::hypot(s.x_m-p.x,s.y_m-p.y)>config_.route_tolerance_m||std::abs(s.z_m-p.z)>.12||std::hypot(s.vx_mps,s.vy_mps)>config_.route_speed_tolerance_mps)return false;}
+  }return any;};
   if (!terminal && !aborted_ && config_.stage_timeout_us && phase_!=TeamPhase::WAIT_READY && sim-phase_start_>=config_.stage_timeout_us) abort(sim,phase_==TeamPhase::CONTACT?"接触阶段超时":"阶段超时");
   const int previous_active=activeVehicle();
   while (turn_ < static_cast<int>(config_.order.size()) && skipped_now_[config_.order[turn_]]) ++turn_;
@@ -118,7 +126,13 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     case TeamPhase::ASSEMBLE: if(barrier(allNear(false),sim))enter(TeamPhase::APPROACH,sim); break;
     case TeamPhase::APPROACH: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&barrier(near(a,config_.approach)&&std::abs(std::remainder(status_[a].yaw_rad-config_.approach.yaw,6.283185307))<=.15,sim))enter(TeamPhase::CONTACT,sim); break; }
     case TeamPhase::CONTACT: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&validForBarrier(a,sim,wall)&&status_[a].impact_seq>impact_baseline_){impact_baseline_=status_[a].impact_seq;const auto&s=status_[a];if(std::hypot(std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y),s.z_m-config_.target.z)<=.35&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.3){completed_.push_back(a);enter(TeamPhase::RETREAT,sim);}} break; }
-    case TeamPhase::RETREAT: { const int a=activeVehicle();if(a<0){enter(TeamPhase::RETURN_ALL,sim);break;}if(barrier(near(a,retreat_assembly_?config_.assembly[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
+    case TeamPhase::RETREAT: { const int a=activeVehicle();if(a<0){enter(TeamPhase::RETURN_ALL,sim);break;}
+      if(config_.pipelined_contact){const auto&s=status_[a];const double dx=s.x_m-config_.approach.x,dy=s.y_m-config_.approach.y;
+        const double forward=dx*std::cos(config_.approach.yaw)+dy*std::sin(config_.approach.yaw);
+        const double lateral=-dx*std::sin(config_.approach.yaw)+dy*std::cos(config_.approach.yaw);
+        if(validForBarrier(a,sim,wall)&&forward<-.25)retreat_assembly_=true;
+        if(validForBarrier(a,sim,wall)&&retreat_assembly_&&forward<-.25&&std::abs(lateral)>.18){if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);}
+      }else if(barrier(near(a,retreat_assembly_?config_.assembly[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
     case TeamPhase::RETURN_ALL: case TeamPhase::ABORT_RETURN: if(return_index_>=0){if(barrier(routeNear(return_index_),sim)){--return_index_;stable_=false;phase_start_=sim;}}else if(barrier(allNear(true),sim))enter(TeamPhase::LAND_ALL,sim); break;
     default: break;
   }
@@ -149,6 +163,14 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       p=config_.transit_waypoints[route_index];p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;p.yaw=config_.homes[i].yaw;
     } else if(static_cast<int>(i)==c.active_vehicle) {
       p=phase_==TeamPhase::RETREAT&&retreat_assembly_?config_.assembly[i]:config_.approach;
+      if(phase_==TeamPhase::RETREAT&&config_.pipelined_contact&&!retreat_assembly_){p.x-=.45*std::cos(p.yaw);p.y-=.45*std::sin(p.yaw);}
+    }
+    if(config_.pipelined_contact&&(phase_==TeamPhase::CONTACT||phase_==TeamPhase::RETREAT)&&
+       turn_+1<static_cast<int>(config_.order.size())&&config_.order[turn_+1]==static_cast<int>(i)) {
+      const double heading=config_.approach.yaw;
+      const double side=(config_.assembly[i].y-config_.approach.y)*std::cos(heading)-(config_.assembly[i].x-config_.approach.x)*std::sin(heading);
+      const double lateral=side>=0?.25:-.25;
+      p=config_.approach;p.x-=.15*std::cos(heading)+lateral*std::sin(heading);p.y+=lateral*std::cos(heading)-.15*std::sin(heading);
     }
     if(c.degraded&&seen_[i])p=holds_[i];
     else if(seen_[i])holds_[i]={status_[i].x_m,status_[i].y_m,status_[i].z_m,status_[i].yaw_rad};

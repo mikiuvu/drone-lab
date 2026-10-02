@@ -15,6 +15,9 @@ struct TeamMissionConfig {
   bool explicit_formation_offsets = false;
   std::vector<int> order{0, 1, 2, 3};
   double contact_speed_mps = .2, return_tolerance_m = .10;
+  double route_tolerance_m = .10, route_speed_tolerance_mps = .30;
+  bool fly_through_route = false;
+  bool pipelined_contact = false;
   double home_ground_z_m = .5;
   double body_clearance_m = .0125;
   uint64_t freshness_us = 1000000, stable_us = 500000;
@@ -57,6 +60,7 @@ class TeamMission {
   const std::vector<int>& completed() const { return completed_; }
   const std::vector<int>& skipped() const { return skipped_; }
   const std::vector<TeamVehicleStatus>& statuses() const { return status_; }
+  double flightElapsedSeconds() const { return flight_start_?((flight_end_?flight_end_:clock_)-flight_start_)*1e-6:0; }
  private:
   bool validForBarrier(int id, uint64_t sim, uint64_t wall) const;
   bool near(int id, const TeamPoint& point, bool xy = true) const;
@@ -72,6 +76,7 @@ class TeamMission {
   TeamPhase phase_ = TeamPhase::WAIT_READY;
   uint64_t clock_ = 0, wall_clock_ = 0, phase_start_ = 0, stable_start_ = 0;
   uint64_t sequence_ = 0, impact_baseline_ = 0;
+  uint64_t flight_start_ = 0, flight_end_ = 0;
   bool stable_ = false, aborted_ = false, retreat_assembly_ = false;
   int turn_ = 0;
   int transit_index_ = 0, return_index_ = -1;

@@ -94,6 +94,15 @@ TeamMissionConfig readConfig(const std::string& path) {
   if (m.contains("cruise_z_m")) c.cruise_z_m = number(m,"cruise_z_m");
   if (m.contains("contact_speed_mps")) c.contact_speed_mps = number(m,"contact_speed_mps");
   if (m.contains("return_tolerance_m")) c.return_tolerance_m = number(m,"return_tolerance_m");
+  c.route_tolerance_m=m.value("route_tolerance_m",c.return_tolerance_m);
+  c.route_speed_tolerance_mps=m.value("route_speed_tolerance_mps",.30);
+  c.fly_through_route=m.value("fly_through_route",false);
+  c.pipelined_contact=m.value("pipelined_contact",false);
+  if(m.contains("stable_s")) {
+    const double seconds=number(m,"stable_s");
+    if(seconds<=0||seconds>10)throw std::invalid_argument("稳定确认时间无效");
+    c.stable_us=static_cast<uint64_t>(seconds*1e6);
+  }
   if (m.contains("home_ground_z_m")) c.home_ground_z_m = number(m,"home_ground_z_m");
   if (m.contains("body_clearance_m")) c.body_clearance_m=number(m,"body_clearance_m");
   if (m.contains("stage_timeout_s")) {
@@ -261,6 +270,7 @@ int main(int argc, char** argv) {
           {"phase",mission.paused() && mission.phase() != TeamPhase::WAIT_READY ? "PAUSED" : teamPhaseName(mission.phase())},
           {"mission_phase",teamPhaseName(mission.phase())},{"active_vehicle",mission.activeVehicle()},
           {"completed",mission.completed()},{"paused",mission.paused()},{"aborted",mission.aborted()},
+          {"flight_elapsed_s",mission.flightElapsedSeconds()},
           {"complete",mission.phase() == TeamPhase::COMPLETE},{"partial",mission.partial()},{"skipped",mission.skipped()},{"reason",mission.reason()},
           {"rejected_datagrams",rejected},{"telemetry_errors",telemetry_errors},{"send_errors",send_errors},{"vehicles",vehicles},{"commands",targets}};
       log << snapshot.dump() << '\n'; log.flush();
