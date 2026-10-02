@@ -1,6 +1,7 @@
 """Gazebo controls and read-only multivehicle localization assessment."""
 
 import json
+import math
 from pathlib import Path
 
 try:
@@ -21,7 +22,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -108,7 +111,7 @@ class LocalizationMap(QWidget):
         marker = self.config.get("home_marker", {})
         size = float(marker.get("size_m", 0.30))
         width = float(marker.get("line_width_m", 0.012))
-        painter.setClipRect(QRectF(left, top, (x1-x0)*scale, (y1-y0)*scale))
+        painter.setClipRect(QRectF(left, top, (x1 - x0) * scale, (y1 - y0) * scale))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(QColor(220, 30, 30), width * scale))
         for i, home in home_positions(self.config.get("spawns", [])).items():
@@ -132,7 +135,7 @@ class LocalizationMap(QWidget):
             painter.drawText(pad, 20, "等待定位数据…")
             return
         colors = [(31, 119, 180), (214, 39, 40), (44, 160, 44), (148, 103, 189)]
-        painter.setClipRect(QRectF(left, top, (x1-x0)*scale, (y1-y0)*scale))
+        painter.setClipRect(QRectF(left, top, (x1 - x0) * scale, (y1 - y0) * scale))
         for i, vehicle in enumerate(self.snapshot["vehicles"]):
             color = QColor(*colors[i])
             for kind in ("truth", "estimate"):
@@ -172,7 +175,7 @@ class GazeboPanel(QWidget):
         self.map_config = {}
         self._terrain_cache = None
         outer = QVBoxLayout(self)
-        title = QLabel("四机协同定位评估")
+        title = QLabel("多机协同定位评估")
         title.setStyleSheet("font-size:16px;font-weight:bold")
         outer.addWidget(title)
         note = QLabel("高度辅助")
@@ -189,7 +192,7 @@ class GazeboPanel(QWidget):
         row.addWidget(self.map_choice, 1)
         row.addWidget(QLabel("任务："))
         self.mission_choice = QComboBox()
-        self.mission_choice.addItem("四机轮流撞击与返航", "team_contact")
+        self.mission_choice.addItem("多机轮流撞击与返航", "team_contact")
         self.mission_choice.addItem("定点悬停", "hover")
         self.mission_choice.addItem("地图航线", "survey")
         row.addWidget(self.mission_choice)
@@ -199,10 +202,16 @@ class GazeboPanel(QWidget):
         guide = QPushButton("地形定位说明")
         guide.clicked.connect(self.open_guide)
         row.addWidget(guide)
+        row.addWidget(QLabel("无人机数量："))
+        self.vehicle_count = QSpinBox()
+        self.vehicle_count.setRange(1, 64)
+        self.vehicle_count.setValue(4)
+        self.vehicle_count.valueChanged.connect(self._set_camera_count)
+        row.addWidget(self.vehicle_count)
         outer.addLayout(row)
         row = QHBoxLayout()
         for text, action in (
-            ("启动四机环境", "start"),
+            ("启动多机环境", "start"),
             ("停止本次仿真", "stop"),
             ("打开 Gazebo", "gui"),
         ):
@@ -223,7 +232,9 @@ class GazeboPanel(QWidget):
         outer.addLayout(tof_row)
         self.height_only = QCheckBox("仅融合高度")
         outer.addWidget(self.height_only)
-        self.fly = QCheckBox("启用四机定位飞行")
+        self.uwb_anchors = QCheckBox("启用固定 UWB 锚点")
+        outer.addWidget(self.uwb_anchors)
+        self.fly = QCheckBox("启用多机定位飞行")
         outer.addWidget(self.fly)
         self.status = QLabel("等待选择地图和仿真运行目录。")
         self.status.setWordWrap(True)
@@ -239,17 +250,14 @@ class GazeboPanel(QWidget):
         middle.addWidget(self.map_view, 3)
         self.cameras = []
         camera_grid = QGridLayout()
-        for i in range(4):
-            camera = QLabel(f"无人机 {i} · 等待 Gazebo 相机图像")
-            camera.setMinimumSize(220, 110)
-            camera.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            camera.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-            camera.setStyleSheet(
-                "background:#e5edf4;border:1px solid #bdcddc;padding:4px"
-            )
-            camera_grid.addWidget(camera, i // 2, i % 2)
-            self.cameras.append(camera)
-        middle.addLayout(camera_grid, 2)
+        self.camera_grid = camera_grid
+        self.camera_area = QScrollArea()
+        self.camera_area.setWidgetResizable(True)
+        camera_host = QWidget()
+        camera_host.setLayout(camera_grid)
+        self.camera_area.setWidget(camera_host)
+        middle.addWidget(self.camera_area, 2)
+        self._set_camera_count(4)
         outer.addLayout(middle, 1)
         self.cards = QPlainTextEdit()
         self.cards.setReadOnly(True)
@@ -262,6 +270,25 @@ class GazeboPanel(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(800)
+
+    def _set_camera_count(self, count):
+        while self.cameras:
+            camera = self.cameras.pop()
+            self.camera_grid.removeWidget(camera)
+            camera.deleteLater()
+        columns = max(1, min(4, int(math.ceil(math.sqrt(count)))))
+        colors = [(31, 119, 180), (214, 39, 40), (44, 160, 44), (148, 103, 189)]
+        for i in range(count):
+            camera = QLabel(f"无人机 {i} · 等待 Gazebo 相机图像")
+            camera.setMinimumSize(180, 100)
+            camera.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            camera.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+            color = colors[i % len(colors)]
+            camera.setStyleSheet(
+                f"background:#e5edf4;border:2px solid rgb{color};padding:4px"
+            )
+            self.camera_grid.addWidget(camera, i // columns, i % columns)
+            self.cameras.append(camera)
 
     def _load_maps(self):
         self.map_choice.clear()
@@ -313,7 +340,11 @@ class GazeboPanel(QWidget):
                 map_arg,
                 "--mission",
                 self.mission_choice.currentData(),
+                "--vehicle-count",
+                str(self.vehicle_count.value()),
             ]
+            if self.uwb_anchors.isChecked():
+                args += ["--uwb-anchors"]
             if self.tof_mount.currentData() == "horizontal":
                 args += ["--horizontal-tof"]
             if self.height_only.isChecked():
@@ -359,6 +390,9 @@ class GazeboPanel(QWidget):
             elif self.metrics is not None:
                 self.metrics.manager = value
             self.map_config = dict(value.get("map", {}))
+            configured_count = len(self.map_config.get("spawns", []))
+            if configured_count >= 1 and configured_count != len(self.cameras):
+                self._set_camera_count(configured_count)
             self.metrics.set_homes(self.map_config.get("spawns", []))
             self._update_map_context(self.map_config)
             snapshot = self.metrics.poll(include_trails=True)
@@ -383,8 +417,8 @@ class GazeboPanel(QWidget):
                 ("仿真已请求停止" if value.get("stopped") else "仿真进程已启动")
                 + f" · {folder.name} · 地图：{map_label} · {phase}"
             )
-        except (OSError, ValueError, KeyError, TypeError):
-            self.status.setText("等待有效仿真状态与定位日志。")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.status.setText(f"等待有效仿真状态与定位日志：{type(exc).__name__}")
 
     def _update_map_context(self, config):
         bounds = map_bounds(config)
@@ -437,9 +471,11 @@ class GazeboPanel(QWidget):
                 with np.load(path, allow_pickle=False) as data:
                     self._terrain_cache = (key, (data["x"], data["y"], data["z"]))
             self.map_view.set_terrain(self._terrain_cache[1])
-        except (OSError, KeyError, ValueError):
+        except (OSError, KeyError, ValueError) as exc:
             self.map_view.set_terrain(None)
-            self.map_note.setText(self.map_note.text() + " · 无法读取地形网格")
+            self.map_note.setText(
+                self.map_note.text() + f" · 无法读取地形网格：{type(exc).__name__}"
+            )
 
     def open_guide(self):
         path = self.root / "simulation/docs/team-mission.html"
@@ -453,7 +489,7 @@ class GazeboPanel(QWidget):
         phase = team.get("phase", "")
         phases = {
             "WAITING": "等待协同起飞",
-            "WAIT_READY": "等待四机就绪",
+            "WAIT_READY": "等待多机就绪",
             "LAUNCH": "协同起飞",
             "TAKEOFF": "协同起飞",
             "TRANSIT": "编队航行",
@@ -465,7 +501,7 @@ class GazeboPanel(QWidget):
             "RETURN_ALL": "共同返航",
             "LAND": "降落",
             "LANDING": "降落",
-            "LAND_ALL": "四机降落",
+            "LAND_ALL": "多机降落",
             "COMPLETE": "任务完成",
             "ABORT": "任务中止",
             "ABORT_RETURN": "中止并返航",
@@ -474,12 +510,12 @@ class GazeboPanel(QWidget):
         }
         text = phases.get(phase, "等待任务阶段" if not phase else f"任务阶段：{phase}")
         active = team.get("active_vehicle")
-        if type(active) is int and 0 <= active < 4:
+        if type(active) is int and active >= 0:
             text += f" · 当前机 {active}"
         completed = team.get("completed", [])
         if isinstance(completed, list):
             text += " · 已撞击：" + (
-                "、".join(str(i) for i in completed if type(i) is int and 0 <= i < 4)
+                "、".join(str(i) for i in completed if type(i) is int and i >= 0)
                 or "无"
             )
         return text
@@ -500,8 +536,18 @@ class GazeboPanel(QWidget):
                 if v["rmse_m"] is None
                 else f"均方根误差 {v['rmse_m']:.2f} m / 最大误差 {v['max_error_m']:.2f} m"
             )
+            flow = (
+                "--"
+                if v["flow_validity"] is None
+                else f"{v['flow_validity'] * 100:.0f}%"
+            )
+            confidence = (
+                "--"
+                if v["position_confidence"] is None
+                else f"{v['position_confidence']:.2f}"
+            )
             rows.append(
-                f"机 {v['vehicle']} · { {'live': '更新中', 'stopped': '已停止', 'pending': '等待数据', 'stale': '数据过期', 'unmatched': '等待时间匹配'}.get(v['status'], v['status']) } · XY {error} · 有效 {pct('valid')} · 结构定位 {pct('structural')} · 机间定位 {pct('peer')} · 路程 {v['truth_path_m']:.1f} m"
+                f"机 {v['vehicle']} · { {'live': '更新中', 'stopped': '已停止', 'pending': '等待数据', 'stale': '数据过期', 'unmatched': '等待时间匹配'}.get(v['status'], v['status']) } · XY {error} · 有效 {pct('valid')} · 结构定位 {pct('structural')} · 机间定位 {pct('peer')} · 光流 {flow} · 置信度 {confidence} · 模式 {v['localization_mode'] or '--'} · 路程 {v['truth_path_m']:.1f} m"
             )
             team = snapshot.get("team_status", {})
             states = team.get("vehicles", [])

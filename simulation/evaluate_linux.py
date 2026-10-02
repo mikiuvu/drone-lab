@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import re
 import signal
 import threading
 from pathlib import Path
@@ -16,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--world", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--vehicle-count", type=int)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     output = args.output.open("x", encoding="utf-8")
@@ -31,7 +33,16 @@ def main():
     ground_z = config.get("home_marker", {}).get("ground_z_m", 0.0)
     target = config.get("team_mission", {}).get("target")
     body_clearance = config.get("team_mission", {}).get("body_clearance_m", 0.0125)
-    homes = {s["id"]: s for s in config.get("spawns", [])}
+    homes = {s["id"]: s for s in config.get("spawns", []) if type(s.get("id")) is int}
+    vehicle_count = (
+        args.vehicle_count
+        or config.get("vehicle_count")
+        or len(config.get("spawns", []))
+        or 4
+    )
+    if type(vehicle_count) is not int or vehicle_count < 1:
+        raise ValueError("vehicle-count must be a positive integer")
+    vehicle_ids = list(range(vehicle_count))
     last_pose = {}
     airborne = set()
     contact_times = {}
@@ -47,7 +58,11 @@ def main():
             return
         last = stamp
         for pose in message.pose:
-            if pose.name not in {f"micro_{i}" for i in range(4)}:
+            match = re.fullmatch(r"micro_(\d+)", pose.name)
+            if match is None:
+                continue
+            vehicle = int(match.group(1))
+            if vehicle not in vehicle_ids and vehicle >= vehicle_count:
                 continue
             q = pose.orientation
             yaw = math.atan2(
@@ -55,7 +70,7 @@ def main():
             )
             row = {
                 "kind": "truth_evaluation_only",
-                "vehicle": int(pose.name[-1]),
+                "vehicle": vehicle,
                 "sim_time_us": stamp,
                 "x_m": pose.position.x,
                 "y_m": pose.position.y,
@@ -119,7 +134,7 @@ def main():
     node = Node()
     if not node.subscribe(Pose_V, f"/world/{args.world}/dynamic_pose/info", callback):
         raise RuntimeError("Truth evaluation subscription failed")
-    for vehicle in range(4):
+    for vehicle in vehicle_ids:
         node.subscribe(
             Contacts,
             f"/world/{args.world}/model/micro_{vehicle}/link/base_link/sensor/body_contact/contact",
@@ -130,7 +145,7 @@ def main():
     while not stop.wait(0.2):
         pass
     node.unsubscribe(f"/world/{args.world}/dynamic_pose/info")
-    for vehicle in range(4):
+    for vehicle in vehicle_ids:
         node.unsubscribe(
             f"/world/{args.world}/model/micro_{vehicle}/link/base_link/sensor/body_contact/contact"
         )

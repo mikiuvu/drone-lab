@@ -237,12 +237,14 @@ class TeamContactQtTests(unittest.TestCase):
 
     def test_default_mission_and_command_arguments(self):
         self.assertEqual(self.panel.mission_choice.currentData(), "team_contact")
-        self.assertEqual(self.panel.mission_choice.currentText(), "四机轮流撞击与返航")
+        self.assertEqual(self.panel.mission_choice.currentText(), "多机轮流撞击与返航")
         with patch("app.simulation_panel.QProcess") as process:
             self.panel.command("start")
             args = process.return_value.start.call_args.args[1]
             self.assertEqual(args[args.index("--mission") + 1], "team_contact")
             self.assertEqual(args[args.index("--dynamics") + 1], "micro")
+            self.assertEqual(args[args.index("--vehicle-count") + 1], "4")
+            self.assertNotIn("--uwb-anchors", args)
             self.assertNotIn("--fly", args)
 
     def test_home_zoom_and_red_markers_render_before_logs(self):
@@ -316,9 +318,9 @@ class TeamContactQtTests(unittest.TestCase):
 
     def test_actual_phase_names_and_configured_cruise_height(self):
         for phase, text in [
-            ("WAIT_READY", "等待四机就绪"),
+            ("WAIT_READY", "等待多机就绪"),
             ("RETURN_ALL", "共同返航"),
-            ("LAND_ALL", "四机降落"),
+            ("LAND_ALL", "多机降落"),
             ("PAUSED", "任务暂停"),
         ]:
             self.assertIn(text, self.panel._phase_text({"phase": phase}))

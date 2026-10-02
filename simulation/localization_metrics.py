@@ -72,14 +72,14 @@ class JsonlTail:
             return []
 
 
-def pose(row):
+def pose(row, vehicle_count=4):
     try:
         vehicle = row["vehicle"]
         stamp = float(row["sim_time_us"])
         xy = (float(row["x_m"]), float(row["y_m"]))
         if (
             type(vehicle) is int
-            and 0 <= vehicle < 4
+            and 0 <= vehicle < vehicle_count
             and stamp >= 0
             and all(math.isfinite(v) for v in (stamp, *xy))
         ):
@@ -139,7 +139,7 @@ def home_positions(spawns):
         try:
             i = spawn["id"]
             point = tuple(float(spawn[k]) for k in ("x", "y", "z"))
-            if type(i) is int and 0 <= i < 4 and all(math.isfinite(v) for v in point):
+            if type(i) is int and i >= 0 and all(math.isfinite(v) for v in point):
                 homes[i] = point
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
@@ -151,11 +151,31 @@ class LocalizationMetrics:
     stale_seconds = 3.0
 
     def __init__(
-        self, folder, full=False, manager=None, homes=None, team_status_path=None
+        self,
+        folder,
+        full=False,
+        manager=None,
+        homes=None,
+        team_status_path=None,
+        vehicle_count=None,
     ):
         self.folder = Path(folder)
         self.full = full
         self.manager = manager or {}
+        configured_spawns = self.manager.get("map", {}).get("spawns", [])
+        if vehicle_count is None and isinstance(homes, (list, tuple)) and homes:
+            vehicle_count = len(homes)
+        if (
+            vehicle_count is None
+            and isinstance(configured_spawns, (list, tuple))
+            and configured_spawns
+        ):
+            vehicle_count = len(configured_spawns)
+        if vehicle_count is None:
+            vehicle_count = self.manager.get("vehicle_count") or 4
+        if type(vehicle_count) is not int or vehicle_count < 1:
+            raise ValueError("vehicle_count must be a positive integer")
+        self.vehicle_count = vehicle_count
         self.homes = home_positions(
             homes
             if homes is not None
@@ -167,7 +187,8 @@ class LocalizationMetrics:
             else self.folder / "team_status.json"
         )
         self.tails = [JsonlTail(self.folder / "truth_evaluation_only.jsonl")] + [
-            JsonlTail(self.folder / f"companion_{i}.jsonl") for i in range(4)
+            JsonlTail(self.folder / f"companion_{i}.jsonl")
+            for i in range(self.vehicle_count)
         ]
         if self.full:
             for tail in self.tails:
@@ -175,37 +196,57 @@ class LocalizationMetrics:
         self.clear()
 
     def clear(self):
-        self.truth = [deque(maxlen=2048) for _ in range(4)]
-        self.estimates = [deque(maxlen=2048) for _ in range(4)]
+        self.truth = [deque(maxlen=2048) for _ in range(self.vehicle_count)]
+        self.estimates = [deque(maxlen=2048) for _ in range(self.vehicle_count)]
         self.trails = {
-            kind: [deque(maxlen=600) for _ in range(4)]
+            kind: [deque(maxlen=600) for _ in range(self.vehicle_count)]
             for kind in ("truth", "estimate")
         }
-        self.received = {kind: [None] * 4 for kind in ("truth", "estimate")}
+        self.received = {
+            kind: [None] * self.vehicle_count for kind in ("truth", "estimate")
+        }
         self.counts = [
-            {"samples": 0, "valid": 0, "structural": 0, "peer": 0} for _ in range(4)
+            {
+                "samples": 0,
+                "valid": 0,
+                "structural": 0,
+                "peer": 0,
+                "flow_valid": 0,
+                "position_confidence": 0,
+                "position_confidence_count": 0,
+                "localization_mode": None,
+            }
+            for _ in range(self.vehicle_count)
         ]
         self.fusion = [
-            {"tof_accepted": 0, "tof_rejected": 0, "uwb_accepted": 0, "uwb_rejected": 0}
-            for _ in range(4)
+            {
+                kind + suffix: 0
+                for kind in ("tof", "uwb", "optical_flow", "uwb_anchor")
+                for suffix in ("_accepted", "_rejected")
+            }
+            for _ in range(self.vehicle_count)
         ]
-        self.distance = [0.0] * 4
-        self.origin = [None] * 4
-        self.excursion = [0.0] * 4
-        self.matched = [None] * 4
-        self.match_history = [deque(maxlen=2048) for _ in range(4)]
-        self.error_stats = [{"n": 0, "sum_sq": 0.0, "maximum": 0.0} for _ in range(4)]
-        self.last_stamp = {kind: [None] * 4 for kind in ("truth", "estimate")}
-        self.ended = [False] * 4
-        self.landing_events = [None] * 4
-        self.landings = [None] * 4
+        self.distance = [0.0] * self.vehicle_count
+        self.origin = [None] * self.vehicle_count
+        self.excursion = [0.0] * self.vehicle_count
+        self.matched = [None] * self.vehicle_count
+        self.match_history = [deque(maxlen=2048) for _ in range(self.vehicle_count)]
+        self.error_stats = [
+            {"n": 0, "sum_sq": 0.0, "maximum": 0.0} for _ in range(self.vehicle_count)
+        ]
+        self.last_stamp = {
+            kind: [None] * self.vehicle_count for kind in ("truth", "estimate")
+        }
+        self.ended = [False] * self.vehicle_count
+        self.landing_events = [None] * self.vehicle_count
+        self.landings = [None] * self.vehicle_count
         self.started = time.time()
 
     def set_homes(self, spawns):
         homes = home_positions(spawns)
         if homes != self.homes:
             self.homes = homes
-            self.landings = [None] * 4
+            self.landings = [None] * self.vehicle_count
 
     def poll(self, now=None, include_trails=True):
         now = time.monotonic() if now is None else now
@@ -244,7 +285,10 @@ class LocalizationMetrics:
                     continue
                 if index and kind == "fusion" and row.get("source") == "ESTIMATE":
                     sensor = row.get("sensor_kind")
-                    if sensor in ("tof", "uwb") and row.get("vehicle") == index - 1:
+                    if (
+                        sensor in ("tof", "uwb", "optical_flow", "uwb_anchor")
+                        and row.get("vehicle") == index - 1
+                    ):
                         suffix = (
                             "accepted" if row.get("accepted") is True else "rejected"
                         )
@@ -253,7 +297,7 @@ class LocalizationMetrics:
                 expected = "truth_evaluation_only" if index == 0 else "estimate"
                 if kind != expected or (index and row.get("source") != "ESTIMATE"):
                     continue
-                parsed = pose(row)
+                parsed = pose(row, self.vehicle_count)
                 if parsed is None:
                     continue
                 vehicle, stamp, xy = parsed
@@ -291,6 +335,16 @@ class LocalizationMetrics:
                         ("peer", "xy_peer_valid"),
                     ):
                         counts[key] += row.get(field) is True
+                    counts["flow_valid"] += row.get("flow_valid") is True
+                    if isinstance(
+                        row.get("position_confidence"), (int, float)
+                    ) and math.isfinite(row["position_confidence"]):
+                        counts["position_confidence"] += float(
+                            row["position_confidence"]
+                        )
+                        counts["position_confidence_count"] += 1
+                    if isinstance(row.get("localization_mode"), str):
+                        counts["localization_mode"] = row["localization_mode"]
                 trail.append(xy)
 
     def read_full(self, include_trails=False):
@@ -309,7 +363,7 @@ class LocalizationMetrics:
         return self.snapshot(include_trails=include_trails)
 
     def _match(self, final=False):
-        for i in range(4):
+        for i in range(self.vehicle_count):
             truths = self.truth[i]
             if not truths:
                 continue
@@ -352,7 +406,7 @@ class LocalizationMetrics:
         ):
             team = {}
         vehicles = []
-        for i in range(4):
+        for i in range(self.vehicle_count):
             ages = {
                 k: None
                 if self.received[k][i] is None
@@ -402,6 +456,13 @@ class LocalizationMetrics:
                     k: counts[k] / n if n else None
                     for k in ("valid", "structural", "peer")
                 },
+                "flow_validity": counts["flow_valid"] / n if n else None,
+                "position_confidence": (
+                    counts["position_confidence"] / counts["position_confidence_count"]
+                    if counts["position_confidence_count"]
+                    else None
+                ),
+                "localization_mode": counts["localization_mode"],
                 "fusion": dict(self.fusion[i]),
                 "matched_samples": stats["n"],
                 "rmse_m": math.sqrt(stats["sum_sq"] / stats["n"])
@@ -441,7 +502,7 @@ class LocalizationMetrics:
                         }
                     )
         common = None
-        if len(aligned_matches) == 4:
+        if len(aligned_matches) == self.vehicle_count:
             stamps = [
                 s
                 for m in aligned_matches.values()
@@ -449,7 +510,8 @@ class LocalizationMetrics:
             ]
             if max(stamps) - min(stamps) <= self.tolerance_us:
                 delta = [
-                    sum(m["delta"][axis] for m in aligned_matches.values()) / 4
+                    sum(m["delta"][axis] for m in aligned_matches.values())
+                    / self.vehicle_count
                     for axis in (0, 1)
                 ]
                 common = {
@@ -712,7 +774,7 @@ def report_text(report):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Read-only report for an existing Gazebo/4PX4 run"
+        description="Read-only report for an existing Gazebo/PX4 run"
     )
     parser.add_argument(
         "--run-dir", help="Existing run directory; defaults to manager.json"
