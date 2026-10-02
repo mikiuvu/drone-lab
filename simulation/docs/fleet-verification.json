@@ -1,0 +1,386 @@
+{
+  "simulation": "Gazebo Harmonic + PX4 SITL",
+  "height_input": "SIM_HEIGHT_ASSIST",
+  "tests": {
+    "cpp_suites_passed": 6,
+    "python_tests_passed": 161,
+    "python_platform_skips": 1,
+    "coordinator_io_recovery_passed": true
+  },
+  "runs": [
+    {
+      "run": "run_20261003_011335",
+      "vehicle_count": 1,
+      "anchor_count": 0,
+      "phase": "COMPLETE",
+      "completed": [
+        0
+      ],
+      "physical_base_contacts": [
+        0
+      ],
+      "telemetry_errors": 0,
+      "vehicles": [
+        {
+          "id": 0,
+          "xy_rmse_m": 0.027464154996981256,
+          "xy_max_error_m": 0.11442333892210012,
+          "flow_validity": 0.9996513654851831,
+          "home_error": {
+            "home": [
+              -0.8,
+              -0.4,
+              0.55
+            ],
+            "label": "final_matched_home_error",
+            "estimate": {
+              "dx_m": 0.03501250983835236,
+              "dy_m": 0.03395435807440372,
+              "xy_m": 0.048772679621131604
+            },
+            "estimate_stamp_us": 221221000.0,
+            "truth": {
+              "dx_m": -0.01985213837133959,
+              "dy_m": 0.004070592619484725,
+              "xy_m": 0.020265170174183517
+            },
+            "truth_stamp_us": 221220000.0,
+            "truth_z_m": 0.5159996544456898,
+            "landing": null,
+            "final": {
+              "sim_time_us": 221221000.0,
+              "truth_stamp_us": 221220000.0,
+              "estimate": {
+                "dx_m": 0.03501250983835236,
+                "dy_m": 0.03395435807440372,
+                "xy_m": 0.048772679621131604
+              },
+              "truth": {
+                "dx_m": -0.01985213837133959,
+                "dy_m": 0.004070592619484725,
+                "xy_m": 0.020265170174183517
+              }
+            }
+          },
+          "accepted_observations": {
+            "height_assist": 11016,
+            "optical_flow": 10896,
+            "tof": 6379
+          },
+          "armed_at_stop": false
+        }
+      ]
+    },
+    {
+      "run": "run_20261003_014409",
+      "vehicle_count": 4,
+      "anchor_count": 0,
+      "phase": "COMPLETE",
+      "completed": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "physical_base_contacts": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "telemetry_errors": 1,
+      "vehicles": [
+        {
+          "id": 0,
+          "xy_rmse_m": 0.02735447875101289,
+          "xy_max_error_m": 0.14427485844474514,
+          "flow_validity": 0.9997066158134077,
+          "home_error": {
+            "home": [
+              -0.8,
+              -0.4,
+              0.55
+            ],
+            "label": "final_matched_home_error",
+            "estimate": {
+              "dx_m": 0.07550776970141071,
+              "dy_m": 0.034988036075356665,
+              "xy_m": 0.08322010546551678
+            },
+            "estimate_stamp_us": 256801000.0,
+            "truth": {
+              "dx_m": 0.008368948147597477,
+              "dy_m": -0.00026092978894404206,
+              "xy_m": 0.00837301483648116
+            },
+            "truth_stamp_us": 256774000.0,
+            "truth_z_m": 0.5160002239715218,
+            "landing": null,
+            "final": {
+              "sim_time_us": 256801000.0,
+              "truth_stamp_us": 256774000.0,
+              "estimate": {
+                "dx_m": 0.07550776970141071,
+                "dy_m": 0.034988036075356665,
+                "xy_m": 0.08322010546551678
+              },
+              "truth": {
+                "dx_m": 0.008368948147597477,
+                "dy_m": -0.00026092978894404206,
+                "xy_m": 0.00837301483648116
+              }
+            }
+          },
+          "accepted_observations": {
+            "height_assist": 12768,
+            "optical_flow": 12643,
+            "uwb": 3730,
+            "tof": 6872
+          },
+          "armed_at_stop": false
+        },
+        {
+          "id": 1,
+          "xy_rmse_m": 0.021352184279176255,
+          "xy_max_error_m": 0.19558428243197792,
+          "flow_validity": 0.9998424700693131,
+          "home_error": {
+            "home": [
+              -0.4,
+              0.8,
+              0.55
+            ],
+            "label": "final_matched_home_error",
+            "estimate": {
+              "dx_m": 0.0563782135180782,
+              "dy_m": -0.03132664653767814,
+              "xy_m": 0.06449699018393523
+            },
+            "estimate_stamp_us": 256781000.0,
+            "truth": {
+              "dx_m": 0.05091528315644572,
+              "dy_m": -0.024359234371289396,
+              "xy_m": 0.05644234543369413
+            },
+            "truth_stamp_us": 256774000.0,
+            "truth_z_m": 0.5159984148029746,
+            "landing": null,
+            "final": {
+              "sim_time_us": 256781000.0,
+              "truth_stamp_us": 256774000.0,
+              "estimate": {
+                "dx_m": 0.0563782135180782,
+                "dy_m": -0.03132664653767814,
+                "xy_m": 0.06449699018393523
+              },
+              "truth": {
+                "dx_m": 0.05091528315644572,
+                "dy_m": -0.024359234371289396,
+                "xy_m": 0.05644234543369413
+              }
+            }
+          },
+          "accepted_observations": {
+            "tof": 8549,
+            "height_assist": 12768,
+            "optical_flow": 12637,
+            "uwb": 5871
+          },
+          "armed_at_stop": false
+        },
+        {
+          "id": 2,
+          "xy_rmse_m": 0.017818371067718643,
+          "xy_max_error_m": 0.16751162369643224,
+          "flow_validity": 0.9998423955870764,
+          "home_error": {
+            "home": [
+              0.6,
+              -0.4,
+              0.55
+            ],
+            "label": "final_matched_home_error",
+            "estimate": {
+              "dx_m": 0.11782004747299679,
+              "dy_m": -0.04740318914556235,
+              "xy_m": 0.12699852726590644
+            },
+            "estimate_stamp_us": 256781000.0,
+            "truth": {
+              "dx_m": 0.09760160769447523,
+              "dy_m": -0.07637024799723541,
+              "xy_m": 0.12392936941542745
+            },
+            "truth_stamp_us": 256774000.0,
+            "truth_z_m": 0.5159922781616415,
+            "landing": null,
+            "final": {
+              "sim_time_us": 256781000.0,
+              "truth_stamp_us": 256774000.0,
+              "estimate": {
+                "dx_m": 0.11782004747299679,
+                "dy_m": -0.04740318914556235,
+                "xy_m": 0.12699852726590644
+              },
+              "truth": {
+                "dx_m": 0.09760160769447523,
+                "dy_m": -0.07637024799723541,
+                "xy_m": 0.12392936941542745
+              }
+            }
+          },
+          "accepted_observations": {
+            "tof": 8003,
+            "height_assist": 12768,
+            "optical_flow": 12645,
+            "uwb": 1794
+          },
+          "armed_at_stop": false
+        },
+        {
+          "id": 3,
+          "xy_rmse_m": 0.01975757125876128,
+          "xy_max_error_m": 0.1535916756858111,
+          "flow_validity": 0.9998595209664958,
+          "home_error": {
+            "home": [
+              0.4,
+              0.8,
+              0.55
+            ],
+            "label": "final_matched_home_error",
+            "estimate": {
+              "dx_m": 0.03150671913696229,
+              "dy_m": -0.017531116077839193,
+              "xy_m": 0.03605569832509277
+            },
+            "estimate_stamp_us": 256797000.0,
+            "truth": {
+              "dx_m": 0.028453110420212424,
+              "dy_m": -0.012688941101272055,
+              "xy_m": 0.031154272882806176
+            },
+            "truth_stamp_us": 256774000.0,
+            "truth_z_m": 0.5159985929073234,
+            "landing": null,
+            "final": {
+              "sim_time_us": 256797000.0,
+              "truth_stamp_us": 256774000.0,
+              "estimate": {
+                "dx_m": 0.03150671913696229,
+                "dy_m": -0.017531116077839193,
+                "xy_m": 0.03605569832509277
+              },
+              "truth": {
+                "dx_m": 0.028453110420212424,
+                "dy_m": -0.012688941101272055,
+                "xy_m": 0.031154272882806176
+              }
+            }
+          },
+          "accepted_observations": {
+            "height_assist": 12768,
+            "optical_flow": 12633,
+            "uwb": 5878,
+            "tof": 8802
+          },
+          "armed_at_stop": false
+        }
+      ]
+    },
+    {
+      "run": "run_20261003_015023",
+      "vehicle_count": 6,
+      "anchor_count": 4,
+      "duration_sim_s": 60.061,
+      "phase": "TRANSIT",
+      "skipped": [],
+      "vehicles": [
+        {
+          "id": 0,
+          "xy_rmse_m": 0.024215464575601236,
+          "xy_max_error_m": 0.10179210619610991,
+          "flow_validity": 0.9991482112436116,
+          "max_estimated_z_m": 0.7542116674675174,
+          "accepted_observations": {
+            "height_assist": 2926,
+            "optical_flow": 2893,
+            "uwb_anchor": 11466,
+            "uwb": 2717,
+            "tof": 1216
+          }
+        },
+        {
+          "id": 1,
+          "xy_rmse_m": 0.025420252564337633,
+          "xy_max_error_m": 0.12577369534552577,
+          "flow_validity": 0.9993138936535163,
+          "max_estimated_z_m": 0.7546078990756906,
+          "accepted_observations": {
+            "tof": 1297,
+            "height_assist": 2926,
+            "optical_flow": 2898,
+            "uwb_anchor": 11464,
+            "uwb": 3002
+          }
+        },
+        {
+          "id": 2,
+          "xy_rmse_m": 0.023526916858961015,
+          "xy_max_error_m": 0.1071671592718589,
+          "flow_validity": 0.9993881921076782,
+          "max_estimated_z_m": 0.7544756622264659,
+          "accepted_observations": {
+            "tof": 1768,
+            "height_assist": 2926,
+            "optical_flow": 2893,
+            "uwb_anchor": 11450,
+            "uwb": 2719
+          }
+        },
+        {
+          "id": 3,
+          "xy_rmse_m": 0.023703371014863646,
+          "xy_max_error_m": 0.11345335012207006,
+          "flow_validity": 0.9988745075970737,
+          "max_estimated_z_m": 0.7547632325410965,
+          "accepted_observations": {
+            "tof": 1174,
+            "height_assist": 2926,
+            "optical_flow": 2899,
+            "uwb_anchor": 11463,
+            "uwb": 2696
+          }
+        },
+        {
+          "id": 4,
+          "xy_rmse_m": 0.027493265764713917,
+          "xy_max_error_m": 0.11553846241904164,
+          "flow_validity": 0.9993084370677732,
+          "max_estimated_z_m": 0.7547263884224871,
+          "accepted_observations": {
+            "height_assist": 2926,
+            "optical_flow": 2894,
+            "uwb_anchor": 11493,
+            "uwb": 4437,
+            "tof": 807
+          }
+        },
+        {
+          "id": 5,
+          "xy_rmse_m": 0.027626589716022512,
+          "xy_max_error_m": 0.13174970157904994,
+          "flow_validity": 0.9989100817438692,
+          "max_estimated_z_m": 0.7551224684067563,
+          "accepted_observations": {
+            "height_assist": 2926,
+            "optical_flow": 2901,
+            "uwb_anchor": 11472,
+            "uwb": 4707,
+            "tof": 1094
+          }
+        }
+      ]
+    }
+  ]
+}

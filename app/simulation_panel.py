@@ -137,7 +137,7 @@ class LocalizationMap(QWidget):
         colors = [(31, 119, 180), (214, 39, 40), (44, 160, 44), (148, 103, 189)]
         painter.setClipRect(QRectF(left, top, (x1 - x0) * scale, (y1 - y0) * scale))
         for i, vehicle in enumerate(self.snapshot["vehicles"]):
-            color = QColor(*colors[i])
+            color = QColor(*colors[i % len(colors)])
             for kind in ("truth", "estimate"):
                 pen = QPen(color, 2)
                 pen.setStyle(
@@ -202,7 +202,7 @@ class GazeboPanel(QWidget):
         guide = QPushButton("地形定位说明")
         guide.clicked.connect(self.open_guide)
         row.addWidget(guide)
-        row.addWidget(QLabel("无人机数量："))
+        row.addWidget(QLabel("启动数量："))
         self.vehicle_count = QSpinBox()
         self.vehicle_count.setRange(1, 64)
         self.vehicle_count.setValue(4)
@@ -280,7 +280,8 @@ class GazeboPanel(QWidget):
         colors = [(31, 119, 180), (214, 39, 40), (44, 160, 44), (148, 103, 189)]
         for i in range(count):
             camera = QLabel(f"无人机 {i} · 等待 Gazebo 相机图像")
-            camera.setMinimumSize(180, 100)
+            camera.setMinimumSize(112, 72) if count > 4 else camera.setMinimumSize(180, 100)
+            camera.setToolTip(f"无人机 {i} · GC4653 相机")
             camera.setAlignment(Qt.AlignmentFlag.AlignCenter)
             camera.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
             color = colors[i % len(colors)]
@@ -343,8 +344,9 @@ class GazeboPanel(QWidget):
                 "--vehicle-count",
                 str(self.vehicle_count.value()),
             ]
-            if self.uwb_anchors.isChecked():
-                args += ["--uwb-anchors"]
+            args += [
+                "--uwb-anchors" if self.uwb_anchors.isChecked() else "--no-uwb-anchors"
+            ]
             if self.tof_mount.currentData() == "horizontal":
                 args += ["--horizontal-tof"]
             if self.height_only.isChecked():
@@ -426,7 +428,9 @@ class GazeboPanel(QWidget):
         extent = audit.get("vehicle_extent_m", [0.082, 0.082, 0.0285])
         config["vehicle_extent_m"] = extent
         marker = config.get("home_marker", {})
-        pieces = []
+        pieces = [
+            f"无人机 {len(config.get('spawns', []))} 架 · UWB 基站 {len(config.get('uwb_anchors', []))} 个"
+        ]
         if bounds:
             pieces.append(
                 f"网格外包 {bounds[1] - bounds[0]:.2f} × {bounds[3] - bounds[2]:.2f} m"
@@ -582,7 +586,9 @@ class GazeboPanel(QWidget):
                     )
                 )
                 if state.get("degraded"):
-                    rows.append("  当前状态：" + state.get("degraded_reason", "等待恢复"))
+                    rows.append(
+                        "  当前状态：" + state.get("degraded_reason", "等待恢复")
+                    )
             home = v.get("home_error")
             if home:
 

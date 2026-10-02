@@ -127,6 +127,11 @@ void staleAndAbort() {
   check(f.mission.partial()&&!f.mission.aborted()&&f.mission.skipped().size()==1,"长期失联没有记录部分任务");
   f.tick();check(!f.commands[3].degraded,"失联恢复后不能继续接收指令");
   check(f.mission.completed().empty(),"失联被计为撞击成功");
+  Fixture active_loss;active_loss.contact();
+  for(int i=0;i<65;++i)active_loss.tick(0);
+  check(active_loss.mission.activeVehicle()==1&&active_loss.mission.partial(),"失联机未退出当前轮次");
+  active_loss.tick();
+  check(!active_loss.commands[0].skipped&&!active_loss.commands[0].degraded&&active_loss.mission.partial(),"错过轮次的恢复机未重新加入队伍或丢失部分结果记录");
   Fixture frozen;frozen.contact();frozen.wall+=2000000;
   frozen.commands=frozen.mission.step(frozen.now,frozen.wall);
   for(const auto&c:frozen.commands)check(c.degraded&&c.contact_speed_mps==0,"冻结时钟仍执行接触");

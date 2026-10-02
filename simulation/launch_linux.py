@@ -231,7 +231,9 @@ def main():
     parser.add_argument("--dynamics", choices=["micro", "x500"], default="micro")
     parser.add_argument("--horizontal-tof", action="store_true")
     parser.add_argument("--vehicle-count", type=int)
-    parser.add_argument("--uwb-anchors", action="store_true")
+    parser.add_argument(
+        "--uwb-anchors", action=argparse.BooleanOptionalAction, default=None
+    )
     parser.add_argument("--flow-disable", action="store_true")
     parser.add_argument(
         "--companions",

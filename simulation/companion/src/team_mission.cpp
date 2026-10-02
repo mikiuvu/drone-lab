@@ -58,10 +58,10 @@ bool TeamMission::updateStatus(const TeamVehicleStatus& s, uint64_t wall) {
   if (skipped_now_[s.vehicle] && s.xy_valid && s.z_valid && s.ready &&
       phase_!=TeamPhase::COMPLETE && phase_!=TeamPhase::ABORTED) {
     const auto slot=std::find(config_.order.begin(),config_.order.end(),s.vehicle)-config_.order.begin();
+    skipped_now_[s.vehicle]=false;
+    loss_start_[s.vehicle]=0;
     if (slot>=turn_) {
-      skipped_now_[s.vehicle]=false;
       skipped_.erase(std::remove(skipped_.begin(),skipped_.end(),s.vehicle),skipped_.end());
-      loss_start_[s.vehicle]=0;
       if (skipped_.empty()) reason_.clear();
     }
   }

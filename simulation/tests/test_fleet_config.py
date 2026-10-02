@@ -37,17 +37,19 @@ def test_count_and_sensor_contract(count, anchors, tmp_path):
 
 def test_custom_large_fleet_has_no_four_vehicle_limit():
     count = 80
-    config = {"spawns": [dict(id=i, x=i * 0.4, y=0, z=0.5) for i in range(count)]}
+    config = {"spawns": [{"id": i, "x": i * 0.4, "y": 0, "z": 0.5} for i in range(count)]}
     assert len(configure_fleet(config)["spawns"]) == count
 
 
 def test_explicit_anchor_positions_preserved():
-    anchor = dict(id=42, x=1, y=2, z=3)
-    config = {"spawns": [dict(id=0, x=0, y=0, z=0.5)], "uwb_anchors": [anchor]}
+    anchor = {"id": 42, "x": 1, "y": 2, "z": 3}
+    config = {"spawns": [{"id": 0, "x": 0, "y": 0, "z": 0.5}], "uwb_anchors": [anchor]}
     assert configure_fleet(config, enable_anchors=True)["uwb_anchors"] == [anchor]
+    assert configure_fleet(config)["uwb_anchors"] == [anchor]
+    assert configure_fleet(config, enable_anchors=False)["uwb_anchors"] == []
 
 
 @pytest.mark.parametrize("count", [0, -1, True, 2.5])
 def test_invalid_cardinality_rejected(count):
     with pytest.raises(ValueError):
-        configure_fleet({"spawns": [dict(id=0, x=0, y=0, z=0.5)]}, count)
+        configure_fleet({"spawns": [{"id": 0, "x": 0, "y": 0, "z": 0.5}]}, count)

@@ -4,7 +4,7 @@ import copy
 import math
 
 
-def configure_fleet(config, vehicle_count=None, enable_anchors=False):
+def configure_fleet(config, vehicle_count=None, enable_anchors=None):
     result = copy.deepcopy(config)
     spawns = result["spawns"]
     count = len(spawns) if vehicle_count is None else vehicle_count
@@ -59,7 +59,9 @@ def configure_fleet(config, vehicle_count=None, enable_anchors=False):
         str(i): result.get("vehicle_waypoints", {}).get(str(i), [])
         for i in range(count)
     }
-    if enable_anchors and not result.get("uwb_anchors"):
+    if enable_anchors is False:
+        result["uwb_anchors"] = []
+    elif enable_anchors and not result.get("uwb_anchors"):
         result["uwb_anchors"] = [
             {"id": i, "x": x, "y": y, "z": 2.4}
             for i, (x, y) in enumerate([(-13, -7), (-13, 7), (13, -7), (13, 7)])

@@ -27,7 +27,7 @@
 <img src="team-route.png" alt="全场编队航路和中央起飞位置">
 <p>接触确认同时检查冲击事件、接近距离和航向。单机数据中断时该机等待恢复，其余飞机继续执行；长期失联的飞机退出后续轮次，恢复及时则重新加入。默认不设阶段期限；可用 <code>stage_timeout_s</code> 设置主动返航期限。界面状态和日志写入失败会重试，错误计数写入运行状态。</p></section>
 <section><h2>图形操作</h2><ol>
-<li>打开定位仿真实验台，选择“<b>多机轮流撞击与返航</b>”，设置“<b>无人机数量</b>”。</li>
+<li>打开定位仿真实验台，选择“<b>多机轮流撞击与返航</b>”，设置“<b>启动数量</b>”。</li>
 <li>需要固定基站时勾选“<b>启用固定 UWB 锚点</b>”；坐标在地图 JSON 的 <code>uwb_anchors</code> 中配置。</li>
 <li>“<b>中心放大／全场</b>”切换地图视角；中心视图显示各机红框与机体尺寸。</li>
 <li>保持“启用多机定位飞行”未勾选，可查看地形、起点和传感器。勾选后点击“启动多机环境”执行任务。</li>
@@ -37,4 +37,9 @@
 <p>切换任务或修改地图配置前先停止当前运行。</p></section>
 <section><h2>配置与日志</h2><p>任务配置：<code>simulation/maps/rmuc_2026_sentry26.json</code> 中的 <code>spawns</code>、<code>home_marker</code>、<code>team_mission</code>。</p>
 <p>运行目录包含 <code>team_status.json</code>、<code>team_mission.jsonl</code>、各机的 <code>companion_ID.jsonl</code>、<code>truth_evaluation_only.jsonl</code> 和 <code>truth_evaluation_only_contacts.jsonl</code>。</p>
-<p>验证结果：<a href="team-verification.json">任务验证摘要</a>；尺寸核验：<a href="scale-verification.json">尺寸记录</a>。</p></section></html>
+<p>验证结果：<a href="fleet-verification.json">机群定位与任务验证</a>；尺寸核验：<a href="scale-verification.json">尺寸记录</a>。</p>
+<table><tr><th>配置</th><th>物理仿真结果</th><th>定位与返航</th></tr>
+<tr><td>1 架，无基站</td><td>完成基地接触、返航和落地</td><td>XY 均方根误差 2.7 cm；返航偏差 2.0 cm</td></tr>
+<tr><td>4 架，无基站</td><td>按机号依次接触基地，共同返航并解除武装</td><td>各机 XY 均方根误差 1.8–2.7 cm；返航偏差 0.8、5.6、12.4、3.1 cm</td></tr>
+<tr><td>6 架，4 个固定基站</td><td>60 s 起飞与编队航行；六机均融合光流、ToF、机间 UWB 和基站测距</td><td>各机 XY 均方根误差 2.4–2.8 cm</td></tr></table>
+<p>以上为 Gazebo/PX4 仿真测量；RV 程序已交叉编译，板上时延和实体传感器接入需在连接硬件后测量。</p></section></html>

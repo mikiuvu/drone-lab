@@ -77,7 +77,7 @@ class VariableFleetMetricsTests(unittest.TestCase):
 try:
     from PySide6.QtWidgets import QApplication
 
-    from app.simulation_panel import GazeboPanel
+    from app.simulation_panel import GazeboPanel, LocalizationMap
 except ModuleNotFoundError:
     QApplication = None
     GazeboPanel = None
@@ -97,6 +97,26 @@ class VariableFleetUiTests(unittest.TestCase):
             panel.vehicle_count.setValue(6)
             self.assertEqual(len(panel.cameras), 6)
             panel.close()
+
+    def test_map_renders_every_vehicle_beyond_palette_size(self):
+        for count in (1, 6, 12):
+            with self.subTest(count=count):
+                view = LocalizationMap()
+                view.resize(700, 400)
+                points = [(i * 0.3, 0.0) for i in range(count)]
+                snapshot = {
+                    "vehicles": [
+                        {"vehicle": i, "match": {"estimate": point}}
+                        for i, point in enumerate(points)
+                    ],
+                    "trails": {
+                        kind: [[point] for point in points]
+                        for kind in ("truth", "estimate")
+                    },
+                }
+                view.set_data(snapshot, {"spawns": []})
+                self.assertFalse(view.grab().isNull())
+                view.close()
 
 
 if __name__ == "__main__":
