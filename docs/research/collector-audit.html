@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nano 采集器实现审计 · 2026-10-02</title>
+<style>
+:root{color-scheme:light;font-family:"Microsoft YaHei UI",system-ui,sans-serif;color:#19334b;background:#f4f7fb}body{max-width:1100px;margin:32px auto;padding:0 24px 48px;line-height:1.75}h1{font-size:28px}h2{margin-top:34px;font-size:21px}h3{font-size:17px}article,.note{background:white;border:1px solid #d5e1ed;border-radius:12px;padding:16px 22px;margin:16px 0}.note{border-left:5px solid #137d92}table{border-collapse:collapse;width:100%;background:white;font-size:14px}th,td{border:1px solid #d5e1ed;text-align:left;vertical-align:top;padding:10px 12px}th{background:#e9f1f8}code{font-family:Consolas,monospace;overflow-wrap:anywhere;background:#edf2f7;padding:1px 4px}pre{overflow:auto;background:#e9f1f8;padding:15px;border-radius:8px;line-height:1.5}a{color:#086c87}.small{color:#52677c;font-size:14px}.flow{display:flex;gap:8px;flex-wrap:wrap}.flow div{border:1px solid #bed2e2;background:#eaf3fa;border-radius:8px;padding:10px 14px}li{margin:7px 0}@media(max-width:700px){body{padding:0 12px}table{font-size:12px}th,td{padding:6px}h1{font-size:23px}}
+</style></head><body>
+<h1>Nano 采集器实现审计</h1>
+<p class="small">日期：2026-10-02 · 工作区：D:\Robomaster code\drone · 范围：现有 C 采集器、原生测试与运行契约 · 未连接硬件</p>
+<div class="note"><strong>采集接口：</strong>双 VL53L5CX 使用 schema=1 JSONL 和 64 区域数组；MAVLink 接收姿态与心跳。采集器处理输入校验、失败退出、管道背压、部分 I²C 读取、初始化中断和双传感器启动超时。PC 原生故障注入与 RISC-V 静态交叉编译通过。</div>
+<h2>1. 证据与固件身份</h2>
+<p>实现证据来自当前本地文件：<a href="../../nano/main.c">nano/main.c</a>（<code>main</code>、<code>emit_tof</code>、<code>poll_mavlink</code>、<code>prepare_output</code>），<a href="../../nano/platform.c">nano/platform.c</a>（<code>RdMulti</code>、<code>WrMulti</code>、<code>WaitMs</code>），<a href="../../nano/platform.h">nano/platform.h</a>，以及已安装 ST ULD 的 <code>vendor/stm32-vl53l5cx/modules/vl53l5cx_api.c</code>。首次理解及编辑前已使用 CodeGraph；索引为本地工具数据。</p>
+<p>固件 JSON 记录的身份为 <code>board_id=7140</code>、<code>git_identity=v1.15.0-6-gb8c6373f7f</code>。该身份待实物读取核实，不能直接用主线 PX4 文档推定其外部定位入口、MAVLink 流配置、模式、失效行为或参数。采集器只解码 ATTITUDE 和 HEARTBEAT，尚不读取 AUTOPILOT_VERSION，也不校验上述身份；后续协议联调需以此定制分支的源码和实机记录为准。</p>
+<h2>2. 已确认的问题与修复</h2>
+<table><thead><tr><th>位置与原问题</th><th>当前行为</th><th>验证</th></tr></thead><tbody>
+<tr><td><code>main</code> 的 <code>strtoul(...,NULL,...)</code> 接受尾随垃圾、符号和转换截断；波特率直到传感器初始化后才拒绝。</td><td><code>parse_unsigned</code> 检查首字符、完整消费、errno 和 UINT_MAX；<code>parse_sensor</code> 要求数字总线后缀与合法 7 位地址。支持的五种 baud、非空 <code>/dev/</code> 串口路径在硬件访问前校验。串口打开/配置在传感器初始化前完成。</td><td>负数、前导空白、尾随字符、32/64 位溢出、空串口、非法路径、重复传感器均返回 2；不存在的串口返回 5，传感器初始化计数为 0。</td></tr>
+<tr><td><code>poll_mavlink</code> 的读取失败只清 <code>running</code>；主程序可能返回 0。断开后的零读取未处理。</td><td>函数返回错误种类；检查 poll 的 ERR/HUP/NVAL、read 的零返回与致命错误。EAGAIN/EWOULDBLOCK/EINTR 为临时状态。主程序保留失败码。每次最多读取 4×2048 字节，主循环在传感器前及每颗之后接收 UART。</td><td>注入 read(EIO)、无效 fd、伪终端断开；主程序均返回 5并进入传感器清理。</td></tr>
+<tr><td>逐段 printf、行缓冲 stdout 会等待下游；ferror 只停止循环而可能返回 0。</td><td><code>append_record</code> 在 4096 字节内组装完整行；stdout 设为非阻塞，每行单次 write。管道行长不超过查询到的 PIPE_BUF；拥塞、断开、溢出或短写返回 6。成功写入后才推进 ToF sequence。</td><td>未读取的 4096 字节 Linux 管道触发失败且仅含完整 JSON 行；破损管道返回 6；注入短写不推进序号。最大字段存储值行长 3278 字节。</td></tr>
+<tr><td>ST 的 <code>vl53l5cx_check_data_ready</code> / <code>vl53l5cx_get_ranging_data</code> 累积读错误后仍使用 temp_buffer；多块传输失败可能留下旧头或半帧。</td><td><code>RdMulti</code> 在读取前初始化目标缓冲区，任何分块失败时清除整个请求范围；非完整 ioctl 消息计数转为 EIO。<code>io_errno</code> 锁存后续失败，直到明确进入清理时重置。</td><td>600 字节成功分 3 块；第二块失败使整个输出为零；已完成第一块计入字节统计；后续读写不再调用 ioctl。短消息返回 EIO。</td></tr>
+<tr><td>初始化各步骤未检查停止请求；第二颗初始化耗时可能让第一颗过早触发 5 秒看门狗。start 返回失败后可能已启动硬件却不执行 stop。</td><td>每颗平台保存停止标志与初始化期限，调用间检查；主程序阶段间检查 running。全部启动后统一设 last_frame。start 调用前标记需清理；即使 start 报错仍尝试 stop。</td><td>第一颗初始化中停止，不初始化第二颗；第二颗模拟增加 6 秒初始化时间仍正常采集；start 失败仍调用一次 stop。</td></tr>
+<tr><td><code>WaitMs</code> 忽略非 EINTR 的 nanosleep 错误；清理忽略 stop 失败。</td><td>等待失败传播；等待和传输之间检查取消与期限。清理每颗独立设 250 ms 调用间预算，取消标志不影响清理；stop 失败明确记录，原本成功退出改为 4。</td><td>注入 EINVAL、停止标志、过期期限；失败传播和清理退出码通过。</td></tr>
+</tbody></table>
+<p class="small">初始化期限为每颗 30 秒，清理预算为每颗 250 ms，均为实现准备的初始值。它们只在平台调用之间检查，不能中断已经进入内核的 I²C ioctl；尚未实测这些值是否适合实际模块、I²C 频率及定制内核。</p>
+<h2>3. 兼容字段与时间契约</h2>
+<p>未改变 schema、记录 type、sensor=0/1、64 个区域数组、默认 8×8/10 Hz、最多两颗传感器或只接收 MAVLink 的约束。原 <code>read_end_us</code> 现在由采集循环在 ST 数据读取与解码返回后捕获，不再于输出格式化时取样。新增字段由现有 Python <code>validate_record</code> 保留。</p>
+<table><thead><tr><th>字段</th><th>精确定义</th><th>不能由它推出的结论</th></tr></thead><tbody>
+<tr><td>ToF <code>source_time_us</code> / <code>time_basis=nano_data_ready_poll</code></td><td>成功检测到 ready 后、调用整帧读取前的 Nano CLOCK_MONOTONIC 微秒值。</td><td>不是曝光中点、测距产生时间或硬件中断时间。调度、I²C 与轮询可能使它变晚。</td></tr>
+<tr><td><code>poll_start_us</code></td><td>开始此次 ST readiness 查询之前的 Nano 单调时间。</td><td>不会反映上次循环到本次查询之间所有原因；需跨帧比较并统计。</td></tr>
+<tr><td><code>read_start_us</code>、<code>read_end_us</code>、<code>data_read_us</code></td><td>整帧 ST 读取入口、返回点与差值；目前 read_start 与 source_time 使用同一取样值。</td><td>data_read_us 包含 I²C 传输、驱动等待和 ULD 解码，也受 OS 调度影响；不是单纯总线传输时间或 SG2002 推理耗时。</td></tr>
+<tr><td><code>i2c_read_payload_bytes_total</code> / <code>i2c_write_payload_bytes_total</code></td><td>当前进程中该传感器成功完整分块的载荷字节累计，包括初始化与 readiness 查询；错误后的已完成块也计入。</td><td>不含寄存器地址、设备寻址、ACK、重启条件等总线开销；失败 ioctl 的部分物理传输字节未知。不能直接当作线路利用率。</td></tr>
+<tr><td><code>sequence</code>、<code>sensor_streamcount</code></td><td>sequence 为成功输出的每传感器本地序号；streamcount 为 ST 驱动读到的传感器计数。</td><td>本地序号不会计量传感器未被读取的全部帧；进程重启归零，传感器计数可能回绕或重启。当前不检测传感器重启。</td></tr>
+<tr><td>ATTITUDE <code>source_time_us</code> / <code>time_basis=fc_boot</code></td><td>MAVLink 的原始 time_boot_ms ×1000。</td><td>不与 Nano 单调时间共享纪元；FC 重启、32 位回绕、延迟和乱序尚未分类或展开。测试确认原始时间回退仍如实输出。</td></tr>
+<tr><td><code>nano_rx_monotonic_us</code></td><td>read 返回当前 UART 字节块后的 Nano 时间；同块内记录共享时间。HEARTBEAT 也新增此字段。</td><td>是用户态字节块接收时间，非飞控发送时间。UART 内核积压会增加误差；不能直接拿来当姿态测量时间。</td></tr>
+<tr><td><code>mavlink_sequence</code> / <code>uart_bytes_total</code></td><td>原始 MAVLink 帧序号；当前进程已读 UART 字节累计，包含未识别消息、坏 CRC、未输出的 NaN 帧。</td><td>MAVLink 序号针对发送链路的全部消息，并非仅 ATTITUDE；忽略消息也会形成表面序号间隙。此累计不包含内核丢失字节，不等于完整性证明。</td></tr>
+</tbody></table>
+<p>生产数据合同还需要采集会话 ID、板/飞控启动纪元、校准版本和流健康状态。当前没有 TIMESYNC、时钟偏差/漂移估计、姿态插值或 ToF 姿态补偿；不要直接把两种 source_time_us 相减进行融合。</p>
+<h2>4. 仍然存在的实现边界</h2>
+<article><h3>UART、I²C 和日志竞争</h3>
+<p>采集器仍为一个同步循环。一颗传感器的整帧 I²C 读取与 ULD 解码期间不接收 UART；调用间的有界 drain 缩短积压，但不保证零溢出。UART 在双传感器初始化期间已打开但未 drain，开机累积字节也可能保留；必须测启动后的数据新鲜度。本版不主动请求飞控消息速率、不发送控制指令、没有串口独占或原 termios 恢复策略，也没有 UART 静默超时。</p>
+<p>stdout 对 Linux 管道的控制是“完整行成功或明确失败退出”，没有队列和静默丢帧。对普通文件设置 O_NONBLOCK 不能保证磁盘 write 不阻塞；终端/其他类型输出可能短写，此时返回 6，消费者需舍弃末尾不完整行。stderr 的启动/失败日志仍同步；拥塞的 stderr 也可能拖慢启动或退出。当前方案适合有人观察的 GUI 采集，不能把 SSH/GUI 作为飞行控制链路的必要环节。</p>
+<p>I²C 分块最大载荷为 256 字节。内核适配器能力、实际时钟、超时/恢复方式需实物核实。期限检查不能抢占 ioctl；5 秒无新帧检查也只能在循环获得执行后运行。一个卡住的驱动会妨碍两颗传感器与 UART。失败读缓冲区会清零；ULD 对畸形帧的处理仍需专项审计。</p></article>
+<article><h3>质量与几何</h3>
+<p>采集器保留原始距离、状态、targets、signal、ambient、sigma；不替换无效区、不执行估计。现有 <code>app/data.py::valid_distances</code> 只接受 status∈{5,9} 且距离&gt;0，尚未利用 targets、sigma、信号或环境光。此代码现状不能证明其质量门限适合导航；应按实际 ST ULD 版本、模块和场景校准状态解释与阈值。</p>
+<p><code>VL53L5CX_NB_TARGET_PER_ZONE=1</code>；每区只保留一个目标结果。最大有效距离、日光/反射率影响、玻璃和角度边界没有实测，不能从 GUI 色标推定有效量程。两颗 8×8 测距需要光学内参、安装外参、区域方向与遮挡校准；它们当前既不输出位置也不保证完整环境可观测性。镜头装甲识别、视觉跟踪、UWB 数据接入均未实现。</p></article>
+<h2>5. 为视觉与定位并发准备的合同</h2>
+<p>以下为进程与调度设计建议。是否采用独立进程、线程或特定调度优先级，应由实际 SG2002 镜像和板上负载数据决定。</p>
+<div class="flow"><div>双 ToF / UART 采样<br>原始帧、采样时间、健康状态</div><div>时钟映射与质量筛选<br>龄期、外参、状态门限</div><div>定位 / 状态估计<br>位置、协方差、有效性</div><div>相机 → 推理 → 跟踪<br>曝光时间、目标置信度</div><div>视觉伺服 / 飞控接口<br>有期限指令与失效动作</div></div>
+<ol>
+<li><strong>采集不依赖 GUI 消费速度。</strong>未来在 Nano 上保存最近可用样本与健康状态，旁路诊断日志使用有界队列；可覆盖的是明确约定的旧样本，丢弃计数和完整消息边界必须可观测。当前 fail-fast stdout 不能直接替代自主运行的数据总线。</li>
+<li><strong>相机使用明确的有限队列。</strong>记录曝光/采集时间、推理开始/结束、后处理结束和送达时间；实时伺服通常应显式拒绝过期目标，防止以处理完所有历史帧为代价累积延迟。NPU 不能免除预处理、解码、后处理、CPU 内存带宽和同步开销。</li>
+<li><strong>定位与视觉交换有时间和质量的数据。</strong>定义时间纪元、最大允许龄期、校准版本、坐标系、单位、协方差/置信度和失效标志。估计器按照测量时间融合；视觉输出不能因置信度为正就被无限期复用。optional UWB 同样需要独立时间和健康合同。</li>
+<li><strong>验证定制飞控的实际接口。</strong>针对 board_id=7140 / v1.15.0-6-gb8c6373f7f 检查接收消息、坐标系、频率、时间戳、模式与数据源丢失时行为。主线 PX4 的示例只可作为待核对参考。MAVLink 接口只接收姿态与心跳。</li>
+</ol>
+<p>PC 可以验证数学、消息合同、故障状态机和 GUI 离线操作；无法回答 SG2002 上“视觉+定位是否同时跑得动”。板上最少要分别测采集、推理、估计与组合负载，再加入持续日志和真实相机输入，报告 p50/p95/p99 时延、最大样本龄期、丢帧、UART 积压/错误、CPU、内存、温度及长时间漂移，才可确定频率和缓冲策略。</p>
+<h2>6. 可重复验证与退出契约</h2>
+<pre>pwsh
+$ErrorActionPreference = 'Stop'
+&amp; '.venv\Scripts\python.exe' 'scripts/check_collector.py'
+if ($LASTEXITCODE -ne 0) { throw "collector checks failed" }
+&amp; '.venv\Scripts\python.exe' 'scripts/check_native.py'
+if ($LASTEXITCODE -ne 0) { throw "native contract failed" }
+&amp; '.venv\Scripts\python.exe' 'scripts/build_nano.py'
+if ($LASTEXITCODE -ne 0) { throw "cross build failed" }</pre>
+<table><thead><tr><th>检查</th><th>测试结果和覆盖</th></tr></thead><tbody>
+<tr><td><a href="../../scripts/check_collector.py">scripts/check_collector.py</a></td><td>通过。Ubuntu-22.04 原生 GCC，-Wall/-Wextra/-Werror，UBSan 且错误即停。<a href="../../tests/native_collector.c">tests/native_collector.c</a> 模拟传感器 API、使用真实管道和伪终端；<a href="../../tests/native_platform.c">tests/native_platform.c</a> 注入 syscall 结果。没有打开真实 I²C 或飞控设备。</td></tr>
+<tr><td>UART 合同</td><td>ATTITUDE 分段字节流可重组；坏 CRC 与非有限姿态不输出；FC 启动时间回退原样保留；总字节计数包括被拒绝帧；HUP 和 fatal read 返回 5。实机消息调度和定制飞控兼容性需联调验证。</td></tr>
+<tr><td><a href="../../scripts/check_native.py">scripts/check_native.py</a> / <a href="../../tests/nano_contract.c">tests/nano_contract.c</a></td><td>通过原有真实 C 编码器 → Python validator 测试、字节序交换和无效目标筛选；contract 测试补上读取时间字段及编码成功断言。未修改 check_native.py。</td></tr>
+<tr><td>scripts/build_nano.py</td><td>通过。生成 build/nano-riscv64/drone-nano：ELF64 little-endian RISC-V、RVC、double-float ABI、静态链接。未修改构建脚本。未运行该二进制于 SG2002，ABI/内核/I²C 实机兼容性仍待核实。</td></tr>
+</tbody></table>
+<table><thead><tr><th>退出码</th><th>含义</th></tr></thead><tbody>
+<tr><td>0</td><td>正常停止且清理成功；定位输出和串口流健康度见对应日志。</td></tr>
+<tr><td>1</td><td>传感器打开、探测、初始化/启动失败，初始化期间中断，或信号处理器安装失败。</td></tr>
+<tr><td>2</td><td>CLI 参数无效。</td></tr>
+<tr><td>3</td><td>单实例锁被占用或锁不可用。</td></tr>
+<tr><td>4</td><td>运行中传感器 readiness/读取失败、无新帧 5 秒、循环等待失败；原本正常退出时 stop 失败。</td></tr>
+<tr><td>5</td><td>UART 打开/配置或运行中接收失败、断开。</td></tr>
+<tr><td>6</td><td>stdout 配置、记录缓冲、拥塞、断开或短写错误；原本正常退出时 flags 恢复失败。</td></tr>
+</tbody></table>
+<p>采集失败后应由上层将整个采集会话标记为失败；清理不会把已有失败改为 0。启动后 SIGINT/SIGTERM 通常可以正常退出；若信号恰好中断 I²C，锁存取消可使退出码为 4。stop 失败明确表示传感器硬件停止状态未确认。无法把这个过程当作飞控安全动作。</p>
+<h2>7. 尚未进行的硬件门槛</h2>
+<ol>
+<li>确认 Nano 镜像、RISC-V ABI、I²C adapter 能力/时钟/超时、引脚、电平与两颗模块实际寻址。独立总线或事先分配的不同地址仍是当前要求；程序不操作未知 LPn GPIO。</li>
+<li>实测 firmware 加载、启动和停止时延，以及断线、I²C NACK、驱动阻塞、SSH 消费暂停、串口静默和进程终止的行为。通过数据合同记录启动纪元和健康状态。</li>
+<li>校准 ToF 内外参、区域方向、目标状态、量程与环境边界；定位前定义 FC/Nano/相机/UWB 时钟映射和数据龄期门限。</li>
+<li>核实当前定制飞控身份和协议，以台架只接收数据先验证。相机模型、实际分辨率、预处理和 NPU 部署路径确定后再进行板上并发测试。</li>
+</ol>
+</body></html>

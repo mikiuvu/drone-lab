@@ -1,0 +1,51 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>全场地形与四机定位实验</title>
+<style>body{font:16px/1.75 "Microsoft YaHei",sans-serif;color:#17334a;max-width:1100px;margin:40px auto;padding:0 24px;background:#f5f8fb}h1,h2{line-height:1.3}section{background:white;border:1px solid #d7e2eb;border-radius:12px;padding:24px;margin:20px 0}img{width:100%;border-radius:8px}table{border-collapse:collapse;width:100%}td,th{padding:10px;border:1px solid #d7e2eb;text-align:left}code{background:#eaf1f6;padding:2px 5px}.note{border-left:4px solid #d69b25;padding-left:16px}a{color:#076885}</style>
+<h1>全场地形与四机定位实验</h1>
+<p><a href="team-mission.html">四机基地撞击、中央起飞点与返航操作</a></p>
+<p>当前重点：无 UWB 基站条件下，四架飞机如何利用稀疏测距、机间测距和已知地图保持同一坐标系。</p>
+<section><h2>怎样打开</h2><ol>
+<li>双击项目根目录的 <b>四机定位仿真实验台</b> 快捷方式，即可直接进入第 ⑦ 页；原有 Drone Lab 快捷方式仍可使用。</li>
+<li>打开第 ⑦ 页 <b>Gazebo 四机</b>，地图选 <b>Sentry26 2026 全场地形</b>。</li>
+<li>先使用<b>启动四机环境</b>查看真实传感器和定位有效率。Gazebo 窗口可旋转、缩放查看地形。</li>
+<li>任务 <b>hover</b> 为悬停实验，<b>survey</b> 为实验航线。勾选<b>启用四机定位飞行</b>后再启动，才会发送虚拟解锁和飞行指令。默认未勾选。</li>
+<li>观察每机误差、有效率、机间距离误差和全队共同平移漂移；使用<b>保存报告</b>导出当前观察区间。</li>
+<li>结束时点击<b>停止</b>，本次日志保留在 simulation/runtime/run_日期时间。</li></ol>
+<p>一轮仿真运行期间先停止，再切换地图、安装角或任务。</p></section>
+<section><h2>实际场景</h2><img src="terrain-gazebo.png" alt="Gazebo 引擎实际渲染的全场俯视图">
+<p>图像来自 Gazebo 的独立俯视相机。地形参与真实碰撞与深度图渲染，飞机由 PX4 控制电机驱动物理模型。</p>
+<table><tr><th>项目</th><th>当前实现</th></tr>
+<tr><td>地形来源</td><td><a href="https://github.com/Boombroke/Sentry26">Boombroke/Sentry26</a>，固定提交 9f3ae17627cef5ca1f102a27668f8b5e78a2cdb1，rmuc_2026.stl</td></tr>
+<tr><td>几何规模</td><td>原始 124,995 面；派生地形 124,965 面；约 29.15 × 16.05 m，高度范围 0–3.70 m</td></tr>
+<tr><td>派生改动</td><td>保留原文件；移除 30 个延伸到 18.27 m 的包围面，建立开放边界；整体 z 平移 −0.2275390625 m。</td></tr>
+<tr><td>同源约束</td><td>Gazebo 可见网格、碰撞网格、定位静态地图使用同一份几何，自动检查逐顶点一致。</td></tr>
+</table>
+<p class="note">2027 前瞻资料包含隧道、三级制高点、中央机库区的局部变化，但缺少完整场地坐标与全部三维尺寸。详见 <a href="terrain-source-review.json">来源核对记录</a>。</p></section>
+<section><h2>数据从哪里来</h2><table><tr><th>模块</th><th>输入和边界</th></tr>
+<tr><td>4 个 PX4 SITL</td><td>运行实际飞控程序；IMU 由物理引擎生成。GNSS 位置融合关闭。</td></tr>
+<tr><td>12 个 8×8 ToF</td><td>Gazebo 渲染深度图，包含遮挡；3 颗每机，视场与安装角有明确配置。尚未复现全部 VL53L5CX 光学误差。</td></tr>
+<tr><td>4 个 GC4653 对应相机</td><td>实时 RGB 渲染；当前分辨率用于电脑联调，不等于相机硬件成像和 ISP 标定。</td></tr>
+<tr><td>无基站 UWB</td><td>由机间物理位置生成含噪声测距与方向角。地形遮挡可触发额外丢包与偏差；这是未标定的压力测试模型，不是电磁传播仿真。</td></tr>
+<tr><td>RV companion</td><td>真实 C++ 算法进程：IMU 预测、ToF 与静态三角面匹配、机间约束融合。可编译到 RISC-V。</td></tr>
+<tr><td>高度辅助</td><td>SIM_HEIGHT_ASSIST 向飞控/估计器提供世界坐标 z。</td></tr>
+<tr><td>初始化</td><td>已知起点位姿只在初始化使用。研究起点采用 2026 参考图配置。</td></tr>
+<tr><td>独立评估</td><td>真值 x/y/yaw 只用于图表和误差计算，不能进入定位或控制。装甲末端制导默认关闭。</td></tr></table></section>
+<section><h2>怎样理解定位结果</h2><ul>
+<li><b>绝对 XY 误差</b>：与初始化时建立的地图坐标系比较。</li>
+<li><b>机间距离误差</b>：编队相对形状是否保持。</li>
+<li><b>共同平移漂移</b>：四架是否一起漂离地图，距离误差很小也可能出现这种失败。</li>
+<li><b>结构有效 / peer 有效</b>：当前依赖地形还是机间约束；peer 自己也必须有独立结构来源，避免互相循环确认。</li>
+<li><b>路径长度与位移</b>：静止或很短的实验不能证明全场移动定位。</li></ul>
+<p class="note">3 颗 8×8 ToF 看见水平地面时，水平位置可能不可观测。准确高度也无法补足水平信息；无基站 UWB 本身只给相对约束。这正是需要在此环境中研究的退化工况。</p></section>
+<section><h2>2026-10-02 实测进度</h2>
+<p><b>完整地形、传感器和四机程序已接通；四机全场稳定移动定位尚未通过。</b></p>
+<table><tr><th>验证</th><th>实际结果</th></tr>
+<tr><td>地形和深度坐标</td><td>12 路静态深度与网格射线逐格命中一致，最大距离差 0.94 mm。仅验证当前理想渲染几何。</td></tr>
+<tr><td>30 秒仿真悬停实验</td><td>run_20261002_200421：四机均实际解锁起飞，最终高度 1.797–1.801 m。四机完整日志 XY RMSE 分别 0.069 / 0.108 / 0.147 / 0.009 m；最大误差最高 0.749 m。包含初始化过程，没有剔除无效估计，没有做轨迹坐标拟合。</td></tr>
+<tr><td>较长航线失败</td><td>run_20261002_195848：两机发生失锁和发散，另外两机完整日志 RMSE 约 0.044 / 0.034 m。该次 trial 判为失败。</td></tr>
+<tr><td>构建与自动检查</td><td>126 项 Python 测试 + 29 项子测试通过；C++ companion 与 UWB 遮挡测试各 1/1 通过；RISC-V 重新编译通过，未在 Nano 实机运行。</td></tr>
+<tr><td>静态网格资源</td><td>C++ 常驻容器容量约 4.89 MiB；电脑基准约 15 μs/射线。该基准在电脑运行，容量不含构建临时内存。</td></tr></table>
+<p>当前适合研究地形可观测性、机间约束、失锁原因和恢复策略。survey 仍是实验功能。真实板卡、双天线型号、射频误差、相机 ISP 与执行耗时待硬件接入后校准。</p>
+<p>完整报告：<a href="../runtime/run_20261002_200421/localization_report.json">30 秒悬停</a> · <a href="../runtime/run_20261002_195848/localization_report.json">失败航线</a> · <a href="terrain-verification.json">验证摘要</a></p></section>
+<section><h2>复现和调试入口</h2><p>地图：simulation/maps/rmuc_2026_sentry26.json；地形导入：simulation/import_sentry26.py；场景启动：simulation/launch_linux.py；算法：simulation/companion；界面：app/simulation_panel.py。</p>
+<p>原始来源和哈希：simulation/models/terrain/rmuc_2026_sentry26/provenance.json。上游 Apache-2.0 文件已保留。</p>
+<p>传感器视角、完整地形、算法输入和评估真值分开记录，便于后续更换高度传感器、真实 UWB 模组与 Nano 硬件适配。</p></section></html>

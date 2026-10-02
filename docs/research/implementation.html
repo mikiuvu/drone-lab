@@ -1,0 +1,59 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>从采集到最终自治程序</title>
+<style>body{font:16px 'Microsoft YaHei UI',sans-serif;line-height:1.75;max-width:1100px;margin:30px;color:#19334b}table{border-collapse:collapse;width:100%}td,th{border:1px solid #c7d7e4;padding:9px;vertical-align:top}h1,h2{color:#126884}code,pre{background:#eef3f8}pre{padding:16px;white-space:pre-wrap}.note{background:#fff4db;padding:16px}a{color:#087c99}</style>
+<h1>最终代码怎样实现：职责、数据与退出条件</h1>
+<p>本文针对 DM-FC01 + LicheeRV Nano + 两颗 VL53L5CX，预留视觉任务。2026-10-02 检查时没有连接实物。现有代码是桌面采集工具，后续自治程序需要新增估计、规划和任务状态机。电脑演示画面及离线模型不是完成这些模块的证明。</p>
+<p><a href="index.html">返回预研总览</a> · <a href="compute.html">算力分析</a> · <a href="geometry.html">几何仿真</a> · <a href="collector-audit.html">采集代码审查</a></p>
+<h2>推荐架构</h2>
+<pre>DM-FC01：IMU / 姿态内环 / 电机控制 / 自身故障处理
+    ↕ MAVLink（固件版本锁定、双向时间同步、各消息限频）
+Nano：
+    fc_link                 接收姿态与有效状态；时间映射；受门控的目标输出
+    tof_acquisition         各传感器数据、就绪时间、读完时间、质量、错误计数
+    camera_acquisition      帧序号、曝光时间或经过标定的时间估计、缓冲区所有权
+    localization_frontend   结构匹配、可观测性、质量判断
+    state_estimator         连续预测与新观测更新；维护协方差和重置计数
+    vision                  NPU 检测 + CPU 后处理 / ROI 跟踪；过期结果丢弃
+    navigation              已知航路、禁入区与速度约束
+    mission_supervisor      各模式准入条件、失效降级、目标优先级
+    logger                  有界异步队列；不能阻塞 fc_link 和估计器
+
+Windows Drone Lab：参数试验、显示、数据记录、离线回放与仿真。
+它是研发工作站，不是飞行时必须持续在线的控制环节。</pre>
+<p>起步不必引入 ROS 2、完整分布式图优化或多进程图像复制。Nano 第一版可以采用一个 C++ 服务、少量职责明确的线程和有界数据通道；算法接口保留纯函数入口，PC 与 Nano 共用数学实现。选择单进程还是多进程的依据是故障隔离、SDK 限制与实测开销。现有 Python 桌面界面负责调试，不要求在 Nano 上运行 Qt。</p>
+<h2>每种数据必须说清楚什么</h2>
+<table><tr><th>数据</th><th>必要字段</th><th>拒绝/处理条件</th></tr>
+<tr><td>TofFrame</td><td>sensor_id、frame_seq、原始区域索引、距离、目标数、status、signal、sigma、t_ready、t_read_end、标定版本</td><td>无目标和零距离分开；不能将无效值变成“近障碍”；丢帧、遮挡和结构退化分别统计。</td></tr>
+<tr><td>CameraFrame</td><td>frame_seq、t_exposure/时间定义、像素格式、步长、宽高、buffer_id、释放回调</td><td>借用 SDK 缓冲区时必须保证推理/跟踪结束前不被回收；新帧覆盖待处理旧帧，不能覆盖正在使用的内存。</td></tr>
+<tr><td>PoseEstimate</td><td>位置/姿态/速度、明确父子坐标系、捕获或状态时刻、3D/2.5D有效分量、协方差、quality、epoch、reset_counter、最后观测年龄</td><td>只有墙面距离时不能声称沿墙方向已定位；协方差不能全零；重定位跳变需单独声明。</td></tr>
+<tr><td>VisionTarget</td><td>关联 frame_seq、类别/ID、ROI、检测/跟踪置信度、相机相对误差、年龄、外参版本</td><td>过期、类别冲突、超出视场、曝光异常时不继续输出旧目标。</td></tr>
+<tr><td>TrajectorySetpoint</td><td>坐标系、有效时限、位置/速度/yaw有效掩码、任务模式、依赖估计epoch</td><td>环境或估计不可靠时由明确策略决定降级，不能仅靠持续发送旧指令维持模式。</td></tr></table>
+<h2>“局部 ODOM + MAP”还缺一个必要条件</h2>
+<p>原预研设计中，光流与下视测距负责连续 Local Odom。当前选定的硬件只包括飞控、Nano 和两颗结构 ToF，这个连续里程计来源尚不存在。可靠的无 GPS 平移状态需要连续里程计或足够的结构观测。</p>
+<table><tr><th>路径</th><th>适用条件</th><th>实现负担与门槛</th></tr>
+<tr><td>A：增加光流 + 独立下视测距</td><td>地面纹理/光照与高度范围允许</td><td>飞控融合得到连续速度/局部位置；ToF 只做慢速地图修正。需要验证 DM-FC01 固件驱动、旋转补偿、尺度与时间同步。</td></tr>
+<tr><td>B：视觉惯性里程计</td><td>相机、IMU 时间同步和纹理满足；计算/内存足够</td><td>明显增加 CPU、内存和标定负担。与装甲检测共享相机时需解决曝光、视场与队列冲突；不因有 NPU 就默认可行。</td></tr>
+<tr><td>C：ToF 结构定位 + 动态预测</td><td>航路持续有不平行可靠结构，运动可预测，场景关系已知</td><td>短时能预测，长期观测盲区不成立。必须实现退化检测、预测协方差增长、状态重置以及可证明的失效出口。</td></tr>
+<tr><td>D：外部真值/实验室定位</td><td>桌面/实验室误差基准</td><td>用于建立算法误差基准和软件在环验证。不能把外部定位存在当成最终参赛方案的前提。</td></tr></table>
+<p class="note">当前阶段建议先跑已知墙/墙角定位与离线退化测试。是否增加光流或转向 VIO，应由无观测时间和误差增长决定。协同 UWB 也不能凭空消除全队共同的平移/旋转自由度。</p>
+<h2>飞控连接：版本和时间都必须锁定</h2>
+<p>本地 firmware/damiao_dm-fc01_V1.15.px4 的包元数据为 board_id=7140、git_identity=v1.15.0-6-gb8c6373f7f、git_hash=b8c6373f7f940e7bb321e95692c6c7622aad0779。它是定制构建，不能直接保证与上游全部行为一致。</p>
+<p>PX4 v1.15 外部定位文档建议 ODOMETRY/视觉估计消息以 30–50 Hz 发送。VL53L5CX 8×8 输出最高 15 Hz，不意味着把同一个测量用新时间戳重复发送就可满足估计需求。应先确认飞控实际配置与接受逻辑，再设计连续预测状态；预测必须增加不确定度，不能伪造新观测。</p>
+<p>Offboard 的大于 2 Hz 活性要求只是模式管理下限，不是控制环设计频率，也不是定位更新频率。验证目标包括超时、合法坐标系、参数、消息反馈和状态有效性。SITL 使用固定版本的 PX4，再做硬件台架；当前离线研究不向飞控发送任何消息。</p>
+<h2>已可运行的接口验证</h2>
+<p>research/integration.py 包含 ENU→NED、FLU→FRD 变换、位置协方差变换、RTT 限制的时钟偏移估计和过期/未来时间/重置/退化门控。单位测试用已知轴向和不对称延迟验证。它还不是完整的 TIMESYNC 会话实现，暂不估计时钟频率漂移、不处理所有协议版本配对。</p>
+<p>在匀速1 m/s、恒定航向90°/s、3 m量程、时间错配50 ms的输入下：平移年龄误差为5 cm；旋转造成的点位置弦长误差约23.6 cm。真实快速运动需插值到测量时刻，校准曝光/融合延迟，并分别记录各设备时钟。同步重启之后，旧队列全部无效。</p>
+<h2>同步不确定度和共同信息不能省略</h2>
+<p>补充的 research/uncertainty.py 提供三个纯离线参考：带 rate/epoch/有效期的仿射时钟映射、随机时间抖动的位置协方差传播、未知交叉相关时的 covariance intersection。时钟映射先检查严格递增的成对时间，漂移超预算/映射过期/epoch变化直接拒绝；它仍依赖上层正确配对 TIMESYNC，不会自动识别所有链路不对称或时钟跳变。</p>
+<p>时间传播使用 Jt=v+ω×r，Qt=Jt σt² Jtᵀ。向量必须在同一坐标系，σt 是随机抖动标准差；RTT/2 是传输不确定度预算，不能未经建模当成高斯标准差。固定偏差与漂移需要单独估计/界定。此式描述一阶点位置误差，完整位姿协方差需另外传播。</p>
+<p>当两个估计共享IMU、地图、锚点或外参时，独立高斯融合会过度自信。参考CI函数对完全相同的两份协方差不会把方差减半，但前提是每个输入本身一致；它不能消除两份输入共同遗漏的系统偏差。完整实现应在估计数据中增加 source_id、共同误差组、外参/地图版本、epoch以及信息来源图，避免把飞控后验回灌当独立观测。</p>
+<h2>开发顺序与验收证据</h2>
+<ol><li>当前：重放真实编码数据、异常值测试、采集阻塞/断流测试、离线排队与几何仿真。</li>
+<li>硬件接入：电压、总线频率与上拉、双地址冲突、SPI/UART引脚占用、驱动版本、启动功耗，逐一出日志。</li>
+<li>单机估计：标定外参、延迟、区域方向；对照独立真值；覆盖墙、角、走廊、空旷、遮挡及动态物体。</li>
+<li>并发压测：相机真实采集 + NPU真实模型 + CPU后处理 + ToF采集/定位 + MAVLink，持续记录延迟尾部、帧龄、CPU、RSS、VB/CMA、温度、电源。</li>
+<li>软件在环：固定版本 PX4 SITL，核对坐标/消息及估计失效路径；传感器合成模型与真值不得混用。</li>
+<li>单机台架和受控飞行：接口与安全条件通过后逐步运行。视觉目标切换、撞后恢复和多机协同放在基础状态估计有证据之后。</li></ol>
+<h2>来源</h2><p>访问日期：2026-10-02，摘录保存在 research/sources/integration。</p><ul>
+<li><a href="https://docs.px4.io/v1.15/en/ros/external_position_estimation.html">PX4 v1.15 外部位置估计</a></li>
+<li><a href="https://docs.px4.io/v1.15/en/flight_modes/offboard.html">PX4 v1.15 Offboard</a></li>
+<li><a href="https://mavlink.io/en/services/timesync.html">MAVLink TIMESYNC</a>：最新协议说明不能替代 v1.15 定制固件的源代码/抓包核对。</li></ul></html>

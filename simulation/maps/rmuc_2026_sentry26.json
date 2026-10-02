@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "name": "rmuc_2026_sentry26",
+  "label": "Sentry26 2026 全场地形 · 开放边界派生版",
+  "official_field": false,
+  "season": 2026,
+  "world_file": "../worlds/rmuc_2026_sentry26.sdf",
+  "terrain_triangles_file": "../models/terrain/rmuc_2026_sentry26/terrain_triangles.f32",
+  "terrain_height_grid": "../models/terrain/rmuc_2026_sentry26/terrain_height_grid.npz",
+  "provenance": "Boombroke/Sentry26 commit 9f3ae17627cef5ca1f102a27668f8b5e78a2cdb1, rmuc_2026.stl. Preserved complete interior terrain; 30 enclosing triangles extending to 18.27 m excluded. World z offset -0.2275390625 m. See models/terrain/rmuc_2026_sentry26/provenance.json.",
+  "bounds": {
+    "x_min": -14.58145,
+    "x_max": 14.56855,
+    "y_min": -8.04379,
+    "y_max": 8.00621
+  },
+  "frame": {
+    "name": "world",
+    "handedness": "right",
+    "z": "up",
+    "yaw_zero": "+X"
+  },
+  "units": {
+    "length": "m",
+    "angle": "rad"
+  },
+  "room": {
+    "floor_z": 0.0
+  },
+  "walls": [],
+  "initialization": {
+    "type": "configured_spawn_prior",
+    "source": "Fixed homes beneath the central energy mechanism.",
+    "estimator_restriction": "One-time configured spawn prior only. No live pose except exact z height assist."
+  },
+  "spawns": [
+    {
+      "id": 0,
+      "x": -0.8,
+      "y": -0.4,
+      "z": 0.55,
+      "roll": 0,
+      "pitch": 0,
+      "yaw": 0
+    },
+    {
+      "id": 1,
+      "x": -0.4,
+      "y": 0.8,
+      "z": 0.55,
+      "roll": 0,
+      "pitch": 0,
+      "yaw": 0
+    },
+    {
+      "id": 2,
+      "x": 0.6,
+      "y": -0.4,
+      "z": 0.55,
+      "roll": 0,
+      "pitch": 0,
+      "yaw": 1.0471975511965976
+    },
+    {
+      "id": 3,
+      "x": 0.4,
+      "y": 0.8,
+      "z": 0.55,
+      "roll": 0,
+      "pitch": 0,
+      "yaw": 0
+    }
+  ],
+  "vehicle_waypoints": {
+    "0": [],
+    "1": [],
+    "2": [],
+    "3": []
+  },
+  "waypoint_provenance": "Hand-authored local survey routes on the static map, executed through estimated state and PX4 velocity control.",
+  "limitations": [
+    "Open boundary derivative. Competition nets/fences have not been calibrated.",
+    "3x8x8 ToF cannot observe planar XY position over featureless horizontal floor. UWB peers provide relative constraints only.",
+    "No anchor infrastructure; known spawn initializes a common coordinate frame.",
+    "Exact world height is temporarily assisted; RV timing and real UWB radio are not emulated."
+  ],
+  "home_marker": {
+    "size_m": 0.3,
+    "line_width_m": 0.012,
+    "ground_z_m": 0.5,
+    "color": [
+      1,
+      0,
+      0,
+      1
+    ]
+  },
+  "team_mission": {
+    "cruise_z_m": 0.75,
+    "cruise_speed_mps": 0.25,
+    "contact_speed_mps": 0.2,
+    "return_tolerance_m": 0.14,
+    "home_ground_z_m": 0.5,
+    "team": "red",
+    "enemy_base": {
+      "side": "blue",
+      "center_x_m": 11.6,
+      "center_y_m": 0,
+      "source": "Official RM2026 Figures 4-1/4-7, matched to Sentry26 mesh"
+    },
+    "approach": {
+      "x": 10.85,
+      "y": 0,
+      "z": 0.65,
+      "yaw": 0
+    },
+    "target": {
+      "x": 11.2361166,
+      "y": 0,
+      "z": 0.65
+    },
+    "order": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "assembly": [
+      {
+        "id": 0,
+        "x": 9.9,
+        "y": -0.65
+      },
+      {
+        "id": 1,
+        "x": 9.9,
+        "y": 0.65
+      },
+      {
+        "id": 2,
+        "x": 10.5,
+        "y": -0.65
+      },
+      {
+        "id": 3,
+        "x": 10.5,
+        "y": 0.65
+      }
+    ],
+    "formation_offsets": [
+      {
+        "id": 0,
+        "x": -0.35,
+        "y": -0.35
+      },
+      {
+        "id": 1,
+        "x": -0.35,
+        "y": 0.35
+      },
+      {
+        "id": 2,
+        "x": 0.35,
+        "y": -0.35
+      },
+      {
+        "id": 3,
+        "x": 0.35,
+        "y": 0.35
+      }
+    ],
+    "transit_waypoints": [
+      {
+        "x": 0,
+        "y": 0,
+        "z": 0.75
+      },
+      {
+        "x": 1,
+        "y": 0,
+        "z": 0.75
+      },
+      {
+        "x": 1.0,
+        "y": -2.5,
+        "z": 0.75
+      },
+      {
+        "x": 3.0,
+        "y": -2.5,
+        "z": 0.75
+      },
+      {
+        "x": 4.5,
+        "y": -1.5,
+        "z": 0.75
+      },
+      {
+        "x": 6,
+        "y": -1,
+        "z": 0.75
+      },
+      {
+        "x": 8,
+        "y": -1,
+        "z": 0.75
+      },
+      {
+        "x": 10,
+        "y": 0,
+        "z": 0.75
+      }
+    ],
+    "scan_yaw_rate_rad_s": 0.25,
+    "loss_abort_s": 15,
+    "body_clearance_m": 0.016,
+    "contact_radius_m": 0.052,
+    "map_heading": true
+  }
+}

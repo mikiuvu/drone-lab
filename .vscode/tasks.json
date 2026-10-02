@@ -1,0 +1,30 @@
+{
+  "tasks": [
+    {
+      "args": [
+        "D:\\Robomaster code\\drone\\scripts\\build_nano.py"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "type": "process",
+      "command": "D:\\Robomaster code\\drone\\.venv\\Scripts\\python.exe",
+      "label": "编译 Nano 采集程序"
+    },
+    {
+      "type": "process",
+      "options": {
+        "cwd": "D:\\Robomaster code\\drone"
+      },
+      "command": "D:\\Robomaster code\\drone\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "problemMatcher": [],
+      "label": "运行测试"
+    }
+  ],
+  "version": "2.0.0"
+}

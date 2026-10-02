@@ -1,0 +1,15 @@
+{
+  "configurations": [
+    {
+      "python": "D:\\Robomaster code\\drone\\.venv\\Scripts\\python.exe",
+      "justMyCode": true,
+      "module": "app.main",
+      "request": "launch",
+      "console": "internalConsole",
+      "type": "debugpy",
+      "cwd": "D:\\Robomaster code\\drone",
+      "name": "Drone Lab 图形实验台"
+    }
+  ],
+  "version": "0.2.0"
+}

@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Drone Lab 上手手册</title>
+<style>body{font:16px 'Microsoft YaHei UI',sans-serif;color:#19334b;background:#f7f9fc;margin:28px;line-height:1.7;max-width:980px}h1,h2{color:#126884}table{border-collapse:collapse;width:100%}td,th{border:1px solid #cddbe5;padding:10px;text-align:left}code{background:#e5edf5;padding:2px 5px}a{color:#087399}.card{background:white;padding:18px;border:1px solid #d5e1ec;margin:18px 0}</style></head><body>
+<h1>从桌面实验开始</h1><p>适用：DM-FC01 + LicheeRV Nano + 两颗 VL53L5CX。通过 Drone Lab 完成硬件数据采集、观察和调试；四机仿真见<a href="../simulation/docs/terrain-localization.html">Gazebo 操作说明</a>。</p>
+<div class="card"><b>录制与回放：</b>打开“① 实时数据” → “演示数据” → “开始录制” → 等几秒 → “停止录制” → “停止数据源” → 到“③ 日志回放”打开刚才的日志并播放。合成数据使用 DEMO 标记。</div>
+<h2>软件入口</h2><table><tr><th>用途</th><th>入口</th><th>说明</th></tr>
+<tr><td>飞控配置与姿态观察</td><td>④ 软件工具 → QGroundControl</td><td>v5.1.5，本地安装；USB 连飞控。</td></tr>
+<tr><td>Nano 终端、SSH 和文件管理</td><td>④ 软件工具 → MobaXterm</td><td>Personal 26.5，便携版。SSH 连接后左侧为 SFTP 文件面板。</td></tr>
+<tr><td>TF 卡系统写入</td><td>④ 软件工具 → Rufus</td><td>4.15 便携版；你选择 TF 卡及 .img，再启动写入。</td></tr>
+<tr><td>代码与调试</td><td>④ 软件工具 → VS Code</td><td>使用已有 VS Code，项目有独立 Python 3.12 环境及运行/测试配置。</td></tr>
+<tr><td>Nano 程序编译</td><td>④ 软件工具 → 重新编译 Nano 程序</td><td>后台使用已有 WSL2 Ubuntu 22.04 和配套 RISC-V musl 工具链。</td></tr></table>
+<h2>第 1 步：电脑连接飞控</h2>
+<ol><li>本阶段只接飞控 USB，在桌面操作，不连接电机。</li><li>打开 QGroundControl，等待识别。先记录现有固件名称/版本，缓慢转动飞控，看姿态变化。</li><li>无需为了试数据立即刷固件。若确需刷写，本地 firmware 目录有达妙提供的 PX4 V1.15 与 ArduCopter 固件；先核对硬件版本和现有固件。QGC 的“固件”页面选择自定义文件，刷写过程由你启动。</li><li>要在 Drone Lab 看飞控数据，先让 QGC 断开该 USB 串口，然后在“① 实时数据”刷新串口、选中实际 COM 口、选择 MAVLink 输出对应波特率，点击“接收飞控数据”。该串口入口接收飞控数据。</li><li>蓝牙 COM 口不等于飞控。拔插飞控对照设备列表确定实际端口。没有 COM 口时先检查数据线及 Windows 设备管理器，不要盲目安装一批驱动。</li></ol>
+<h2>第 2 步：启动 Nano</h2>
+<ol><li>准备 Nano、专用 TF 卡及读卡器、稳定的 USB 电源、3.3 V 逻辑 USB 转 TTL 模块。核对板卡 W/E/WE 版本。</li><li>在“④ 软件工具”打开官方镜像目录。已解压：<code>2026-01-14-16-03-d4003f.img</code>，来自 Sipeed 官方发布。确认适配板卡后，用 Rufus 选择此镜像和目标 TF 卡。写入会清空所选卡，必须核对磁盘。</li><li>写卡后将卡插入 Nano，通过 USB 电源供电。</li><li>打开 MobaXterm → Session → Serial，选择 USB 转 TTL 对应 COM 口，115200 波特率。接线按 Sipeed 文档核对：UART0 A16 为 Nano TX、A17 为 Nano RX、共地；TX 接对方 RX。只接逻辑通信线，供电按板卡手册。</li><li>使用镜像文档给出的登录信息，按实际 W/E/WE 板型配置网络。首次联网可能需要少量终端操作，MobaXterm 为其提供图形会话管理、复制粘贴和文件面板。</li><li>把 Nano 的 IP、用户名、密码填到 Drone Lab“② Nano 连接与部署”。点击“检查 Nano 与设备列表”，应看到 riscv64、系统信息及可用设备。首次 SSH 会显示主机密钥指纹，需要确认是自己的设备。密码不会写进配置文件。</li></ol>
+<p>网络、引脚复用与设备路径取决于板型和镜像。若查不到 /dev/i2c-*，按官方外设文档先启用相应总线。</p>
+<h2>第 3 步：接入一颗 VL53L5CX</h2>
+<ol><li>先核对商家载板：供电范围、I²C 上拉到几伏、SDA/SCL/LPn 引脚。某模块支持 5 V 供电不代表 I²C 可以接 Nano 的 3.3 V 信号脚。</li><li>连接一颗，保持第二颗禁用。检查 Nano 后，从下拉框选择真实 /dev/i2c-N，地址默认用 7 位 <code>0x29</code>，8×8 帧率先用 10 Hz。</li><li>点击“上传并开始采集”。程序自动上传、SHA256 校验、初始化 ST 驱动及传感器内部固件；错误会出现在界面日志。</li><li>到“① 实时数据”看区域数值。移动一本书，检查距离随之变化；录制一段日志。</li></ol>
+<h2>第 4 步：第二颗与飞控一起采集</h2>
+<p>第二颗建议先接独立 I²C 总线，同样使用 0x29。同总线方案需要在硬件端分别控制 LPn 并分配不同地址，再填写对应配置。</p>
+<p>飞控可以继续 USB 接电脑；也可以把 MAVLink 遥测口连接 Nano 的可用 UART，填写“可选飞控串口”和波特率。不要占用 Nano 启动控制台。使用 Nano 转发姿态时，先停止电脑直连飞控，避免混合两路来源。</p>
+<p>“停止数据源/停止 Nano 操作”会尝试结束该次启动的采集进程，关闭传感器测距。断网后远端进程未必立即退出；重连后如显示已有采集进程，使用 MobaXterm 检查。程序只允许一个采集实例。</p>
+<h2>怎么看数据</h2><ul>
+<li>热力图单位 mm，状态 5/9 且距离大于零视为有效；灰色是无有效目标。原始状态、目标数量、信号、环境光及 sigma 均保留在实测日志。</li>
+<li>画面默认旋转 180°用于传感器光学反转，可取消；日志始终保留驱动原始区域顺序。机体外参单独标定。</li>
+<li>2 秒未更新会标记过期。帧率是电脑接收速率，不是精确传感器曝光频率；序号缺口只表示接收记录缺口，不等于全部传感器漏帧。</li>
+<li>测距时间是 Nano 发现数据就绪的单调时钟；姿态源时间是飞控开机时钟。二者尚未同步。USB/SSH 传输延迟与姿态插值需在算法阶段单独验证。</li>
+<li>日志保存在 logs，DEMO/LIVE 分别命名。回放支持暂停、倍速、拖动进度；CSV 导出为一行一个区域，便于查看统计。</li></ul>
+<h2>调试</h2><p>VS Code 的运行与调试面板可以启动桌面实验台，在 Python 代码上打断点；任务面板可运行测试和交叉编译。Nano 端源代码在 nano，Windows 界面在 app。C 程序提供打印日志和本地交叉编译；远程 C 单步调试需要配置板端调试器。ST 和 MAVLink 第三方源码保留在 vendor，附带各自许可证。</p>
+<h2>官方资料</h2><ul>
+<li><a href="https://github.com/dmBots/dm-fc01/tree/master/manual">DM-FC01 手册</a></li>
+<li><a href="https://docs.qgroundcontrol.com/master/en/qgc-user-guide/getting_started/quick_start.html">QGroundControl 入门</a></li>
+<li><a href="https://wiki.sipeed.com/hardware/zh/lichee/RV_Nano/4_burn_image.html">Nano 写镜像</a> · <a href="https://wiki.sipeed.com/hardware/zh/lichee/RV_Nano/5_peripheral.html">串口和外设</a></li>
+<li><a href="https://github.com/sipeed/LicheeRV-Nano-Build/releases/tag/20260114">所用官方镜像发布</a></li>
+<li><a href="https://github.com/STMicroelectronics/stm32-vl53l5cx">ST 官方驱动</a></li></ul>
+</body></html>

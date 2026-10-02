@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>已下载 Nano 镜像审计</title><style>body{font:16px 'Microsoft YaHei UI',sans-serif;line-height:1.8;margin:30px;max-width:1050px;color:#19334b}table{border-collapse:collapse}td,th{padding:10px;border:1px solid #c9d9e5}code{background:#edf3f8}</style>
+<h1>实际镜像里有哪些软件</h1><p>2026-10-02 使用 7-Zip 只读检查已下载镜像，未启动 Nano、未挂载为可写系统、未改写原镜像。<a href="index.html">返回预研总览</a>。</p>
+<p>文件：images/nano-official/2026-01-14-16-03-d4003f.img。原发布包：Sipeed release 20260114，压缩包 SHA256 D6478170E923615CA28C97592A2C68A67971E6D07FCB967371B58791938698DD。</p>
+<table><tr><th>检查项</th><th>磁盘镜像证据</th><th>实现影响</th></tr>
+<tr><td>系统版本</td><td>usr/lib/os-release：Buildroot 2023.11.2，VERSION=-gd4003f15b。</td><td>不是 Ubuntu。不能默认 apt、systemd、与桌面同架构的二进制可用。</td></tr>
+<tr><td>内部版本字符串</td><td>boot分区 ver：2026-01-22-14-17-d4003f.img。</td><td>发布包名和内部构建日期不同，今后记录哈希和内部版本，不能只写“1月14镜像”。这不证明镜像被篡改，可能是发布附件更新。</td></tr>
+<tr><td>Python与远程调试</td><td>文件列表包含 usr/bin/python3.11、usr/bin/gdbserver。</td><td>可以准备Python资源采样器、C远程调试路径；文件存在不证明能在实物正常运行。不要把有Python等同有桌面完整包环境。</td></tr>
+<tr><td>相机工具</td><td>mnt/system/usr/bin/sample_vio、sensor_test；etc/init.d/S99camtest。</td><td>相机测试在 /boot/camtest 或 /tmp/camtest 标记存在时启动 sample_vio 6。启动标记可能导致相机资源被另一个进程占用，使用自有采集前检查。</td></tr>
+<tr><td>相机配置</td><td>mnt/data/sensor_cfg.ini.alpha / beta 都写 GCORE_GC4653_MIPI_4M_30FPS_10BIT、bus_id=4、sns_i2c_addr=29；lane_id 与 mclk 不同。</td><td>并非已经配置 SC035HGS/任意全局快门相机。alpha/beta文件选择、数字地址进制和板卡针序必须从实际程序/版本确定，不猜测。</td></tr>
+<tr><td>NPU样例</td><td>usr/bin/yolov5s_224_int8.cvimodel、mobilenet_v2_rgb_224_int8.cvimodel。</td><td>可以作为后续SDK自检样例；不是已训练的装甲模型，也不证明所选相机/任务达到目标精度或实时性。</td></tr>
+<tr><td>USB联网</td><td>boot分区存在 usb.dev、usb.rndis、usb.ncm；S30gadget_nic 提供RNDIS/NCM配置。</td><td>有线USB网络可能可用于初次调试。默认网段由device_key派生为10.x.y，不应写死某个常见开发板IP。按Windows新增网卡及实际配置核对。</td></tr>
+<tr><td>内存保留</td><td>boot.sd 的 DTS 保留内存与板端 /proc/meminfo 数据待核实。</td><td>计算报告的在线SDK ION数字不能直接作为这个镜像的可用内存。</td></tr></table>
+<p>只保存了针对性选择的配置到 research/image-inspection/selected，文件列表在 root-files.txt。所附脚本为镜像内容参考。后续可执行 scripts/profile_nano.py 采集设备资源，但不测 NPU 利用率或图像延迟，需要同时运行真实工作负载并记录各阶段时间。</p>
+<p><a href="https://github.com/sipeed/LicheeRV-Nano-Build/releases/tag/20260114">官方发布来源</a> · <a href="compute.html">计算链路报告</a></p></html>

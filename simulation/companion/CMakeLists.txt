@@ -1,0 +1,73 @@
+cmake_minimum_required(VERSION 3.20)
+project(drone_companion LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(COMPANION_BUILD_RUNNER "Build the UDP/MAVLink desktop companion runner" ON)
+option(COMPANION_BUILD_TESTS "Build companion algorithm tests" ON)
+
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+
+add_library(companion_core STATIC
+  src/estimator.cpp
+  src/terrain.cpp
+  src/vision.cpp
+)
+target_include_directories(companion_core PUBLIC include)
+target_link_libraries(companion_core PUBLIC Eigen3::Eigen)
+target_compile_features(companion_core PUBLIC cxx_std_17)
+target_compile_options(companion_core PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+)
+
+if(COMPANION_BUILD_RUNNER OR COMPANION_BUILD_TESTS)
+  find_package(nlohmann_json 3.10 REQUIRED)
+  add_library(team_mission STATIC src/team_mission.cpp)
+  target_include_directories(team_mission PUBLIC include)
+  target_compile_features(team_mission PUBLIC cxx_std_17)
+  add_library(companion_protocol STATIC src/protocol.cpp)
+  target_include_directories(companion_protocol PUBLIC include)
+  target_link_libraries(companion_protocol PUBLIC companion_core nlohmann_json::nlohmann_json)
+
+  if(COMPANION_BUILD_RUNNER)
+    add_executable(team_coordinator src/team_coordinator.cpp)
+    target_link_libraries(team_coordinator PRIVATE team_mission nlohmann_json::nlohmann_json)
+    add_executable(drone_companion_runner src/runner.cpp)
+    target_include_directories(drone_companion_runner PRIVATE include)
+    target_include_directories(drone_companion_runner SYSTEM PRIVATE "../../vendor/mavlink")
+    target_link_libraries(drone_companion_runner PRIVATE companion_protocol companion_core)
+    if(WIN32)
+      target_link_libraries(team_coordinator PRIVATE ws2_32)
+      target_link_libraries(drone_companion_runner PRIVATE ws2_32)
+    else()
+      target_link_libraries(drone_companion_runner PRIVATE pthread)
+    endif()
+  endif()
+endif()
+
+if(COMPANION_BUILD_TESTS)
+  enable_testing()
+  add_executable(test_companion ../tests/test_companion.cpp)
+  # RelWithDebInfo normally defines NDEBUG; assertions must remain active here.
+  target_compile_options(test_companion PRIVATE -UNDEBUG)
+  target_include_directories(test_companion SYSTEM PRIVATE "../../vendor/mavlink")
+  target_link_libraries(test_companion PRIVATE companion_protocol companion_core)
+  add_test(NAME companion_core COMMAND test_companion)
+  add_executable(test_team_mission ../tests/test_team_mission.cpp)
+  target_compile_options(test_team_mission PRIVATE -UNDEBUG)
+  target_link_libraries(test_team_mission PRIVATE team_mission)
+  add_test(NAME team_mission COMMAND test_team_mission)
+  add_executable(test_estimator_stability ../tests/test_estimator_stability.cpp)
+  target_compile_options(test_estimator_stability PRIVATE -UNDEBUG)
+  target_link_libraries(test_estimator_stability PRIVATE companion_core)
+  add_test(NAME estimator_stability COMMAND test_estimator_stability)
+  if(UNIX)
+    add_executable(test_odometry_height ../tests/test_odometry_height.cpp)
+    target_compile_options(test_odometry_height PRIVATE -UNDEBUG)
+    target_include_directories(test_odometry_height SYSTEM PRIVATE "../../vendor/mavlink")
+    target_link_libraries(test_odometry_height PRIVATE companion_protocol companion_core pthread)
+    add_test(NAME odometry_height COMMAND test_odometry_height)
+  endif()
+endif()

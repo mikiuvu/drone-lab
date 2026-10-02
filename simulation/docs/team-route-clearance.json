@@ -1,0 +1,4 @@
+{
+  "method": "triangle AABB vs swept body bounding box",
+  "issues": []
+}

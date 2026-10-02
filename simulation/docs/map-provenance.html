@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>地图来源与校准场景</title>
+  <style>
+    body{font:16px/1.65 system-ui,sans-serif;color:#202a35;background:#f6f7f9;margin:0;padding:28px}
+    main{max-width:1040px;margin:auto;background:white;padding:30px;border-radius:10px}
+    h1,h2{line-height:1.3}h2{margin-top:30px}code{overflow-wrap:anywhere}
+    .notice{border-left:5px solid #ba5417;background:#fff3e8;padding:14px 18px}
+    table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #cad2dc;padding:10px;text-align:left;vertical-align:top}
+    th{background:#edf2f7}a{color:#075da1}.muted{color:#566575}
+  </style>
+</head>
+<body><main>
+  <h1>地图来源与校准场景</h1>
+  <p class="notice">校准房间采用配置尺寸，用于 Gazebo 引擎、传感器与算法联调。2027 全场几何需官方完整尺寸资料或模型确认；2026 参考地形见<a href="terrain-localization.html">全场地形实验</a>。</p>
+  <p>记录日期：2026-10-02。范围：<code>simulation/worlds/</code>、<code>simulation/assets/</code>、<code>simulation/maps/</code> 和本页。</p>
+  <h2>已提供的官方前瞻资料</h2>
+  <table>
+    <tr><th>项目</th><th>记录</th></tr>
+    <tr><td>资料标题与版本</td><td>RoboMaster 2027 高校系列赛规则变更前瞻手册（20260909）；2026-09-09 前瞻版，19 个 PDF 物理页。它是规则前瞻，不是完整赛场 CAD。</td></tr>
+    <tr><td>原件路径</td><td><code>E:DownloadsRoboMaster 2027 高校系列赛规则变更前瞻手册（20260909）.pdf</code>；6,388,027 字节。原件保持不变。</td></tr>
+    <tr><td>SHA-256</td><td><code>1F8FB31F9983BD6854870D038FABE0C67FF7102B7BDDF0425DEC872948AB1B19</code></td></tr>
+    <tr><td>核验方法</td><td>Get-FileHash；Poppler pdftotext 文本定位；Poppler 渲染并查看相关表格与图 3-1 至 3-4。PDF 的物理页码比正文印刷页码大 1，例如图 3-4 是物理第 18 页 / 印刷第 17 页。</td></tr>
+    <tr><td>来源与许可</td><td>用户本地提供、页眉 RoboMaster、页脚 © 2026 大疆 版权所有。未发现允许再分发的开放许可。未把原 PDF、官方图像、纹理或 CAD 复制到交付资产中；本页记录必要尺寸与来源事实。</td></tr>
+  </table>
+  <h2>已知数字与适用范围</h2>
+  <p>下表只记录图或表明确标注的数字。图中局部尺寸按工程图的毫米标注阅读；未见这些页面单独列出单位图例，因此保留原始数字，交付校准世界不使用这些数字推算几何。括号尺寸保留括号，不能当成独立测量结果。完整多边形、圆角、斜坡、墙体及相互位置不能仅靠这些局部标注确定。</p>
+  <table>
+    <tr><th>位置</th><th>确切标注</th><th>已知与限制</th></tr>
+    <tr><td>表 2-9，印刷第 12 页</td><td>机库收纳外廓上限 300 × 300 × 200 mm；装载量上限 4。</td><td>是机库制作上限；不是机库放置区尺寸，更不是实际四机起飞点。最大伸展尺寸仍为待定。</td></tr>
+    <tr><td>表 2-8，印刷第 11 页</td><td>y = −0.001225x + 0.3225；y∈[0.15,0.249] kg，机器人各方向外廓不得超过 x mm。</td><td>是重量/外廓限制；不确定具体机体质量、惯量、旋翼或动力学。</td></tr>
+    <tr><td>图 3-1，印刷第 14 页 / 物理第 15 页</td><td>平面标注 2400、1394、1200；剖面踏步标注 300、300、100，立向标注 200、200、200、(600)；另一剖面另有 (800)、100、300。</td><td>局部制高点与台阶的图示标注。需要原图确认各尺寸界线与地面基准；不能由此确定全场坐标或所有连接面。</td></tr>
+    <tr><td>图 3-2，印刷第 15 页 / 物理第 16 页</td><td>800、350；剖面 200、250、270。</td><td>隧道的局部宽度/结构标注；整体长度、全场位置与完整截面仍不充分。</td></tr>
+    <tr><td>图 3-3，印刷第 16 页 / 物理第 17 页</td><td>工作台区域平面外框 450 × 750、内框 350 × 650；立向 400。</td><td>局部工作台区域标注；不确定整个补给区的轮廓和位姿。</td></tr>
+    <tr><td>图 3-4，印刷第 17 页 / 物理第 18 页</td><td>H 标记机库区域的局部外框 400 × 400、内框 320 × 320；剖面另外标注 40、(1140)、100、300。</td><td>显示红蓝机库区在中央装置两侧。未给出其在全场坐标系中的数值位置或朝向；局部外框不能作为全场比例尺。剖面标注不得简化为单一“起飞高度”。</td></tr>
+  </table>
+  <h2>仍缺失的官方地图事实</h2>
+  <p>当前任务未提供官方 2027 全场 CAD/3D、完整尺寸平面图、可复现的官方地图文件或全场坐标基准。2026-10-02 的官方域检索未确认可验证的 2027 全场模型下载。尚需官方完整尺寸/模型、场地原点与朝向、障碍物完整轮廓/高度/位置，以及选定机库的起飞位置与朝向。初始化使用已知位置先验，仿真使用精确高度输入。</p>
+  <p>官方入口：<a href="https://www.robomaster.com/">RoboMaster 官网</a>；<a href="https://bbs.robomaster.com/">官方论坛</a>。上述入口用于查询官方资料。</p>
+  <h2>校准房间配置</h2>
+  <p><a href="../maps/calibration.json">calibration.json</a> 与 <a href="../worlds/calibration.sdf">calibration.sdf</a> 使用同一右手世界坐标：米、弧度、Z 向上、零航向朝 +X。世界名为 <code>calibration_not_official_field</code>。房间内净尺寸 12 × 10 m，内侧墙面 x=±6、y=±5，z∈[0,4]；厚度 0.1 m 向房间外侧延伸。平地 z=0，无顶棚。白灰墙面与深色靶板提供渲染对比。</p>
+  <table>
+    <tr><th>交付项</th><th>约定</th></tr>
+    <tr><td>有限墙地图</td><td><code>walls</code> 数组，每段严格包含 <code>{x1,y1,x2,y2,z_min,z_max}</code>；是房间内侧表面而非墙中心线。地面、靶板和支架不在墙段中，需要估计器单独建模或拒绝相应回波。</td></tr>
+    <tr><td>四机初始先验</td><td>ID 0：(-3,-2,0.2)；ID 1：(-3,0,0.2)；ID 2：(-3,2,0.2)；ID 3：(-1,-2,0.2)。roll/pitch/yaw 均 0。坐标是此校准房间的起飞先验，加载机体时需核对底部与地面间隙。</td></tr>
+    <tr><td>两个红色模拟装甲靶</td><td><code>armor_mock_red_a</code>：(5,-2,2)；<code>armor_mock_red_b</code>：(5,2,2)，朝 −X，供朝 +X 的相机观察。每靶两根竖直红色发光条，宽 0.015 m、高 0.055 m，中心间距 0.135 m；深色板宽 0.18 m、高 0.09 m。尺寸来自模拟靶配置。</td></tr>
+    <tr><td>位姿求解几何</td><td>靶局部正面是 −X；前表面灯条中心线端点：(-0.012,-0.0675,-0.0275)、(-0.012,-0.0675,+0.0275)、(-0.012,+0.0675,+0.0275)、(-0.012,+0.0675,-0.0275)。像素左右顺序取决于相机光学坐标转换。</td></tr>
+    <tr><td>Gazebo 插件</td><td>Physics、UserCommands、SceneBroadcaster、Imu、AirPressure、NavSat、Sensors（ogre2）。插件提供系统；机器人模型中创建 IMU、气压、ToF、相机及可选 NavSat 传感器实体。NavSat 的任意零点仅供 SITL 联调，不是无锚定位观测。</td></tr>
+  </table>
+  <h2>真实性与估计器边界</h2>
+  <p>该世界文件包含场景和配置；机器人模型由启动器加载。初始先验只在初始化使用。运行期间 Gazebo 真值位姿和目标世界坐标仅供生成/评价，不能作为估计器输入；视觉算法可使用靶自身的标定尺寸。发光材质不是 GC4653 的标定辐射模型，传感器安装误差、内参、曝光和真实 VL53L5CX/UWB 行为仍需分别说明。</p>
+  <h2>许可与资产</h2>
+  <p>校准房间的 SDF 几何为盒体，材料采用数值颜色，无外部模型依赖。官方手册版权保持原权利人的声明。</p>
+  <h2>场景验证</h2>
+  <ul>
+    <li><code>gz sdf -k simulation/worlds/calibration.sdf</code>：通过，gz-sim8 的 SDF 检查报告 <code>Valid.</code>。</li>
+    <li>gz-sim 8.15.0 服务器短时加载：通过；以 <code>gz sim -s -r -v 3</code> 启动，运行 8 秒后由测试超时结束，日志确认世界 <code>calibration_not_official_field</code> 初始化并发布场景、状态和世界控制服务。</li>
+    <li>JSON/SDF 一致性检查：通过；验证了 4 段有限墙、4 个不重叠起飞先验、2 个目标位姿、灯条尺寸/间距、7 个系统插件，以及无 robot include、sensor 实体和外部 URI。</li>
+    <li>未验证：PX4 四机动力学、传感器真实话题、GC4653/VL53L5CX 噪声模型、UWB 无锚估计、视觉算法识别率和官方全场几何。</li>
+  </ul>
+  <p class="muted" id="verification">场景加载检查见上表；四机定位与飞行结果见<a href="status.html">标定房间实验记录</a>。</p>
+</main></body></html>

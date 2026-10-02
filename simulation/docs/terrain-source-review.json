@@ -1,0 +1,103 @@
+{
+  "review": {
+    "date": "2026-10-02",
+    "scope": "Bounded source review for the requested official 2027 preview terrain while parent integration remains pinned to Sentry26 rmuc2026.",
+    "workspace": "D:/Robomaster code/drone",
+    "owned_file": "simulation/docs/terrain-source-review.json"
+  },
+  "conclusion": {
+    "official_2027_complete_geometry_available": false,
+    "official_2027_full_cad_or_map_found": false,
+    "usable_baseline": "Sentry26 rmuc_2026 STL at commit 9f3ae17627cef5ca1f102a27668f8b5e78a2cdb1",
+    "terrain_policy": "Do not replace the 2026 mesh or invent a 2027 full field from preview images.",
+    "reason": "The available 2027 materials are preview/highlight documents with local feature dimensions and explicit caveats; they do not define the complete polygon, coordinate frame, placement, or full-field CAD."
+  },
+  "season_differences_confirmed": [
+    {
+      "change": "The 2026 flyover is previewed as a 2027 tunnel.",
+      "dimensions": {"outer_height_mm": 270, "outer_width_mm": 350, "interior": "2026 tunnel internal parameters stated to remain unchanged"},
+      "source": "repo-27-highlights.txt pages 34; local preview text and the 2027 preview handbook figure 3-2",
+      "limits": "Overall length, exact cross-section, placement, orientation, and all other tunnel instances are not specified by the retrieved materials."
+    },
+    {
+      "change": "The 2026 landing pad is previewed as a high point connected by three steps.",
+      "dimensions": {"step_width_mm": 300, "step_height_mm": 200, "local_figure_dimensions_mm": [2400, 1394, 1200, 300, 300, 100, 200, 200, 200, 600, 800]},
+      "source": "repo-27-highlights.txt pages 35; preview handbook figure 3-1, printed page 14 / physical page 15",
+      "limits": "The local labels do not establish the complete high-point polygon, all connecting surfaces, coordinate placement, or full-field dimensions."
+    },
+    {
+      "change": "2027 preview introduces a central two-side hangar placement area for small aerial robots.",
+      "dimensions": {"hangar_placement_local_outer_mm": [400, 400], "hangar_placement_local_inner_mm": [320, 320], "hangar_storage_limit_mm": [300, 300, 200], "capacity": 4},
+      "source": "preview handbook tables 2-7 to 2-9 and figure 3-4, printed page 17 / physical page 18",
+      "limits": "The documents do not give the placement areas’ full-field coordinates, orientation, or full central-device geometry."
+    }
+  ],
+  "other_confirmed_preview_parameters": [
+    {"item": "small aerial robot mass/extent relation", "value": "y = -0.001225x + 0.3225; y in [0.15, 0.249] kg; extent x mm", "source": "preview handbook table 2-8, printed page 11", "terrain_use": "Robot construction constraint, not field geometry."},
+    {"item": "high point effects", "value": "50% defense gain and local exchange of allowed ammunition", "source": "preview handbook section 3.1.1, printed page 14", "terrain_use": "Mechanism only; no geometry inference."},
+    {"item": "tunnel effects", "value": "Crossing and traversing have different gains; tunnel entry/internal/exit cards are described", "source": "preview handbook sections 3.2 and table 3-1, printed page 14", "terrain_use": "Mechanism only; no missing geometry inferred."}
+  ],
+  "local_evidence": [
+    {
+      "path": "simulation/docs/map-provenance.html",
+      "role": "Prior provenance record",
+      "finding": "Explicitly labels the existing calibration room as non-official and says the complete official 2027 CAD/full map was not available in the prior review."
+    },
+    {
+      "path": "simulation/maps/rm2027_preview_20260909.txt",
+      "role": "Extracted local preview handbook text",
+      "finding": "Contains the 19-page 2027 preview handbook extraction, including figures 3-1 through 3-4 and the local dimensions recorded above."
+    },
+    {
+      "path": "E:/Downloads/RoboMaster 2027 高校系列赛规则变更前瞻手册（20260909）.pdf",
+      "role": "User-provided official-branded preview handbook",
+      "sha256": "1F8FB31F9983BD6854870D038FABE0C67FF7102B7BDDF0425DEC872948AB1B19",
+      "bytes": 6388027,
+      "finding": "Preview material, not a complete 2027 field CAD or full dimensioned map."
+    },
+    {
+      "path": "downloads/Sentry26/src/simulator/rmu_gazebo_simulator/rmu_gazebo_simulator/resource/models/rmuc_2026/meshes/rmuc_2026.stl",
+      "role": "Parent integration terrain baseline",
+      "repository_commit": "9f3ae17627cef5ca1f102a27668f8b5e78a2cdb1",
+      "finding": "The Sentry26 README lists rmuc_2026 as an available simulation world; no rmuc_2027 asset was found in the checked source tree."
+    }
+  ],
+  "repo_27_review": {
+    "url": "https://github.com/striken-delta/rm-rules-kb/tree/master/rm_knowledge/27",
+    "resolved_commit_seen": "bca5a51308bbc09a317724a3b2b6913df8eb2ecf",
+    "directory_contents": ["RoboMaster 2027 规则亮点发布会（20260814）.txt"],
+    "official_highlights_source": "https://pan-sec.djicorp.com/s/Tmw3qxmykPoSnF8",
+    "official_rules_channel": "https://bbs.robomaster.com/wiki/20204847",
+    "finding": "The repository README/index says the 2027 formal rules PDF is not yet published in that knowledge base; the 27 directory contains the 2026-08-14 official highlight material."
+  },
+  "official_links_checked": [
+    {"url": "https://bbs.robomaster.com/wiki/20204847", "status": "reachable", "finding": "Official RoboMaster community resource page; no verified 2027 full CAD/map download was exposed by this bounded check."},
+    {"url": "https://pan-sec.djicorp.com/s/Tmw3qxmykPoSnF8", "status": "reachable", "finding": "Official-hosted share page identifies a PDF named 2026全国赛青工会PPT-规则发布部分.pdf, size 3.1 MB; the rules knowledge base cites this share as the source of the 2027 highlight PPT."},
+    {"url": "https://www.robomaster.com/", "status": "official_entry_point", "finding": "Official RoboMaster website entry point; no verified 2027 full CAD/map link was found in the bounded review."}
+  ],
+  "asset_inventory_result": {
+    "searched_scopes": ["simulation/assets", "simulation/maps", "downloads/Sentry26/src/simulator"],
+    "2027_cad_or_full_map_files": [],
+    "2026_terrain_files_found": ["downloads/Sentry26/src/simulator/rmu_gazebo_simulator/rmu_gazebo_simulator/resource/models/rmuc_2026/meshes/rmuc_2026.stl", "downloads/Sentry26/src/simulator/rmu_gazebo_simulator/rmu_gazebo_simulator/resource/models/rmuc_2026/materials/textures/rmuc_2026_floor.png"],
+    "images_are_not_used_as_geometry_evidence": true
+  },
+  "evidence_downloads": [
+    "downloads/rm2027-source-review/repo-27.html",
+    "downloads/rm2027-source-review/repo-27-highlights.txt",
+    "downloads/rm2027-source-review/README.md",
+    "downloads/rm2027-source-review/rm_knowledge-README.md",
+    "downloads/rm2027-source-review/rm_knowledge-index.json",
+    "downloads/rm2027-source-review/official-wiki.html",
+    "downloads/rm2027-source-review/official-ppt-share.html"
+  ],
+  "next_required_official_artifacts": [
+    "Final 2027 rules/terrain handbook with complete dimensioned field plan",
+    "Official 2027 CAD/3D mesh or reproducible map asset",
+    "Field coordinate origin, orientation, and placement coordinates for all terrain and hangar regions"
+  ],
+  "guardrails": [
+    "No active scene, algorithm, launcher, or GUI was edited.",
+    "No 2027 geometry was generated from preview images.",
+    "The existing calibration room remains a non-official test scene."
+  ]
+}

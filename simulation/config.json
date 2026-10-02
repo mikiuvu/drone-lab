@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "mission": {
+    "mode": "localization",
+    "explorer_vehicle": 0,
+    "policy": "Four-vehicle localization. Armor guidance disabled; selected map supplies optional prior survey waypoints."
+  },
+  "purpose": "Real Gazebo + four PX4 SITL instances with static terrain localization and anchor-free peer ranging.",
+  "height_input": {
+    "source": "SIM_HEIGHT_ASSIST",
+    "authorized_by_user": true,
+    "reference": "Gazebo world ENU z in meters",
+    "truth_fields_allowed": ["z_world_m"],
+    "horizontal_truth_allowed": false
+  },
+  "companion": {
+    "camera": {
+      "fx_px": 320.0,
+      "fy_px": 320.0,
+      "cx_px": 319.5,
+      "cy_px": 179.5,
+      "strip_center_separation_m": 0.135
+    }
+  },
+  "limitations": [
+    "Known spawn used once for initialization; height assisted thereafter.",
+    "Sentry26 2026 terrain reference.",
+    "Micro dynamics use reference propulsion parameters.",
+    "No NPU emulation or hardware timing equivalence."
+  ]
+}

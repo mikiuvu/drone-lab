@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "name": "calibration_not_official_field",
+  "label": "标定房间",
+  "official_field": false,
+  "provenance": "User-defined calibration geometry; no geometry reconstructed from RoboMaster preview images.",
+  "world_file": "../worlds/calibration.sdf",
+  "units": {
+    "length": "m",
+    "angle": "rad"
+  },
+  "frame": {
+    "name": "world",
+    "handedness": "right",
+    "z": "up",
+    "camera_forward": "+X",
+    "yaw_zero": "+X",
+    "yaw_positive": "+X toward +Y"
+  },
+  "room": {
+    "interior_length_x": 12.0,
+    "interior_width_y": 10.0,
+    "wall_height": 4.0,
+    "wall_thickness": 0.1,
+    "floor_z": 0.0,
+    "ceiling": false
+  },
+  "wall_segment_convention": "Finite room interior faces. Endpoints are not wall centerlines. Heights are closed intervals in world coordinates. Ground, targets and their supports are excluded from this wall-only map.",
+  "walls": [
+    {
+      "x1": -6.0,
+      "y1": -5.0,
+      "x2": -6.0,
+      "y2": 5.0,
+      "z_min": 0.0,
+      "z_max": 4.0
+    },
+    {
+      "x1": 6.0,
+      "y1": -5.0,
+      "x2": 6.0,
+      "y2": 5.0,
+      "z_min": 0.0,
+      "z_max": 4.0
+    },
+    {
+      "x1": -6.0,
+      "y1": -5.0,
+      "x2": 6.0,
+      "y2": -5.0,
+      "z_min": 0.0,
+      "z_max": 4.0
+    },
+    {
+      "x1": -6.0,
+      "y1": 5.0,
+      "x2": 6.0,
+      "y2": 5.0,
+      "z_min": 0.0,
+      "z_max": 4.0
+    }
+  ],
+  "initialization": {
+    "type": "configured_spawn_prior",
+    "source": "Configured initial positions in calibration-room coordinates.",
+    "height_input": "Exact configured world height in metres.",
+    "estimator_restriction": "Use these priors once at initialization. Live engine poses and target world poses are evaluator/spawner data, not estimator observations."
+  },
+  "spawns": [
+    {
+      "id": 0,
+      "x": -3.0,
+      "y": -2.0,
+      "z": 0.2,
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    {
+      "id": 1,
+      "x": -3.0,
+      "y": 0.0,
+      "z": 0.2,
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    {
+      "id": 2,
+      "x": -3.0,
+      "y": 2.0,
+      "z": 0.2,
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    {
+      "id": 3,
+      "x": -1.0,
+      "y": -2.0,
+      "z": 0.2,
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    }
+  ],
+  "target_geometry": {
+    "name": "competition_armor_mock",
+    "official_dimensions": false,
+    "dimension_source": "Synthetic calibration target configuration.",
+    "strip_color": "red",
+    "strip_width": 0.015,
+    "strip_height": 0.055,
+    "strip_thickness": 0.006,
+    "strip_center_separation": 0.135,
+    "panel_width": 0.18,
+    "panel_height": 0.09,
+    "panel_thickness": 0.012,
+    "local_front_normal": [
+      -1.0,
+      0.0,
+      0.0
+    ],
+    "local_strip_centers": [
+      [
+        -0.009,
+        -0.0675,
+        0.0
+      ],
+      [
+        -0.009,
+        0.0675,
+        0.0
+      ]
+    ],
+    "local_front_center_endpoints": [
+      [
+        -0.012,
+        -0.0675,
+        -0.0275
+      ],
+      [
+        -0.012,
+        -0.0675,
+        0.0275
+      ],
+      [
+        -0.012,
+        0.0675,
+        0.0275
+      ],
+      [
+        -0.012,
+        0.0675,
+        -0.0275
+      ]
+    ],
+    "endpoint_order": "strip at negative local Y bottom/top, strip at positive local Y top/bottom; image left/right depends on optical-frame conversion",
+    "rendering_limit": "Emissive material creates rendered colored strips; radiometry, bloom, camera intrinsics and exposure are not hardware calibrated."
+  },
+  "targets": [
+    {
+      "id": "armor_mock_red_a",
+      "x": 5.0,
+      "y": -2.0,
+      "z": 2.0,
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "geometry": "competition_armor_mock",
+      "purpose": "spawner/evaluator only"
+    },
+    {
+      "id": "armor_mock_red_b",
+      "x": 5.0,
+      "y": 2.0,
+      "z": 2.0,
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "geometry": "competition_armor_mock",
+      "purpose": "spawner/evaluator only"
+    }
+  ],
+  "sensor_systems": {
+    "physics": true,
+    "user_commands": true,
+    "scene_broadcaster": true,
+    "imu": true,
+    "air_pressure": true,
+    "rendered_sensors": "ogre2",
+    "navsat": true,
+    "note": "Systems do not create sensors. Parent robot models supply sensor elements. NavSat is available for SITL plumbing; it is not an anchor-free localization observation."
+  },
+  "limitations": [
+    "No ceiling. Returns above z=4 or beyond segment endpoints cannot be matched to room walls.",
+    "Ground and mock-target returns require separate models or rejection by the estimator.",
+    "Repeated target appearance does not establish target identity."
+  ],
+  "vehicle_waypoints": {
+    "0": [
+      {
+        "x": -3,
+        "y": -3.7
+      },
+      {
+        "x": 2.5,
+        "y": -3.7
+      },
+      {
+        "x": 3.2,
+        "y": -2
+      }
+    ],
+    "1": [],
+    "2": [],
+    "3": []
+  },
+  "waypoint_provenance": "Hand-authored prior-map calibration routes, not live target or vehicle truth. Endpoint is acquisition region, final guidance uses rendered pixels."
+}

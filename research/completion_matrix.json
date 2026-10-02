@@ -1,0 +1,13 @@
+{
+  "scope_statement": "按用户澄清，当前交付为无实物的电脑仿真和实现准备。板上性能、飞行适航和正式规则合规不在已验证结论内。",
+  "requirements": [
+    {"request":"分析 RV 同时运行视觉与导航定位的可行性","evidence":["docs/research/compute.html","research/sources/compute/evidence.json","research/compute.py","tests/test_compute_research.py"],"acceptance":"官方资源约束、模型/相机适配、队列及内存条件、替代路线和板上测试门槛均说明；不声称实际吞吐"},
+    {"request":"解释最终代码具体实现","evidence":["docs/research/implementation.html","research/integration.py","research/uncertainty.py","research/control_policy.py"],"acceptance":"模块职责、输入输出、时间/坐标/协方差/模式切换合同与可执行边界示例；生产实现缺口单列"},
+    {"request":"其他风险预研与提前解决","evidence":["research/risk_register.json","docs/research/collector-audit.html","docs/research/image-audit.html","nano/main.c","nano/platform.c","scripts/check_collector.py"],"acceptance":"已识别计算/感知/接口/驱动/规则/机械/多机风险；可复现软件缺陷修复，物理门槛有具体验证方法"},
+    {"request":"有意义的电脑仿真","evidence":["research/compute.py","research/geometry.py","research/bandwidth.py","research/control_policy.py","research/results/baseline.json"],"acceptance":"模型输入、假设、解析/故障边界测试与可重跑结果完整，已知关联与理想射线局限明确"},
+    {"request":"方便控制查看后续调试的图形界面","evidence":["app/research_panel.py","tests/test_research_gui.py","scripts/preview_research.py","docs/research/ui-overview.png"],"acceptance":"实验台新增预研页面可改参数运行保存结果，中文结果与总览可读，后台错误可见"},
+    {"request":"推荐 3–5 个 sol 子代理并使用 fast","evidence":["V1 agent IDs recorded in verification.json"],"acceptance":"实际使用3个 my/gpt-6.1-sol V1子代理并独立复核；并发上限为主+3，接口无显式fast参数，未虚称开启"},
+    {"request":"当前先做 PC 准备，未连接实物","evidence":["docs/research/index.html","docs/research/image-audit.html"],"acceptance":"没有飞控刷写/解锁/飞行，没有把PC运行时或文件存在当板上验证"}
+  ],
+  "known_next_stage_gates": ["相机准确型号与FPC/ISP驱动","实际模型转换和定点误差","Nano负载/内存/VB/温度/电源测量","独立真值轨迹与真实场地材料覆盖","连续里程计来源","定制PX4输入配置与SITL/台架","规则与机库无线权限"]
+}

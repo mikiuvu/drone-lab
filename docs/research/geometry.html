@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>双 VL53L5CX：覆盖与平面位姿可观测性</title>
+<style>
+body{margin:0;background:#f3f5f7;color:#202d3d;font:16px/1.75 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1000px;margin:32px auto;padding:32px;background:white;border-radius:12px}h1{font-size:29px;line-height:1.4}h2{font-size:22px;margin-top:34px}p{margin:12px 0}a{color:#185ea4}table{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}th,td{padding:10px;border:1px solid #d9e0e8;text-align:left;vertical-align:top}th{background:#eef3f8}code{font-family:Consolas,monospace;background:#edf2f6;padding:1px 4px}pre{overflow:auto;background:#edf2f6;padding:16px;line-height:1.6;font-size:14px}.note{padding:14px 18px;border-left:4px solid #3779a8;background:#eef6fc}.warn{border-color:#bc8731;background:#fff7e8}.muted{color:#59697b}li{margin:6px 0}@media(max-width:700px){main{margin:0;padding:18px}table{display:block;overflow:auto}h1{font-size:24px}}
+</style></head><body><main>
+<p class="muted">研究实验 · 2026-10-02 · 无硬件连接 · 合成布局，非 RM2027 官方场地</p>
+<h1>两枚 8×8 ToF 能约束哪些位姿方向？</h1>
+<p>在这个局部、已知地图的实验中，直角高墙可约束 x、y、yaw；单墙丢失沿墙平移，平行走廊丢失纵向平移，开阔区没有距离观测。增加分区数量不能补回缺失的几何方向。默认 2.5 m 高度、水平安装、3 m 物理距离上限时，0.3 m 和 1.1 m 低墙均无返回。</p>
+<div class="note warn">这是安装覆盖和局部退化的实验。它没有验证真实 VL53L5CX 精度、地图关联、SLAM、飞行控制，也没有测量 SG2002 CPU 或 NPU 性能。所有场景都由本模块手工定义。</div>
+<h2>视场：65° 是对角，不是水平</h2>
+<p>ST 数据手册列 65° 对角 FoV，并在 Table 2 分别列 45° 水平/垂直 FoV <a href="#S1">[S1]</a>。默认模型先采用理想方形透视投影，根据对角角度构造相同的水平/垂直轴角：</p>
+<pre>tan(θdiag / 2) = √2 · tan(θaxis / 2)
+θaxis = 2 atan[tan(65° / 2) / √2] = 48.5009°
+u, v ∈ {±1/8, ±3/8, ±5/8, ±7/8} · tan(θaxis / 2)
+dlocal = normalize([1, u, v])</pre>
+<p>48.5009° 是上述理想投影的计算结果，不能替代数据手册中的 45°，也不能声称是真实镜头的精确覆盖。设置 <code>fov_model="datasheet_axes"</code> 可用 45° 轴角作对照。数据手册的检测体积依赖环境与配置，其表内值对应规定测试条件；两种理想模型都需要实测分区方向和安装外参。</p>
+<p>每个分区是一个有限脚印，并不是一条细激光。ST 员工对光场投影和接收方向的说明见 <a href="#S2">[S2]</a>。这里仅采样分区中心；默认理想投影在 3 m 光轴深度处，每区横向宽度约 <code>2 × 3 × tan(24.2505°) / 8 = 0.338 m</code>。墙边、窄柱、装甲板可能只覆盖分区的一部分，中心命中与真实输出不是一回事。</p>
+<h2>三维射线与有限高度墙面</h2>
+<p>坐标为 x 前、y 左、z 上，正俯仰指向上方。两枚传感器默认沿 x 轴相隔 0.08 m，第二枚偏航 90°。高度已知，机体横滚/俯仰也作为已知量；只估计平面位姿 <code>p=(x,y,ψ)</code>。</p>
+<pre>Rbody = Rz(ψ) Ry(-body_pitch) Rx(body_roll)
+Rsensor = Rz(sensor_yaw) Ry(-mount_pitch) Rx(mount_roll)
+o = [x,y,height] + Rbody · sensor_offset
+d = Rbody · Rsensor · dlocal
+t = n · (wall_anchor - o) / (n · d)
+hit = o + t · d</pre>
+<p>仅保留 <code>t &gt; 0</code>、<code>t ≤ max_range_m</code>、墙段内且 <code>z_min ≤ hit_z ≤ z_max</code> 的命中，并选择最近墙面。墙是竖直有限矩形；没有地面、顶板或低结构的水平顶面。因此本实验说明的是竖直面覆盖，不是完整障碍物检测。</p>
+<p>默认输出模式为 <code>axial</code>：<code>measurement = t × dlocal_x</code>；<code>radial</code> 模式直接输出 t。ST 员工说明 L5CX 有片上 radial-to-perpendicular 转换 <a href="#S2">[S2]</a><a href="#S3">[S3]</a>。实际固件可能采用逐区修正，本模型只是理想投影，接入硬件前必须确认距离定义。<code>max_range_m</code> 无论在哪种模式都截断物理径向距离，不是 ULD 原始距离门限。</p>
+<p>水平安装时，甚至整个理想视场的最低包络也是 <code>2.5 − 3 sin(48.5009°/2) = 1.2678 m</code>，高于 1.1 m。因此在此范围内，默认姿态不可能命中这两种低竖直面。分区中心还比全视场边缘更靠上。采用 45° 轴角也不会改变这个默认漏检结论。改变安装俯仰或飞机倾角后必须重新计算；这个包络公式只适用于水平姿态。</p>
+<h2>局部可观测性如何计算</h2>
+<p>每个命中使用已知墙面关联，预测沿原分区方向到该墙面的距离。计算中心差分雅可比时冻结关联；不重新切换墙面，不把有无返回或有限端点切换当成平滑距离观测。这样单墙和走廊的退化不会被离散可见性事件掩盖。</p>
+<pre>q = (x, y, L ψ),  L = yaw_length_scale_m = 1 m
+Jq[:,j] = [h(q+εej) − h(q−εej)] / (2ε),  ε=10⁻⁵ m
+Jgeometry = Jq / √N
+σ = SVD(Jgeometry)
+rank = count(σ &gt; max(10⁻⁷, 10⁻⁶ σmax))</pre>
+<p>显式长度 L 避免把“每米”和“每弧度”的敏感度直接混在一起。除以 √N 让重复相同分区不凭数量放大几何指标；<strong>这些奇异值不是信息协方差、置信度或实际定位精度</strong>。改变 L 会改变奇异值和条件数，几何秩通常不变。秩 3 只表示这一位置、姿态和关联附近可局部辨识，不能保证全球唯一、关联正确或连续航迹可用。</p>
+<h2>默认运行结果</h2>
+<p>参数为 <code>height_m=2.5, max_range_m=3, mount_pitch_deg=0, yaw_separation_deg=90, noise_mm=30</code>。当前位姿为 (0,0,0)，高墙高 4 m，位于 x=2 或 y=2；走廊墙位于 y=±1。所有墙段有限且足够长，端点可见性未用于估计。</p>
+<table><thead><tr><th>合成场景</th><th>传感器 0 / 1 命中</th><th>秩 / 3</th><th>最小奇异值</th><th>缺失方向或说明</th></tr></thead><tbody>
+<tr><td>单面高墙</td><td>64 / 0</td><td>2</td><td>0</td><td>沿墙 y 平移</td></tr>
+<tr><td>直角高墙</td><td>64 / 64</td><td>3</td><td>0.510101</td><td>已知关联下局部可辨识</td></tr>
+<tr><td>平行走廊</td><td>16 / 64</td><td>2</td><td>0</td><td>纵向 x 平移，理想场景中完全无约束</td></tr>
+<tr><td>开阔区</td><td>0 / 0</td><td>0</td><td>0</td><td>无范围内墙面</td></tr>
+<tr><td>0.3 m 低结构</td><td>0 / 0</td><td>0</td><td>0</td><td>射线在低墙之上通过</td></tr>
+<tr><td>1.1 m 低结构</td><td>0 / 0</td><td>0</td><td>0</td><td>射线在低墙之上通过</td></tr>
+</tbody></table>
+<p><strong>俯仰对照：</strong>这里正俯仰向上，<code>+30°</code> 仍使两种低墙无返回；界面不应把它标为下俯。保持默认高度和距离，<code>−30°</code> 下俯使 1.1 m 低墙命中 28 个分区中心、秩 3，但 0.3 m 低墙仍为 0。一个刻意覆盖两种低墙的组合是 <code>height_m=2.5, mount_pitch_deg=−40, max_range_m=4</code>：0.3 m / 1.1 m 低墙分别命中 16 / 48 个中心，两者局部秩均为 3。4 m 在这里仅是几何假设，未保证真实材质和环境下的有效测距。见 <a href="../../research/sources/geometry/downward_40deg_range4m.json">下俯对照快照</a>。</p>
+<p>直角墙的默认 24 次蒙特卡洛中，平移 RMSE 为 0.03211 m，yaw RMSE 为 0.16376°。噪声标准差假定为 30 mm，同传感器分区相关系数为 0.6，种子为 2027（各场景用加序号的种子）。默认相关性比完全独立分区的假设更保守，但 0.6 没有实测保证；可用 1.0 对照完全共同噪声。共同偏差、混合像素和错误关联仍可能更差。这些数值只说明给定噪声假设如何传播；它们是理想中心射线、准确外参、已知地图和关联、较好初值下的乐观结果。其他不可观测场景不输出完整位姿 RMSE。</p>
+<p>固定偏差不会随分区数量消失：测试中共享 +50 mm 距离偏差在直角墙场景造成 x、y 各约 −50 mm 偏差。若飞机以 1 m/s 沿 x 移动，100 ms 旧帧且不补偿时间，零噪声估计位置偏差为 −0.1 m。时延参数是合成采集年龄，不是电脑执行时间。</p>
+<p>Windows 电脑上默认运行约 0.11 s，集成耗时要求为小于 2 s。实际运行时间依机器、环境和额外蒙特卡洛次数变化。可复核数据保存在 <a href="../../research/sources/geometry/default_result.json">结果快照</a> 与 <a href="../../research/sources/geometry/verification.json">验证记录</a>。</p>
+<h2>给实验界面的接口</h2>
+<pre>from research.geometry import DEFAULT_CONFIG, run_geometry
+result = run_geometry({"mount_pitch_deg": -30})
+# result["summary"]     中文汇总
+# result["metrics"]     指标字典，缺失精度为 None
+# result["assumptions"] 人可读假设
+# result["scenarios"]   六个场景、命中、秩、奇异值、MC 和绘图数据</pre>
+<p>结果可以用 <code>json.dumps(result, allow_nan=False)</code> 严格序列化；没有 NaN 或 Infinity。<code>scene.walls</code> 提供墙段及高度，<code>scene.hits</code> 提供三维命中、分区编号和墙面关联；<code>ray // 64</code> 为传感器编号，<code>ray % 64</code> 为合成分区编号。物理 zone 编号不应套用这个合成索引。</p>
+<table><thead><tr><th>可选参数</th><th>默认值</th><th>含义</th></tr></thead><tbody>
+<tr><td>fov_model / diagonal_fov_deg</td><td>diagonal_square / 65</td><td>理想对角投影；datasheet_axes 使用 45° 轴角</td></tr>
+<tr><td>distance_mode</td><td>axial</td><td>光轴深度；radial 为径向对照</td></tr>
+<tr><td>body_roll_deg / body_pitch_deg / mount_roll_deg</td><td>0 / 0 / 0</td><td>已知机体姿态和安装横滚</td></tr>
+<tr><td>sensor_baseline_m / yaw_length_scale_m</td><td>0.08 / 1</td><td>传感器 x 向基线；归一化 yaw 长度尺度</td></tr>
+<tr><td>noise_correlation / bias_mm</td><td>0.6 / 0</td><td>同传感器分区共享高斯噪声比例；两传感器共用固定偏差</td></tr>
+<tr><td>latency_ms / sensor_skew_ms</td><td>0 / 0</td><td>传感器 0 年龄；传感器 1 额外年龄，估计器不补偿</td></tr>
+<tr><td>velocity_x_m_s / velocity_y_m_s / yaw_rate_deg_s</td><td>0 / 0 / 0</td><td>生成旧帧的已知合成匀速运动</td></tr>
+<tr><td>monte_carlo_trials / seed</td><td>24 / 2027</td><td>最多 128 次；0 可关闭。独立 RNG 不改变全局随机状态</td></tr>
+</tbody></table>
+<p>未知参数、非有限数值、负距离/噪声、不合法视场、过多试验等会抛出 <code>ValueError</code>，由主界面展示输入错误。导入和调用不会写文件或连接设备；模块依赖 NumPy，不依赖 Matplotlib。报告快照由验证命令单独生成。</p>
+<h2>从模拟到硬件还缺什么</h2>
+<ol>
+<li>逐区光学方向、输出距离定义、安装外参、机体姿态和高度的误差标定。已知高度/姿态的假设可能掩盖真实耦合。</li>
+<li>分区有效状态、信号强度、反射率、环境光、窗口、互扰、多目标与混合像素。中心射线可能漏掉真实可见物体，也可能把部分覆盖误当稳定平面。</li>
+<li>噪声的空间/时间相关性及系统偏差。当前只加入帧内同传感器等相关高斯噪声；跨传感器相关、时间相关与重尾离群点未建模。</li>
+<li>未知数据关联、地图误差、场地对称性、移动障碍和反复遮挡。当前蒙特卡洛提前知道正确墙面，无法评估关联失败。</li>
+<li>不同采集时间的时间戳、姿态插值和融合。演示时延只影响 x/y/yaw，未模拟 roll/pitch/高度随时间变化。</li>
+<li>连续运动中弱方向的补充观测，以及视觉、IMU、可选 UWB 的质量与失效处理。本模块没有融合这些传感器，不能直接给出最终飞行估计器架构的验证结论。</li>
+</ol>
+<h2>验证和资料</h2>
+<p>测试覆盖可手算射线交点、墙高和端点边界、最近面、对角到轴向换算、三维安装旋转、轴向/径向距离、单墙/走廊零空间、yaw 尺度、重复观测归一化、低墙漏检、零噪声恢复、偏差/时延、固定种子、严格 JSON 与参数校验。</p>
+<pre>.venv/Scripts/python.exe -B -m pytest tests/test_geometry_research.py -q -p no:cacheprovider</pre>
+<p id="S1"><strong>[S1]</strong> STMicroelectronics，<a href="https://www.st.com/resource/en/datasheet/vl53l5cx.pdf">VL53L5CX datasheet DS13754</a>，版本 Rev 13，2024-09；Features、Table 2、2.2 Field of view。访问 2026-10-02。</p>
+<p id="S2"><strong>[S2]</strong> ST Community / ST 员工 John E KVAM，<a href="https://qa-community.st.com/topic/show?fid=48&amp;tid=7106">For VL53L5CX: what does ResultsData-&gt;distance_mm[ZoneNum] exactly mean?</a>，2022-02-17；分区光场和片上距离转换的解释。</p>
+<p id="S3"><strong>[S3]</strong> ST Community / ST 员工 John E KVAM，<a href="https://community.st.com/imaging-sensors-49/vl53l5cx-driver-implementation-129686">VL53L5CX driver implementation</a>，2024-03-18；垂直于墙面时各区输出相同距离的说明，需按实际固件确认。</p>
+</main></body></html>

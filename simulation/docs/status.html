@@ -1,0 +1,16 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Gazebo 四机当前验证状态</title><style>body{font:16px 'Microsoft YaHei UI',sans-serif;line-height:1.8;max-width:1050px;margin:32px;color:#19334b}table{border-collapse:collapse}td,th{border:1px solid #cbdce8;padding:10px}h1,h2{color:#126884}code{background:#eef3f8}</style>
+<h1>真实 Gazebo + PX4 SITL 四机仿真</h1>
+<p><b>2026-10-02 全场地形更新：</b><a href="terrain-localization.html">完整场地与多机定位操作说明及最新验证结果</a>。下方为先前标定房间的验证记录。</p>
+<p>当前已运行实际 Gazebo 8.15.0 物理/渲染引擎、PX4 v1.15.4 四个实例、四份 C++ 伴随程序。算法接收渲染的深度/相机图像与带噪声的机间距离方位，不使用水平位置/航向真值。高度辅助使用 SIM_HEIGHT_ASSIST。</p>
+<h2>准确高度通道</h2>
+<p>height_assist.z_world_m 来自 Gazebo 世界坐标 z，source=SIM_HEIGHT_ASSIST，不携带 x/y/yaw/速度真值。PX4 EKF 仍执行融合，因此“准确输入”不意味着内部估计无延迟无滤波误差。四实例独立测试已验证 cs_ev_hgt=true、cs_gps=false、采样误差小于0.1m。证据在 simulation/runtime/height_fusion_verified.json。临时测试适配器仅允许 EKF2_EV_CTRL=2，避免把无效x/y占位值融合。</p>
+<h2>已经通过的实际运行</h2><table><tr><th>试验</th><th>结果</th><th>边界</th></tr>
+<tr><td>真实渲染传感器</td><td>四机28个ToF/UWB/高度通道，各至少5帧；四路RGB图片；理想平面轴向深度最大偏差约0.00071m。</td><td>8×8像素中心理想测距，不是硅器件完整光学仿真；UWB不是电磁传播求解器。</td></tr>
+<tr><td>四机起飞/悬停</td><td>run_20261002_184009，30秒；高度约1.67–1.69m，平面定位RMSE约2.5–3.1cm。</td><td>180g参考动力学，人工标定房间，理想高度辅助。</td></tr>
+<tr><td>四机定位，单机视觉对准</td><td>run_20261002_185621，65秒；0号沿航路到(3.80,-2.18,2.00)m，在靶标前约1.2m根据像素对准；其余三机保留结构参考。RMSE约1.4–2.5cm。</td><td>只完成单探索机，其余机提供自身结构估计；未完成四机同时制导或撞击。</td></tr></table>
+<h2>失败记录和修复</h2><ul><li>微型机CA_ROTOR_CT=1使PX4弱控制轴阈值清除全部扭矩，四电机相同输出。改CT=20统一缩放后恢复，物理motorConstant不变。</li><li>Eigen临时表达式悬空导致ODOMETRY位置变零，已改为显式向量，并加入编解码验证。</li><li>旧结构信息不断刷新导致整队共同漂移；改为只对当前可观测方向提供新有效性，机间只采用独立结构约束的队友。</li><li>所有飞机同时离开可观测区的移动试验失败，保留184356/184829日志。</li><li>参考机体传感器原点低于地面接触点，已移至机体z=0并统一生成器/算法配置。</li></ul>
+<h2>使用入口</h2><p>重新打开桌面 Drone Lab →“⑦ Gazebo 四机”。点击启动会加载真实场景、飞控、传感器和四个伴随进程；默认不解锁。勾选虚拟起飞才发送到回环地址的SITL控制指令。三颗ToF可选择水平或下俯20°。当前已验证的任务是0号探索、其余保留参考；可在simulation/config.json选择explorer_vehicle，其他编号尚未逐一飞行验证。</p>
+<p>点击停止会结束本次管理的进程组。真值独立写入 truth_evaluation_only.jsonl，仅评估器使用。companion_i.jsonl是算法估计与制导记录。现场生效外参保存在每次运行的companion_config.json。</p>
+<h2>代码与硬件对应</h2><p>simulation/companion 中 estimator、vision与协议代码可同时编译x86与RV。已产出RISC-V静态可执行文件；尚未在RV硬件运行。当前适配器为UDP/PPM，真实硬件还需VL53驱动/GC4653 SDK/UWB SPI输入适配。相机像素检测采用传统条带参考算法。</p>
+<h2>适用范围与验证条件</h2><ul><li>2027官方完整场地CAD或全场尺寸缺失；calibration.sdf为标定房间，见<a href="map-provenance.html">来源记录</a>。</li><li>四机同时运动/参考接替、多机防撞与协同图优化仍需实现和长时验证。</li><li>视觉终端当前停在约1.2m进行对准，不包括装甲接触判定、撞击动作和撞后恢复。</li><li>GC4653滚动快门、曝照/ISP、ToF混合像素材料反射、UWB多径及真实测角歧义仅部分近似，均待标定。</li><li>无硬件定时/NPU/功耗仿真，真实板上实时性仍需测量。</li></ul>
+</html>

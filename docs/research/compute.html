@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SG2002 视觉与定位并行研究 · 离线计算实验</title>
+<style>
+:root{color-scheme:light;--ink:#172a39;--accent:#075f69;--line:#d2dce0;--paper:#fff;--muted:#475b66}
+*{box-sizing:border-box}body{font:16px/1.75 "Microsoft YaHei",system-ui,sans-serif;background:#edf3f5;color:var(--ink);margin:0}
+main{max-width:1120px;margin:28px auto;padding:32px 40px;background:var(--paper);border-radius:14px;box-shadow:0 8px 30px #17384512}
+h1{font-size:30px;line-height:1.4;margin:0 0 12px}h2{font-size:23px;margin-top:32px;border-bottom:2px solid var(--line);padding-bottom:6px}h3{font-size:18px;margin:24px 0 8px}
+p{margin:12px 0}a{color:var(--accent);overflow-wrap:anywhere}code{font-family:Consolas,monospace;background:#f0f4f5;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:#112c36;color:#eff9fc;border-radius:8px;overflow:auto;line-height:1.5}pre code{background:none;color:inherit;padding:0;white-space:pre}
+.note{border-left:4px solid var(--accent);padding:12px 18px;background:#e9f5f4}.warn{border-left-color:#b67805;background:#fff4db}.small{font-size:13px;color:var(--muted)}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px;margin:14px 0}th,td{padding:10px;border:1px solid var(--line);vertical-align:top;text-align:left}th{background:#e9f1f3;white-space:nowrap}tbody tr:nth-child(even){background:#f8fbfc}nav{display:flex;gap:14px;flex-wrap:wrap;font-size:14px}.flow{background:#eaf5f4;border:1px solid var(--line);padding:14px;border-radius:8px}.pill{display:inline-block;border-radius:12px;background:#eef1f4;padding:2px 10px;font-size:13px;margin-right:6px}li{margin:6px 0}
+@media(max-width:700px){main{margin:0;padding:22px 16px;border-radius:0}h1{font-size:25px}table{font-size:13px}}@media print{body{background:white}main{box-shadow:none;margin:0;padding:0}nav{display:none}h2{break-after:avoid}tr{break-inside:avoid}}
+</style>
+</head>
+<body><main>
+<h1>SG2002 同时处理视觉与定位：条件、队列与测量计划</h1>
+<p><span class="pill">研究日期：2026-10-02</span><span class="pill">无板卡连接</span><span class="pill">标准库离散事件仿真</span></p>
+<div class="note"><strong>当前结论：</strong>可先在 PC 准备“定位定期计算＋视觉最新帧＋独立 NPU 服务”的实现。是否能在 LicheeRV Nano 上满足装甲识别和视觉伺服需求，必须由指定摄像头、模型、固件和温度下的实测决定。1 TOPS 与仿真中的 18 ms 均不能证明板端帧率或实时性。</div>
+<p>对象为 DM-FC01＋LicheeRV Nano SG2002＋两颗 VL53L5CX，包含摄像头和可选 UWB 的计算预算。接口准入检查包括时间戳、坐标系与协方差。</p>
+<nav><a href="#hardware">官方约束</a><a href="#pipeline">数据路径</a><a href="#simulation">仿真与复现</a><a href="#profiling">上板追踪</a><a href="#decision">建议门槛</a><a href="#sources">资料证据</a></nav>
+
+<h2 id="hardware">官方资料能确认什么</h2>
+<div class="scroll"><table><thead><tr><th>项目</th><th>官方证据</th><th>实现含义与尚待验证项</th></tr></thead><tbody>
+<tr><td>CPU 架构与核数</td><td>板卡规格列出主核 1 GHz C906 / A53 可选、小核 700 MHz C906、另有低功耗 8051。[<a href="#S1">S1</a>]</td><td>选 RISC-V 镜像才使用 riscv64 ABI；ARM A53 是替代主核选项，不能与 C906 算作额外可用核。主核选择见构建目标。[<a href="#S2">S2</a>] 本仿真仅假设一个 Linux CPU 服务台；不能从“双核”规格推出 Linux SMP 或两个可调度应用核。上板核对 <code>uname -m</code>、<code>/proc/cpuinfo</code>、CPU online/affinity。</td></tr>
+<tr><td>镜像与 ABI</td><td>当前 SG2002 Nano defconfig 为 RISC-V、musl 工具链，<code>CONFIG_KERNEL_SRC_5.10=y</code>；FreeRTOS enable 行被注释。[<a href="#S4">S4</a>]</td><td>小核预留地址不代表当前镜像已启用 FreeRTOS，也不代表能承担任意 Linux 线程。已下载的 <code>images/nano-official</code> / Sipeed 20260114 镜像没有在此研究中解包核实；不能把在线 main 分支参数说成该镜像实测。</td></tr>
+<tr><td>NPU 算力</td><td>标称 1 TOPS INT8，支持 BF16。[<a href="#S1">S1</a>]</td><td>TOPS 不包括 CPU 采集、解码、格式转换、后处理、跟踪、I2C、定位、模型加载与内存竞争。BF16 性能不能从 INT8 TOPS 直接推算；检测器 input shape、算子、量化与数据布局都影响延迟。</td></tr>
+<tr><td>可用内存</td><td>在线内存图：DRAM 256 MiB、FreeRTOS 地址段 2 MiB、ION 105 MiB、boot logo/framebuffer 8000 KiB。[<a href="#S3">S3</a>]</td><td>256 MiB 不能全分给应用堆；简单做 256−2−105=149 MiB 也不能当作 MemAvailable，还存在 framebuffer、内核与其他保留区，且共享/复用关系需核对 DTS 与运行时。ION 内还列有 ISP/码流子区，应避免再把这些子区当独立额外消耗相加。实际依据：启动日志、DTS、MemAvailable、进程 PSS 与 VB/ION 池。</td></tr>
+<tr><td>摄像头与驱动</td><td>板卡有 MIPI CSI，说明中提供 <code>sample_vio 6</code> 和 <code>sensor_test</code>；当前 defconfig 启用了 GC4653、SC035GS 等传感器选项。[<a href="#S1">S1</a>, <a href="#S4">S4</a>, <a href="#S5">S5</a>]</td><td>驱动被列入源码不等于任意摄像头可插即用。需匹配 FPC 针序、供电、电平、lane、MCLK、I2C、sensor/ISP tuning 与实际镜像库；SDK 相机可能走 VI/ISP/VPSS，而非通用 <code>/dev/video0</code>。运行配置路径见 sensor_cfg.ini。[<a href="#S12">S12</a>] 不把双 CSI 支持等同于两颗 ToF 的接线能力。</td></tr>
+</tbody></table></div>
+
+<h3>NPU 工具链与算子：以确切图的转换为关口</h3>
+<p>Sophgo CV18xx 指南描述 ONNX/Caffe 输入、BF16 与对称 INT8、校准和 <code>.cvimodel</code> 生成；其当前章节声明 CV18xx 不支持 TFLite 输入。[<a href="#S6">S6</a>] 这是该章节/版本的能力范围，并非对所有未来编译器的永久断言。Nano SG2002 使用 CV18xx 相关 SDK，具体 target、runtime 与工具链版本必须按该镜像的样例核对，不能直接把指南的 CV183x 示例 target 套到 Nano。</p>
+<ol>
+<li>固定模型权重/ONNX 的 SHA256、输入分辨率、batch=1、通道顺序、归一化及 compiler/runtime 版本；先做主机 FP32 对照，保留检测坐标与置信度误差。</li>
+<li>在已匹配的 TPU-MLIR 环境进行 <code>model_transform</code>，检查每个图节点的 lowering；INT8 使用代表实际曝光、运动模糊、距离和场景的校准集，再 <code>model_deploy</code> 生成 cvimodel。此研究没有安装或运行这些工具。</li>
+<li>官方 CV18xx Conv2D 后端有代码生成实现；Interp 的直接 codegen 标记不支持。[<a href="#S8">S8</a>, <a href="#S9">S9</a>] 不能因此断言所有 ONNX Resize 都失败：编译器可能消解或重写图；必须查看具体图与日志。同理，“ONNX 支持”不意味着所有 ops/shape/dynamic dims 都支持。</li>
+<li>官方支持算子附录引用生成文件 <code>build/supported_ops.rst</code>，该 raw 路径在此次读取中不可获得。[<a href="#S13">S13</a>] 因而本页不伪造全量支持表，不假定不支持算子会自动退回 CPU。检测头、NMS、关键点和跟踪默认预算到 CPU 后处理；只有编译与运行结果证明支持时才移入 NPU。</li>
+<li>上板核对 cvimodel 加载、模型 I/O 类型/shape/stride、INT8 与 BF16 精度和端到端时延；把第一次模型加载/暖机与稳态分别记录。</li>
+</ol>
+
+<h2 id="pipeline">面向实施的数据路径</h2>
+<div class="flow"><strong>推荐准备的路径：</strong><br>摄像头 → VI / ISP → VPSS 缩放与格式整理 → 容量一最新帧槽 → 单次 NPU 推理 → CPU 后处理/跟踪 → 带源时间戳与序号的目标结果 → 接口准入检查 → 有时效的伺服意图。<br>两颗 ToF / 可选 UWB / 飞控姿态 → 有限长度时序缓存 → 定位周期任务 → 带坐标系与协方差的估计结果 → 同一门控。</div>
+<p>将驱动、推理、定位与输出发布拆成有清楚所有权的模块；不为每帧创建线程，不把锁跨整个推理调用持有。应用视觉 worker 一次只接纳一帧，期间允许最新槽覆盖旧等待帧。真实实现若让预处理、NPU、后处理各自排队，整个管线会新增缓冲，必须重新计算上界；本模型没有隐藏这些额外并发。</p>
+<p><strong>零复制是要验证的数据路径属性。</strong>VPSS 有取帧/释放 API，系统有物理地址映射与 cache flush API。[<a href="#S10">S10</a>, <a href="#S11">S11</a>] 官方说明融合预处理、外部像素格式、VPSS 输入对齐与 <code>aligned_input</code> 要匹配。[<a href="#S7">S7</a>] 这些能力提供减少搬运的机会，但本研究没有验证指定 runtime 能直接绑定该帧物理地址。<code>mmap</code> 本身不能证明端到端零复制，映射后转成连续 ndarray、RGB、tensor 或 SSH 预览仍可能发生复制。</p>
+<div class="scroll"><table><thead><tr><th>路径</th><th>需要测量/验证</th><th>预算方法</th></tr></thead><tbody>
+<tr><td>CPU 完整预处理</td><td>VPSS/YUV → 用户缓冲 → RGB/resize/normalize → tensor → runtime 的隐藏上传/同步</td><td>按每次 copy/转换记录源目的 bytes、stride、CPU 墙钟/线程耗时与所有权。不要把所有搬运隐藏在 npu_ms 中。</td></tr>
+<tr><td>VPSS / 融合预处理</td><td>输出 shape、planar/packed、pixel order、真实 width stride，对齐、量化归一化与参考输出一致</td><td>减少 cpu_pre_ms 后，NPU 或 VPSS 时间/内存可能增加；重新测量整条路径，而非只减 CPU 输入值。</td></tr>
+<tr><td>物理缓冲绑定候选</td><td>runtime 同镜像支持的 DMA/tensor API、cache coherency、异步完成点、最后读者释放、池深度</td><td>只有接口和实测都证明不发生额外 copy 时才能标记“已验证零复制”。未证明时填 cpu_copy_ms；共享帧引用不要重复计成多个独立 frame_bytes。</td></tr>
+<tr><td>尺寸例子</td><td>640×480 NV12 紧密一帧 460800 B；RGB 一帧 921600 B；320×320×3 BF16 张量 614400 B</td><td>以上均是尺寸算术，实际分配使用 stride/align/plane length；按“独占分配”汇总 VB、模型权重、激活、张量和用户缓冲。仿真默认固定池预算零只表示未填，绝不表示板端无开销。</td></tr>
+</tbody></table></div>
+<p>ToF/UWB 的总线阻塞和数据可观测性不在本计算模型内。<code>nav_ms</code> 是一个定位 CPU 任务的合成预算，不能证明两颗 ToF 能提供完整三维位置或方位。真实传感器采集需源时间戳、序号、质量字段和独立故障处理，再进入已有坐标/协方差门控。</p>
+<div class="note warn"><strong>超龄与重复目标不能继续驱动下游。</strong>新推理完成并不保证输入新鲜。输出应带 frame_id、t_sensor、t_publish、target_id、quality/valid_until；接受端按映射后的源时间计算当前年龄，拒绝超龄、重复序号与乱序，不用重新发布旧目标来“续期”。同一目标 ID 的新帧观测可以更新；重复的 frame_id/消息 seq 不可作为新测量。目标短时预测也要沿用最后真实测量时刻并限制预测期限，超期发布“无新鲜目标”状态。这里仅规定实现准备，不做飞行控制或动作执行。</div>
+
+<h2 id="simulation">离散事件仿真与结果口径</h2>
+<p><code>research.compute.run_compute(config: dict | None = None)</code> 返回 <code>summary</code> 中文短句、<code>metrics</code>、<code>assumptions</code> 和 JSON 可序列化配置；纯 import 无文件/网络/硬件副作用。只依赖 Python 标准库，允许 GUI 传入 30.0、15.0、10.0 这样的浮点频率和时长。</p>
+<div class="scroll"><table><thead><tr><th>默认参数</th><th>值</th><th>定义</th></tr></thead><tbody>
+<tr><td>camera_fps / nav_hz / duration_s</td><td>30 / 15 / 10</td><td>半开区间 [0,10 s) 周期释放；相位均从 0 开始，不模拟曝光或 I2C。</td></tr>
+<tr><td>cpu_capture_ms / cpu_copy_ms</td><td>0.5 / 0</td><td>接纳帧后采集/绑定与复制 CPU 阶段，采用零复制输入假设。</td></tr>
+<tr><td>cpu_pre_ms / npu_ms / cpu_post_ms / cpu_tracking_ms</td><td>4 / 18 / 3 / 1</td><td>视觉按阶段串行，一次只允许一个已接纳帧；NPU 占用独立资源。</td></tr>
+<tr><td>nav_ms / nav_deadline_ms</td><td>5 / 1000÷nav_hz</td><td>定位任务从周期 release 到 CPU 完成的期限；CPU 阶段不抢占，阶段边界定位优先。</td></tr>
+<tr><td>frame_deadline_ms</td><td>100</td><td>从驱动提供帧时刻到跟踪完成的期限；不含曝光前等待、总线发送与下游执行。真实端到端门槛需按源曝光时刻另测。</td></tr>
+<tr><td>bursts / npu_ms_pattern</td><td>[] / []</td><td>突发窗口对 CPU/NPU 阶段乘倍率，在阶段启动时锁定；重叠突发相乘。周期 NPU 耗时按原始相机 frame ID 选择，因此丢帧会改变实际选到的样本。</td></tr>
+<tr><td>frame_bytes / fixed_memory_bytes / trace_limit</td><td>460800 / 0 / 0</td><td>帧缓存尺寸 / 调用者固定池预算 / 有界诊断记录。后两者不是板端测量。</td></tr>
+</tbody></table></div>
+<p>两个策略都使用同一 CPU/NPU 调度、定位容量一等待槽与单视觉 worker。FIFO 只改变视觉等待槽为无界 deque；latest 覆盖待处理帧，绝不取消已经接纳的帧。CPU 上同时只有一个阶段；NPU 推理期间 CPU 可以做定位。此模型没有把 CPU 线程与 NPU 算力相加，也没有让另一视觉帧的预处理与当前 NPU 隐式重叠。</p>
+<p><strong>等待与完成是不同统计。</strong><code>queue_wait_ms</code> 从帧可用到进入采集阶段；<code>age_ms</code> 到跟踪完成。p50/p95 为 nearest-rank，最大值来自已完成帧，没有样本为 null。窗口 [0,T) 内释放任务，允许恰在 T 完成及其零耗时后续阶段，T 后不排空队列。<code>outstanding</code>、<code>overdue_at_end</code> 和最旧未完成年龄单独报告，避免过载的未完成帧从延迟报表消失。</p>
+<p><code>stale_completed</code> 就是完成时严格超过 frame_deadline 的输出数。视觉 <code>deadline_misses_observed</code> 为完成违约＋窗口末未完成过期；视觉丢帧另计，比例的分母为生成帧数，不能把低违约比例解释为高成功率。定位违约从 release 起算；定位等待槽被覆盖的任务另外报 dropped 与当时已超期数。若应用要求每个定位周期都有输出，应把每次定位 drop 直接视为不满足要求。</p>
+
+<h3>为什么最新帧策略有内存上界，而实时性仍需测量</h3>
+<p>初始等待数 Q=0、在途数 A=0。每次到帧在 latest 下至多用一个新引用替换等待引用，所以 Q≤1；接纳只将一个引用从 Q 移到 A，A 在整个采集/预处理/NPU/后处理/跟踪结束前保持为 1；完成释放该引用。因此任意调度和有限服务输入下 Q+A≤2，应用模型帧内存≤2×frame_bytes＋fixed_memory_bytes。定位也最多一个等待任务和一个执行任务，且二者只存少量状态。FIFO 只要平均接纳速度长期低于到达速度，等待数便随观察窗口增长，没有统一上界。</p>
+<p>这个证明仅约束模型持有的帧，不含驱动内等待、VB 池、tensor、激活、实际 RSS、调试图像、日志与结果历史。零复制时引用可能指向同一 VB 池，要按所有权避免重复计算。仿真保存年龄样本的 Python 内存会随样本数增长，它是 PC 观察器，不能称作实际应用的两帧内存证明。</p>
+<p>容量一不保证 wait 或 total age 有绝对毫秒上界：CPU 阻塞、定位过载或长推理都可能让在途帧很旧。调度恢复时通常能取到最近等待帧，但这个等待在恢复前也可能很长。单帧服务已经大于期限时，换队列仍会产生 stale_completed，必须降低模型代价、降分辨率、改输入调度或改变可接受性能目标。</p>
+<p>忽略突发的名义 CPU 请求负载为 <code>[camera_fps×(capture+copy+pre+post+tracking)+nav_hz×nav_ms]/1000</code>；名义 NPU 请求负载为 <code>camera_fps×npu_ms/1000</code>。本模型还串行接纳视觉，因此完整视觉周期本身也要考虑。各负载&lt;1 只能作必要筛查，不能证明期限；CPU/GPU/NPU 占用率低也可能是单帧管线串行或等待导致。</p>
+
+<h3>可复现基线、持续过载与突发</h3>
+<p>基线使用全部默认值；持续过载只改 <code>npu_ms=60, cpu_pre_ms=6, cpu_post_ms=4</code>；突发只改 2–4 s 内 <code>cpu_factor=3, npu_factor=4</code>。下表全部是合成结果，不能用于标称 SG2002 吞吐。</p>
+<!-- SIM_RESULTS_START -->
+<div class="scroll"><table><thead><tr><th>场景</th><th>队列</th><th>完成/生成</th><th>完成帧龄 p50/p95/max ms</th><th>超龄完成</th><th>丢帧</th><th>末尾未完成/过期</th><th>峰值等待/总帧数</th><th>峰值帧缓冲 MiB</th><th>定位 p95 ms/违约</th></tr></thead><tbody><tr><td>基线</td><td>fifo</td><td>300/300</td><td>26.50 / 31.50 / 31.50</td><td>0</td><td>0</td><td>0 / 0</td><td>1 / 1</td><td>0.439</td><td>5.00 / 0</td></tr><tr><td>基线</td><td>latest</td><td>300/300</td><td>26.50 / 31.50 / 31.50</td><td>0</td><td>0</td><td>0 / 0</td><td>1 / 1</td><td>0.439</td><td>5.00 / 0</td></tr><tr><td>持续过载</td><td>fifo</td><td>139/300</td><td>2735.33 / 5165.00 / 5394.00</td><td>138</td><td>0</td><td>161 / 158</td><td>161 / 162</td><td>71.191</td><td>8.00 / 0</td></tr><tr><td>持续过载</td><td>latest</td><td>139/300</td><td>88.67 / 106.33 / 108.67</td><td>19</td><td>160</td><td>1 / 0</td><td>1 / 2</td><td>0.879</td><td>8.00 / 0</td></tr><tr><td>2–4 s 突发</td><td>fifo</td><td>300/300</td><td>475.67 / 1295.33 / 1380.67</td><td>213</td><td>0</td><td>0 / 0</td><td>41 / 42</td><td>18.457</td><td>19.67 / 0</td></tr><tr><td>2–4 s 突发</td><td>latest</td><td>260/300</td><td>31.50 / 124.50 / 127.00</td><td>20</td><td>40</td><td>0 / 0</td><td>1 / 2</td><td>0.879</td><td>19.67 / 0</td></tr></tbody></table></div><p>结果 JSON：<a href="../../research/sources/compute/baseline.json">基线</a>、<a href="../../research/sources/compute/overload.json">持续过载</a>、<a href="../../research/sources/compute/burst.json">突发</a>。峰值等待可在接纳前短暂计为一帧；基线总持有峰值为一帧，latest 的统一上界仍为两帧。固定内存预算默认为零，表中只列模型持有的帧缓冲。</p><p>本次 PC 仿真默认运行 25 次，最长 0.018326 s；仅确认 GUI 调用开销，绝非板端 CPU/NPU 指标。<a href="../../research/sources/compute/runtime.json">PC 运行开销记录</a></p>
+<!-- SIM_RESULTS_END -->
+<p>复现实验只写本研究分配的 JSON 与 HTML，不连接设备，不安装依赖。根目录 PowerShell 7 执行：</p>
+<pre><code>$ErrorActionPreference = 'Stop'
+&amp; '.\.venv\Scripts\python.exe' -B 'research\sources\compute\reproduce.py'
+if ($LASTEXITCODE -ne 0) { throw 'compute reproduction failed' }
+&amp; '.\.venv\Scripts\python.exe' -B -m unittest discover -s tests -p test_compute_research.py -v
+if ($LASTEXITCODE -ne 0) { throw 'compute tests failed' }</code></pre>
+<p>手算测试独立检查 10 Hz 相机＋250 ms NPU 的 FIFO/最新帧完成顺序、零耗时阶段边界、CPU 非抢占对定位的影响、NPU 期间 CPU 重叠、突发阶段锁定、两类任务守恒以及多种过载下 Q≤1、Q+A≤2。测试证明的是软件模型的这些性质，不是板端算法、时间戳正确性或闭环稳定性。</p>
+
+<h2 id="profiling">未来上板追踪：字段、测量位置与实验矩阵</h2>
+<p><strong>以下均为建议，尚未在板端实施或验证。</strong>先保存镜像/内核/SDK/compiler/runtime/model SHA、摄像头型号、sensor.ini、分辨率/像素格式/stride、CPU online、调频设置、VB/ION 分配表。进程内间隔用同一个 monotonic 时钟；外部传感器时钟必须保存映射和不确定度，不能把不同时钟读数直接相减。</p>
+<div class="scroll"><table><thead><tr><th>记录类型</th><th>必要字段</th><th>追踪目的</th></tr></thead><tbody>
+<tr><td>session</td><td>schema_version, session_id, image_sha256, kernel, sdk_version, compiler_version, model_sha256, cpu_arch, cpu_online, camera, fps, width, height, format, plane_strides, pool_bytes, clock_domain</td><td>确保所有结果能与确切硬件、模型、配置对应；从初次加载到稳态分段。</td></tr>
+<tr><td>vision_stage</td><td>seq, frame_id, stage, t_start_ns, t_end_ns, clock_domain, t_sensor_ns, t_frame_available_ns, sensor_clock_domain, clock_map_id, clock_sigma_ns, thread_cpu_ns, bytes_read/write/copied, queue_depth, in_flight_depth, status, drop_reason</td><td>stage 为 capture/copy/pre/npu_submit/npu_complete/post/tracking/publish/release。源曝光时间未知则 null＋timestamp_quality，绝不用 dequeue 时刻冒充曝光。异步 submit→真正 completion 才算 NPU 墙钟。</td></tr>
+<tr><td>navigation</td><td>nav_seq, t_release_ns, t_start_ns, t_done_ns, deadline_ns, thread_cpu_ns, input_seq/tof_id, input_age_ns, imu_seq, uwb_seq_or_null, frame_id/clock_domain, estimate_frame, covariance, accepted, reject_reason</td><td>release→done 检验定位期限，input_age 判断陈旧传感器；CPU 计算及时不代表输入新鲜。</td></tr>
+<tr><td>target_publish / target_gate</td><td>frame_id, target_id, message_seq, source_time_ns, publish_time_ns, consume_time_ns, mapped_source_time_ns, age_ns, valid_until_ns, covariance, coordinate_frame, accepted, rejection</td><td>从采集到接受端的真实总龄；拒绝 stale/duplicate/out_of_order/clock_uncertain/frame_mismatch 等，由已有门控执行。</td></tr>
+<tr><td>resource_sample</td><td>t_ns, cpu_percent_per_core, process_pss_bytes, rss_bytes, mem_available_bytes, swap_io, ion/vb_used/free/high_water_bytes, npu_profile_id, cpu_freq_hz, temperature_c, log_drops</td><td>建议 1–5 Hz 低扰动采样；RSS 可能不含所有 DMA 映射，需结合 SDK 池使用量，不把共享页重复计入总占用。</td></tr>
+</tbody></table></div>
+<p>推荐 JSONL 示例（合成字段演示，数值不是测量）：</p>
+<pre><code>{"schema_version":1,"kind":"vision_stage","session_id":"example-offline",
+ "seq":42,"frame_id":123,"stage":"npu_complete","clock_domain":"nano_monotonic",
+ "t_start_ns":1000000000,"t_end_ns":1018000000,"thread_cpu_ns":300000,
+ "t_sensor_ns":null,"timestamp_quality":"exposure_unknown",
+ "t_frame_available_ns":994000000,"queue_depth":1,"in_flight_depth":1,
+ "bytes_copied":0,"status":"synthetic_example"}</code></pre>
+<p>各阶段保存阻塞墙钟、线程 CPU 时间与 completion 而非仅 API 返回时间。把模型加载时间、第一次推理、200 帧暖机后的稳态分别输出；deadline 报告要列窗口任务数、完成数、丢弃数、超期数、未完成数和 p50/p95/p99/max。复制实验用相同模型/相机/场景比较 CPU 完整转换、VPSS/fused preprocessing 和经验证的 DMA 输入；输出内容和精度也必须一致。</p>
+<div class="scroll"><table><thead><tr><th>建议实验</th><th>设置</th><th>要回答的问题</th></tr></thead><tbody>
+<tr><td>分离资源</td><td>定位单跑；相机仅采集；固定输入 NPU 单跑；后处理/跟踪回放</td><td>纯推理时间与相机数据路径成本各是多少？是否存在阻塞采集或隐藏复制？</td></tr>
+<tr><td>真实双任务</td><td>实际相机＋实际模型＋两颗 ToF＋飞控姿态回放/台架输入，检测 10/15/30 Hz；定位 15 Hz，UWB 先禁用再启用</td><td>并行后各阶段 tail、CPU 峰值、内存池及输入时效如何变化？不得用 PC 推理替代板端推理。</td></tr>
+<tr><td>开销与突发</td><td>台架输入，不飞行：开启/关闭 SSH 预览、录像、日志；高目标数、无目标、运动模糊、总线迟延/丢包回放</td><td>CPU 后处理/NMS/日志是否抢占定位？最新帧覆盖是否正确释放 VB？旧目标是否持续发布？</td></tr>
+<tr><td>持续运行</td><td>每个候选先暖机，再至少 10 min；最佳候选持续 30 min；记录温度/频率/内存。故障与延迟注入仅在台架或离线回放。</td><td>是否热降频、内存泄漏、池耗尽；冷态通过能否延续到热态？</td></tr>
+</tbody></table></div>
+<p>本模型的输入只填入板端测得的服务分布或明确的合成假设。<code>npu_ms_pattern</code> 与 bursts 能表达确定性尾部/突发，但不能取代带相关性的整段实测时间轴：内存带宽、cache、DVFS、驱动隐藏队列和 OS 抢占都不在事件模型内。</p>
+
+<h2 id="decision">建议硬件选择门槛：全部待验证</h2>
+<p>下列值用于准备评估表，是本研究提出的工程门槛，<strong>不是 RM2027 官方标准，不是已验证的闭环安全指标</strong>。最终需按目标速度、距离、相机视场、执行周期与定位误差预算重新确定。当前 PC 阶段仅验证接口、调度、门控与报告；不据此宣布 Nano 已满足飞行任务。</p>
+<div class="scroll"><table><thead><tr><th>拟议门槛</th><th>建议初值</th><th>通过依据 / 未通过时的实施选择</th></tr></thead><tbody>
+<tr><td>视觉结果时效</td><td>有效新观测 ≥15 Hz；源采集→门控接受 p95≤80 ms、p99≤100 ms；硬截止 100 ms</td><td>连续台架测量，超截止/重复消息接受数必须为 0。单帧延迟不达标优先缩输入、轻模型、VPSS/fused、验证搬运；降低 camera fps 不会缩短固有单帧推理耗时。默认仿真 100 ms 只到跟踪完成，未覆盖此真实门槛。</td></tr>
+<tr><td>定位期限与数据时效</td><td>15 Hz；release→done p95≤20 ms、max≤66.67 ms；建议样本中 deadline miss/drop=0</td><td>记录 nav_release 与源输入龄，二者都满足；若主 CPU 阻塞定位，先缩短非抢占阶段、独立采集/有限队列，再考虑降视觉频率或更强伴随计算板。有限样本零违约不证明永远无违约。</td></tr>
+<tr><td>控制消费者时效</td><td>不接受超 100 ms 的视觉源测量或重复 frame_id；失去新鲜目标后在下一个消费者周期标记失效</td><td>用重复、乱序、超龄、时钟映射未知回放验证。不能仅看平均 detector fps；不可发布旧结果新时间戳来续期。</td></tr>
+<tr><td>CPU 余量</td><td>10 min 单 Linux CPU 平均≤70%，1 s 窗口 p95≤85%；定位期限仍需单独通过</td><td>同场景/热态/日志预览条件测量；占用率只作余量门槛，低占用不能证明低延迟。</td></tr>
+<tr><td>内存与驱动池</td><td>建议 MemAvailable 持续≥20 MiB、关键 VB/ION 池余量≥20%、不依赖 swap、不发生池耗尽；暖机后 30 min PSS 增长≤1 MiB</td><td>结合动态池高水位与所有权检查，不仅看 RSS。任一泄漏/耗尽即停止加功能并修所有权；模拟两帧峰值不是完整板端内存预算。</td></tr>
+<tr><td>模型与精度</td><td>确切图转换＋runtime 运行成功；提出 INT8 相比参考集的召回损失≤2 个百分点</td><td>召回门槛仅为量化回归初值，实际低误检/漏检率、关键点误差与伺服需求仍需定场景验收。BF16 精度较好但速度/内存必须另测。</td></tr>
+<tr><td>热态持续性能</td><td>30 min 后视觉 p95 相比暖机稳态增长≤20%，且仍满足上述绝对期限</td><td>同时记录时钟与温度，按供应商器件允许温度/实际散热判断；若仍超期再评估升级板卡，同时比较重量、功耗和接口。</td></tr>
+</tbody></table></div>
+<p>持续过载例子中 latest 能将缓存限制到两帧，但有效输出约 13.9 Hz、p95 大于 100 ms，按上面的建议视觉门槛仍不通过。这正是不能用“内存有界”代替“视觉与定位已满足任务”的情况。基线通过的是合成输入下的调度示例；ToF 可观测性、识别质量、UWB 时钟与射频、控制闭环需独立实验。</p>
+
+<h2 id="sources">资料与可审计证据</h2>
+<p>资料来自 Sipeed/Sophgo 官方仓库，记录包含片段、访问时间、HTTP 状态、UTF8 文本 SHA256 与路径。main/master 为可变引用，记录以文件 hash 标识内容；20260114 镜像内容见<a href="image-audit.html">镜像审计</a>。</p>
+<!-- SOURCE_TABLE_START -->
+<div class="scroll"><table><thead><tr><th>编号</th><th>官方源</th><th>实际访问 UTC</th><th>短片段</th></tr></thead><tbody><tr id="S1"><td>S1</td><td><a href="https://raw.githubusercontent.com/sipeed/sipeed_wiki/main/docs/hardware/en/lichee/RV_Nano/1_intro.md">Sipeed Nano board specification</a></td><td>2026-10-02T07:22:22.5520985Z</td><td><code>Major core: 1GHz RISC-V C906 / ARM A53 (selectable)</code><br><code>Minor core: 700MHz RISC-V C906</code><br><code>1TOPS INT8, supports BF16</code></td></tr><tr id="S2"><td>S2</td><td><a href="https://raw.githubusercontent.com/sipeed/LicheeRV-Nano-Build/main/README.md">Sipeed firmware build targets</a></td><td>2026-10-02T07:22:22.7225832Z</td><td><code>defconfig sg2002_licheervnano_sd</code><br><code>defconfig sg2002_licheea53nano_sd</code></td></tr><tr id="S3"><td>S3</td><td><a href="https://raw.githubusercontent.com/sipeed/LicheeRV-Nano-Build/main/build/boards/sg200x/sg2002_licheervnano_sd/memmap.py">Sipeed SG2002 Nano memory map</a></td><td>2026-10-02T07:22:22.8808612Z</td><td><code>DRAM_SIZE = 256 * SIZE_1M</code><br><code>FREERTOS_SIZE = 2 * SIZE_1M</code><br><code>ION_SIZE = 105 * SIZE_1M</code><br><code>BOOTLOGO_SIZE = 8000 * SIZE_1K</code></td></tr><tr id="S4"><td>S4</td><td><a href="https://raw.githubusercontent.com/sipeed/LicheeRV-Nano-Build/main/build/boards/sg200x/sg2002_licheervnano_sd/sg2002_licheervnano_sd_defconfig">Sipeed SG2002 Nano build configuration</a></td><td>2026-10-02T07:22:23.4552374Z</td><td><code>CONFIG_ARCH=&quot;riscv&quot;</code><br><code>CONFIG_TOOLCHAIN_MUSL_RISCV64=y</code><br><code>CONFIG_SENSOR_GCORE_GC4653=y</code><br><code>CONFIG_SENSOR_SMS_SC035GS=y</code><br><code># CONFIG_ENABLE_FREERTOS=y</code></td></tr><tr id="S5"><td>S5</td><td><a href="https://raw.githubusercontent.com/sipeed/sipeed_wiki/main/docs/hardware/en/lichee/RV_Nano/5_peripheral.md">Sipeed camera peripheral instructions</a></td><td>2026-10-02T07:22:23.8938886Z</td><td><code>/mnt/system/usr/bin/sample_vio 6</code><br><code>/mnt/system/usr/bin/sensor_test</code><br><code>sensor_cfg.ini.alpha</code><br><code>sensor_cfg.ini.beta</code></td></tr><tr id="S6"><td>S6</td><td><a href="https://raw.githubusercontent.com/sophgo/tpu-mlir/master/docs/quick_start/source_zh/Appx.02_cv18xx_guide.rst">Sophgo TPU-MLIR CV18xx conversion guide</a></td><td>2026-10-02T07:22:24.3478673Z</td><td><code>CV18xx支持ONNX系列和Caffe模型,目前不支持TFLite模型</code><br><code>--quantize BF16</code><br><code>--quantize INT8</code><br><code>.cvimodel</code></td></tr><tr id="S7"><td>S7</td><td><a href="https://raw.githubusercontent.com/sophgo/tpu-mlir/master/docs/quick_start/source_zh/08_fuse_preprocess.rst">Sophgo TPU-MLIR fused preprocessing and aligned VPSS input</a></td><td>2026-10-02T07:22:24.7817126Z</td><td><code>--fuse_preprocess</code><br><code>--customization_format RGB_PLANAR</code><br><code>fuse_preprocess, aligned_input</code></td></tr><tr id="S8"><td>S8</td><td><a href="https://raw.githubusercontent.com/sophgo/tpu-mlir/master/lib/Dialect/Tpu/Interfaces/CV18xx/Conv2D.cpp">Sophgo CV18xx Conv2D backend</a></td><td>2026-10-02T07:22:25.1948976Z</td><td><code>void tpu::Conv2DOp::codegen_global_cv18xx(int64_t layer_id)</code><br><code>cvi_backend_tg_bf16_conv_kernel</code></td></tr><tr id="S9"><td>S9</td><td><a href="https://raw.githubusercontent.com/sophgo/tpu-mlir/master/lib/Dialect/Tpu/Interfaces/CV18xx/Interp.cpp">Sophgo CV18xx Interp backend restriction</a></td><td>2026-10-02T07:22:25.6226838Z</td><td><code>void tpu::InterpOp::codegen_global_cv18xx(int64_t layer_id)</code><br><code>llvm_unreachable(&quot;Not supported now&quot;)</code></td></tr><tr id="S10"><td>S10</td><td><a href="https://raw.githubusercontent.com/sipeed/LicheeRV-Nano-Build/main/middleware/v2/include/cvi_sys.h">Sipeed CVI physical mappings and cache flush API</a></td><td>2026-10-02T07:22:26.0543398Z</td><td><code>CVI_SYS_IonFlushCache</code><br><code>CVI_SYS_Mmap</code><br><code>CVI_SYS_MmapCache</code></td></tr><tr id="S11"><td>S11</td><td><a href="https://raw.githubusercontent.com/sipeed/LicheeRV-Nano-Build/main/middleware/v2/include/cvi_vpss.h">Sipeed VPSS buffer acquisition and release API</a></td><td>2026-10-02T07:22:26.2170123Z</td><td><code>CVI_VPSS_GetChnFrame</code><br><code>CVI_VPSS_ReleaseChnFrame</code></td></tr><tr id="S12"><td>S12</td><td><a href="https://raw.githubusercontent.com/sipeed/LicheeRV-Nano-Build/main/middleware/v2/sample/common/sample_common_sensor.c">Sipeed camera runtime configuration paths</a></td><td>2026-10-02T07:22:26.6472893Z</td><td><code>&quot;/mnt/data/sensor_cfg.ini&quot;</code><br><code>&quot;/mnt/system/usr/bin/sensor_cfg.ini&quot;</code></td></tr><tr id="S13"><td>S13</td><td><a href="https://raw.githubusercontent.com/sophgo/tpu-mlir/master/docs/quick_start/source_zh/Appx.07_supported_ops.rst">Sophgo supported operators appendix (generated include)</a></td><td>2026-10-02T07:22:27.0621595Z</td><td><code>.. include:: ../../../build/supported_ops.rst</code></td></tr></tbody></table></div>
+<!-- SOURCE_TABLE_END -->
+<p>证据文件：<a href="../../research/sources/compute/evidence.json">evidence.json</a>；重新采集脚本：<a href="../../research/sources/compute/capture_evidence.ps1">capture_evidence.ps1</a>。在 PowerShell 7 调用脚本前先使用 Parser 校验；若源片段改变，脚本报错而不是静默声称证据仍有效。</p>
+<p class="small">本页可以离线打开；无外部 CSS、JS、字体或运行期依赖。资料链接需要网络，复现仿真本身不需要网络或板卡。</p>
+</main></body></html>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>离线控制就绪状态机参考</title>
+<style>
+:root{font-family:"Microsoft YaHei UI",system-ui,sans-serif;color:#18344d;background:#f4f7fb}body{max-width:1120px;margin:32px auto;padding:0 24px 50px;line-height:1.75}h1{font-size:29px;margin-bottom:4px}h2{font-size:21px;margin-top:34px}h3{font-size:17px;margin-bottom:4px}.small{color:#5a7083;font-size:14px}.card,.note{background:#fff;border:1px solid #d4e1ec;border-radius:12px;padding:16px 22px;margin:16px 0}.note{border-left:5px solid #167b91}table{border-collapse:collapse;width:100%;background:#fff;font-size:14px}th,td{border:1px solid #d4e1ec;padding:9px 11px;text-align:left;vertical-align:top}th{background:#e8f1f8}code{font-family:Consolas,monospace;background:#edf3f7;padding:1px 4px;overflow-wrap:anywhere}pre{background:#e9f1f8;padding:14px;border-radius:8px;overflow:auto;line-height:1.5}.state{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.state div{background:#e9f4fa;border:1px solid #b8d3e2;border-radius:9px;padding:9px 12px}.arrow{color:#6b8496;font-size:20px}li{margin:7px 0}a{color:#086d88}@media(max-width:700px){body{padding:0 12px}table{font-size:12px}h1{font-size:24px}}
+</style></head><body>
+<h1>离线控制就绪状态机参考</h1>
+<p class="small">日期：2026-10-02 · 工作区：D:\Robomaster code\drone · 范围：纯 Python 设计参考、确定性测试 · 无连接硬件</p>
+<div class="note"><strong>用途：</strong>这是为后续研究和代码实现准备的可执行状态机参考。它只读取显式输入并返回模式、原因、证据和统计指标，不生成 MAVLink 控制消息，不解锁、不起飞、不悬停、不降落，也不替代飞控配置的失效保护。<code>NAVIGATE_REFERENCE_ONLY</code>表示证据满足未来控制器的数据门槛，不表示当前可以安全飞行或保持悬停。</div>
+<h2>1. 文件与接口</h2>
+<p>实现位于 <a href="../../research/control_policy.py">research/control_policy.py</a>，测试位于 <a href="../../tests/test_control_policy.py">tests/test_control_policy.py</a>。入口是：</p>
+<pre>run_control(config=None) -&gt; dict</pre>
+  <p><code>config</code>可以包含显式时间的<code>samples</code>数组和阈值配置。未提供<code>samples</code>时，<code>run_control({})</code>使用固定的 10 样本故障演示，覆盖有效、过期、重复来源时间、恢复、epoch 重置、缺高度和终止；显式<code>samples=[]</code>才返回空的<code>STANDBY</code>摘要。模块不读取系统时钟。每个样本至少应表达：</p>
+<table><thead><tr><th>输入</th><th>含义</th><th>门槛</th></tr></thead><tbody>
+  <tr><td><code>time_s</code></td><td>调用方提供的接收/评估时间，单位秒。</td><td>只用于判断来源数据年龄，不能替代里程计来源时间。</td></tr>
+  <tr><td><code>odom_time_s</code>、可选<code>odom_frame_seq</code></td><td>里程计来源样本时间与帧序号。</td><td>恢复只接受严格递增的<code>odom_time_s</code>；提供帧序列时也要求严格递增。接收时间增长而来源时间重复，不能推进恢复。</td></tr>
+<tr><td><code>estimator_epoch</code></td><td>估计器启动/重置代号。</td><td>缺失时无导航资格；代号变化会丢弃旧恢复进度和旧命令计数。</td></tr>
+<tr><td><code>connection_alive</code></td><td>链路或数据源是否仍有连接生命迹象。</td><td>只描述连接，不等于估计状态有效。</td></tr>
+<tr><td><code>observable_axes</code></td><td>可观测坐标轴集合，默认要求<code>x,y,z,yaw</code>。</td><td>缺少<code>z</code>时不产生导航参考，也不推断可以安全着陆。</td></tr>
+<tr><td><code>position_valid</code>、<code>velocity_valid</code>、<code>yaw_valid</code></td><td>估计器对位置、速度、偏航的质量判断。</td><td>三者都必须为真。</td></tr>
+<tr><td><code>clock_confidence</code></td><td>时间对齐置信度。</td><td>默认至少<code>0.8</code>；当前没有执行同步或漂移估计。</td></tr>
+  <tr><td><code>setpoint_time_s</code>、<code>setpoint_epoch</code></td><td>目标来源时间与 epoch。</td><td>setpoint epoch 必须存在并匹配 estimator epoch；其变化独立使旧参考失效。</td></tr>
+  <tr><td><code>fresh_odom</code>、<code>fresh_setpoint</code></td><td>可选的新鲜度声明。</td><td>必须是真正的布尔值，且只能与来源时间计算结果一致；<code>True</code>不能绕过缺失或过期来源时间。</td></tr>
+<tr><td><code>terminal_sensor_flags</code></td><td>终止级传感器或安全标志，可用数组或布尔字典。</td><td>任一有效标志会锁存<code>TERMINATED</code>。</td></tr>
+</tbody></table>
+<h2>2. 模式与转换</h2>
+<div class="state"><div>STANDBY<br>尚无导航资格</div><span class="arrow">→</span><div>NAVIGATE<br>参考数据门槛满足</div><span class="arrow">→</span><div>DEGRADED<br>禁止位置控制参考</div><span class="arrow">→</span><div>RECOVER<br>恢复迟滞已满足</div><span class="arrow">→</span><div>NAVIGATE<br>再经确认样本</div></div>
+  <p>任意模式出现终止标志都进入<code>TERMINATED</code>并锁存。<code>STANDBY</code>收到无效输入时继续保持<code>STANDBY</code>；已经处于<code>NAVIGATE</code>或<code>RECOVER</code>时，状态失效进入<code>DEGRADED</code>。<code>DEGRADED</code>默认需要 3 个同一 epoch 内严格递增<code>odom_time_s</code>的有效样本；样本必须在 1 秒来源时间窗口内。达到数量后先进入<code>RECOVER</code>，下一份新的有效样本才回到<code>NAVIGATE</code>。重复来源时间、倒退来源时间、epoch 切换都不能满足迟滞。</p>
+<table><thead><tr><th>条件</th><th>输出模式</th><th>输出决定</th><th>请求动作</th></tr></thead><tbody>
+<tr><td>全部门槛有效，且初次获得资格</td><td>NAVIGATE</td><td><code>NAVIGATE_REFERENCE_ONLY</code></td><td><code>NONE</code></td></tr>
+<tr><td>未具备资格或恢复未完成</td><td>STANDBY / DEGRADED / RECOVER</td><td><code>NO_CONTROL</code></td><td><code>REQUEST_CONFIGURED_FC_FAILSAFE</code></td></tr>
+<tr><td>终止级标志，或已锁存终止</td><td>TERMINATED</td><td><code>TERMINATE_REFERENCE_ONLY</code></td><td><code>REQUEST_CONFIGURED_FC_FAILSAFE</code></td></tr>
+</tbody></table>
+<p>“请求配置的飞控失效保护”是信息输出，不能被解释为代码已经触发了某个具体动作。缺少高度时明确记录<code>missing_altitude_does_not_imply_safe_landing</code>；实现不会输出 land、降落点或伪造高度。</p>
+<h2>3. 时间、epoch 与旧命令处理</h2>
+<ul>
+  <li>策略只使用样本中的显式时间，因此测试和回放可完全确定。<code>time_s</code>只计算年龄；来源<code>odom_time_s</code>重复或倒退时，样本不会推进恢复计数。</li>
+  <li>估计器 epoch 或 setpoint epoch 变化会清空来源样本身份、恢复计数和恢复窗口；两者同时变化只增加一次<code>discarded_command_count</code>，同时保留两个独立 reset 指标。</li>
+<li>连接断开和状态无效分别输出<code>connection_alive</code>与<code>state_valid</code>。链路还活着时，位置/速度/偏航或时间质量仍可能不合格；链路断开时也不能根据连接字段假设估计器安全。</li>
+<li>策略不做坐标变换、轨迹生成、控制律、姿态补偿、限幅或飞控模式切换。通用点导航只在“数据门槛和失效处理”的意义上被引用。</li>
+</ul>
+<h2>4. 与视觉、ToF 和 UWB 的关系</h2>
+<div class="card"><h3>视觉与 ToF</h3><p>未来视觉识别、双 VL53L5CX 或融合估计器接入时，必须将结果转换为带采集时间、估计器 epoch、坐标系、单位、质量/协方差、数据年龄和失效标志的测量。视觉置信度不能代替位置有效标志；ToF 有效距离也不能单独证明三维位置可观测。这里的<code>observable_axes</code>是结果合同，不是从原始热力图自动推导的能力。</p></div>
+<div class="card"><h3>可选 UWB</h3><p>UWB 后续必须提供自身测量时间、设备或估计器 epoch、基站几何/解算质量、位置协方差、锚点健康和最大允许年龄。UWB 时间不能直接与飞控 boot time 或 Nano monotonic time 相减；需要明确的时钟映射、同步置信度和漂移上限。UWB 解算有效性需单独检查；单个锚点或退化几何不能自动满足位置门槛。</p></div>
+<div class="card"><h3>时钟同步</h3><p>当前<code>clock_confidence</code>只是输入门槛。生产实现需要记录同步协议、参考源、偏差、漂移、最近同步时间、估计不确定度和跨重启行为；还要规定测量年龄由哪个时钟计算。未完成同步时，策略应保持禁止位置控制参考。</p></div>
+<h2>5. 测试覆盖</h2>
+  <p>测试文件包含 31 个确定性用例：</p>
+  <ul><li>默认故障序列覆盖有效、过期、恢复中的重复来源时间、epoch 重置、缺高度和终止；显式空序列仍为空 STANDBY。</li><li>里程计过期、目标过期及连接断开分别产生原因；连接生命和状态有效性分开。</li><li>重复<code>odom_time_s</code>即使<code>time_s</code>持续增长也不能满足恢复。</li><li>估计器 epoch 与 setpoint epoch 分别校验；同时变化只计一次旧命令上下文失效。</li><li>缺少<code>z</code>时保持待机或降级并请求配置的飞控失效保护，不宣称可安全着陆。</li><li>有效样本经过 DEGRADED → RECOVER → NAVIGATE 的迟滞路径。</li><li>终止传感器标志使 TERMINATED 锁存。</li><li>字符串布尔值、NaN 数值和越界配置会被拒绝。</li></ul>
+<pre>$ErrorActionPreference = 'Stop'
+&amp; '.venv\Scripts\python.exe' -m pytest -q tests/test_control_policy.py
+if ($LASTEXITCODE -ne 0) { throw "control policy tests failed" }</pre>
+  <p>验证结果：<strong>31 passed</strong>。测试运行 Python 状态机。</p>
+<h2>6. 实施前仍需补齐的证据</h2>
+<ol><li>确定当前定制飞控的失效保护配置、消息源和模式转换合同；不能用主线 PX4 文档替代 <code>board_id=7140</code> 定制固件的实际行为。</li><li>用离线录制和仿真数据验证 epoch 重启、时钟漂移、消息乱序、估计器质量下降和恢复样本独立性。</li><li>为生产数据总线补充有界队列、消息年龄、丢弃计数、坐标系、协方差和会话/启动标识。</li><li>在 SG2002 实机上分别测视觉、ToF、UWB、估计器和日志负载；PC 测试不能证明 NPU 并发余量、实时性、温度或飞行安全。</li><li>将<code>REQUEST_CONFIGURED_FC_FAILSAFE</code>映射到经审查的飞控配置和人工台架流程，保持本参考模块不发送动作。</li></ol>
+<p class="small">本文件与 <a href="../../research/control_policy.py">research/control_policy.py</a> 是实现准备材料，不是生产自动飞行代码。没有新增或修改 GUI、Nano 采集器、MAVLink 发送路径或硬件配置。</p>
+</body></html>
