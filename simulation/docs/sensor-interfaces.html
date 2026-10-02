@@ -1,0 +1,23 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>传感器接口与机群配置</title>
+<style>body{font:16px/1.7 "Microsoft YaHei",sans-serif;max-width:1080px;margin:32px auto;padding:0 24px;color:#183449;background:#f6f9fc}section{background:white;border:1px solid #d4e0e9;border-radius:10px;padding:22px;margin:18px 0}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccdbe7;padding:9px;text-align:left}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf3f8;padding:16px}a{color:#096c91}</style>
+<h1>传感器接口与机群配置</h1><p><a href="team-mission.html">返回任务指南</a></p>
+<section><h2>成品光流模块</h2><p>适配层直接传入模块计算好的水平速度、质量和方差。速度使用 FLU 机体系：X 向前、Y 向左、Z 向上；单位 m/s。模块若输出 FRD，需在适配层反转 Y。融合器使用飞控姿态完成坐标转换，不读取光流图像。</p>
+<pre>{"schema":1,"kind":"optical_flow","vehicle":0,"sim_time_us":1000000,
+ "vx_body_mps":0.10,"vy_body_mps":0.02,"quality":0.95,
+ "variance_m2s2":0.0004,"source":"MODULE"}</pre>
+<table><tr><th>字段</th><th>含义</th></tr><tr><td>sim_time_us</td><td>与飞控观测共用单调时基的测量时间，正整数，单位 μs；适配层负责时钟对齐。</td></tr><tr><td>quality</td><td>0–1，默认融合阈值 0.5。</td></tr><tr><td>variance_m2s2</td><td>单轴速度测量方差，必须大于 0，单位 m²/s²。</td></tr><tr><td>source</td><td>可选来源名称；Gazebo 输出 SIM_FLOW_MODULE。</td></tr></table>
+<p>本地 UDP 观测端口为 16000 + 机号；C++ 接口为 <code>Estimator::fuseOpticalFlow(FlowSample)</code>。仿真配置 <code>optical_flow</code> 可设置噪声、比例误差、丢包率和启用状态。默认噪声标准差 0.015 m/s、比例误差 0.005、丢包率 0.01。光流持续推算位置，其累积漂移由 ToF 或 UWB 修正。</p></section>
+<section><h2>UWB 固定基站</h2><p>地图 JSON 中配置基站 ID 和共同世界坐标，单位 m：</p>
+<pre>"uwb_anchors": [
+  {"id":0,"x":-13,"y":-7,"z":2.4},
+  {"id":1,"x":-13,"y": 7,"z":2.4},
+  {"id":2,"x": 13,"y":-7,"z":2.4},
+  {"id":3,"x": 13,"y": 7,"z":2.4}
+]</pre><p>空数组表示无基站。界面勾选“启用固定 UWB 锚点”且地图未配置坐标时，使用上面的四个位置；地图已有基站配置时直接使用配置。</p>
+<pre>{"schema":1,"kind":"uwb_anchor","vehicle":0,"anchor_id":2,
+ "sim_time_us":1000000,"range_m":4.25,"variance_m2":0.0025,
+ "quality":0.95,"valid":true}</pre><p>每条测距只约束对应径向方向。质量、测距创新量和近期有效几何决定融合权重及绝对位置有效性。基站与机间 UWB 可以同时输入；无有效基站观测时，光流和机间约束继续工作。</p></section>
+<section><h2>机群数量</h2><p>定位器和任务调度器按实际机群数量分配数据，可运行 1 架、4 架或更多飞机。界面数量范围为 1–64；本机 PX4 SITL 启动器受 MAVLink 系统 ID 分配限制，最多 245 架，实际并发能力取决于电脑负载。</p>
+<p>启动器使用连续机号 0…N−1，为每架生成模型、端口、相机视图和红色起飞框。中央平台能容纳的起飞位置有限；数量超出默认布局时，在地图 JSON 的 <code>spawns</code> 中配置足够的分离位置，并通过“选择 JSON”载入。每机日志和返航偏差均按机号对应。</p>
+<p>C++ 定位核心不要求四架邻机；单机时可只提供光流、ToF、IMU 和高度，也可增加固定基站。双天线机间测距接口还包含机体系方位角，角度单位 rad。</p></section>
+</html>

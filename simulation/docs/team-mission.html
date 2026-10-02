@@ -1,6 +1,9 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>四机基地撞击与返航</title>
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>多机定位、基地撞击与返航</title>
 <style>body{font:16px/1.75 "Microsoft YaHei",sans-serif;max-width:1120px;margin:32px auto;padding:0 24px;color:#183449;background:#f6f9fc}section{background:white;border:1px solid #d4e0e9;border-radius:10px;padding:22px;margin:18px 0}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccdbe7;padding:9px;text-align:left}img{max-width:100%;height:auto}code{background:#edf3f8;padding:2px 5px}a{color:#096c91}</style>
-<h1>四机基地撞击与返航</h1>
+<h1>多机定位、基地撞击与返航</h1>
+<section><h2>定位输入</h2><p>成品光流模块提供机体系水平速度，IMU 提供姿态和运动预测，ToF 对匹配可靠的场地结构进行漂移修正。UWB 机间距离与方位把可信参考传递给其他飞机；参考携带来源、序号和传播路径，重复参考和环路被剔除。</p>
+<p>无基站时使用已知起飞位置初始化共同坐标系。有基站时，根据固定坐标和测距融合；至少两条质量合格、方向独立的近期测距才能提供完整 XY 参考。高度由仿真环境直接提供。</p>
+<p>光流有效率、定位置信度、ToF／UWB 融合计数和每机误差均可在实验台查看。接口字段见<a href="sensor-interfaces.html">传感器接口与机群配置</a>。</p></section>
 <section><h2>尺寸与目标</h2><table><tr><th>对象</th><th>尺寸或位置</th></tr>
 <tr><td>比赛区</td><td>28 × 15 m，依据 RoboMaster 2026 规则手册第 4 节。</td></tr>
 <tr><td>场地网格外包</td><td>29.15 × 16.05 m，包含周边结构；网格缩放为 1。</td></tr>
@@ -18,19 +21,20 @@
 <section><h2>任务流程</h2><ol>
 <li>全队状态就绪后共同起飞，到达 0.75 m 世界高度。</li>
 <li>在中心收拢队形，沿配置航路整体前往基地集结区。</li>
-<li>按 0 → 1 → 2 → 3 顺序执行接近、接触、后撤；其余飞机保持集结位置。</li>
-<li>四次接触完成后，全队沿逆序航路返航。</li>
+<li>按配置的机号顺序执行接近、接触、后撤；其余飞机保持集结位置。</li>
+<li>接触轮次完成后，全队沿逆序航路返航。</li>
 <li>全队回到各自红框后下降，飞控确认落地后结束任务。</li></ol>
 <img src="team-route.png" alt="全场编队航路和中央起飞位置">
-<p>接触确认同时检查冲击事件、接近距离和航向；阶段超时或状态中断会触发任务中止。位置来自伴随定位算法；高度使用 SIM_HEIGHT_ASSIST。独立评估记录 Gazebo 接触事件和真实位置。</p></section>
+<p>接触确认同时检查冲击事件、接近距离和航向。单机数据中断时该机等待恢复，其余飞机继续执行；长期失联的飞机退出后续轮次，恢复及时则重新加入。默认不设阶段期限；可用 <code>stage_timeout_s</code> 设置主动返航期限。界面状态和日志写入失败会重试，错误计数写入运行状态。</p></section>
 <section><h2>图形操作</h2><ol>
-<li>打开“<b>四机定位仿真实验台</b>”，选择“<b>四机轮流撞击与返航</b>”。</li>
-<li>“<b>中心放大／全场</b>”切换地图视角；中心视图显示 H0–H3 红框与机体尺寸。</li>
-<li>保持“启用四机定位飞行”未勾选，可查看地形、起点和传感器。勾选后点击“启动四机环境”执行任务。</li>
+<li>打开定位仿真实验台，选择“<b>多机轮流撞击与返航</b>”，设置“<b>无人机数量</b>”。</li>
+<li>需要固定基站时勾选“<b>启用固定 UWB 锚点</b>”；坐标在地图 JSON 的 <code>uwb_anchors</code> 中配置。</li>
+<li>“<b>中心放大／全场</b>”切换地图视角；中心视图显示各机红框与机体尺寸。</li>
+<li>保持“启用多机定位飞行”未勾选，可查看地形、起点和传感器。勾选后点击“启动多机环境”执行任务。</li>
 <li>界面显示当前阶段、当前撞击机、已完成机号，以及每机到红框中心的 ΔX、ΔY、XY 距离。</li>
 <li>“估计”是算法计算的返航偏差，“真实”来自 Gazebo 评估。落地记录单独保存最终偏差。</li>
 <li>“保存定位报告”导出当前观察区间；“停止本次仿真”结束运行并保留日志。</li></ol>
 <p>切换任务或修改地图配置前先停止当前运行。</p></section>
 <section><h2>配置与日志</h2><p>任务配置：<code>simulation/maps/rmuc_2026_sentry26.json</code> 中的 <code>spawns</code>、<code>home_marker</code>、<code>team_mission</code>。</p>
-<p>运行目录包含 <code>team_status.json</code>、<code>team_mission.jsonl</code>、<code>companion_0..3.jsonl</code>、<code>truth_evaluation_only.jsonl</code> 和 <code>truth_evaluation_only_contacts.jsonl</code>。</p>
+<p>运行目录包含 <code>team_status.json</code>、<code>team_mission.jsonl</code>、各机的 <code>companion_ID.jsonl</code>、<code>truth_evaluation_only.jsonl</code> 和 <code>truth_evaluation_only_contacts.jsonl</code>。</p>
 <p>验证结果：<a href="team-verification.json">任务验证摘要</a>；尺寸核验：<a href="scale-verification.json">尺寸记录</a>。</p></section></html>

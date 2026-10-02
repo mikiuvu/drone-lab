@@ -276,7 +276,7 @@ class GazeboPanel(QWidget):
             camera = self.cameras.pop()
             self.camera_grid.removeWidget(camera)
             camera.deleteLater()
-        columns = max(1, min(4, int(math.ceil(math.sqrt(count)))))
+        columns = max(1, min(4, math.ceil(math.sqrt(count))))
         colors = [(31, 119, 180), (214, 39, 40), (44, 160, 44), (148, 103, 189)]
         for i in range(count):
             camera = QLabel(f"无人机 {i} · 等待 Gazebo 相机图像")
@@ -518,6 +518,13 @@ class GazeboPanel(QWidget):
                 "、".join(str(i) for i in completed if type(i) is int and i >= 0)
                 or "无"
             )
+        skipped = team.get("skipped", [])
+        if skipped:
+            text += " · 跳过机号：" + "、".join(map(str, skipped))
+        if team.get("telemetry_errors"):
+            text += f" · 状态写入重试 {team['telemetry_errors']} 次"
+        if team.get("send_errors"):
+            text += f" · 指令发送失败 {team['send_errors']} 次"
         return text
 
     def _format(self, snapshot):
@@ -574,6 +581,8 @@ class GazeboPanel(QWidget):
                         else "等待连接"
                     )
                 )
+                if state.get("degraded"):
+                    rows.append("  当前状态：" + state.get("degraded_reason", "等待恢复"))
             home = v.get("home_error")
             if home:
 

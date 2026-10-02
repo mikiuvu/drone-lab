@@ -1,4 +1,4 @@
-"""Bounded real SITL trial, supervised by simulation clock (no pose injection)."""
+"""Run a Gazebo/PX4 trial for a bounded simulation interval."""
 
 import argparse
 import json
@@ -13,9 +13,9 @@ from gz.transport13 import Node
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--sim-seconds", type=float, default=30)
-parser.add_argument("--vehicle-count",type=int)
-parser.add_argument("--uwb-anchors",action="store_true")
-parser.add_argument("--flow-disable",action="store_true")
+parser.add_argument("--vehicle-count", type=int)
+parser.add_argument("--uwb-anchors", action="store_true")
+parser.add_argument("--flow-disable", action="store_true")
 parser.add_argument(
     "--mission", choices=["hover", "survey", "team_contact"], default="hover"
 )
@@ -24,23 +24,23 @@ if not 5 <= args.sim_seconds <= 600:
     parser.error("sim-seconds must be between 5 and 600")
 os.environ["GZ_PARTITION"] = "drone-lab-four"
 command = [
-        "python3",
-        str(root / "launch_linux.py"),
-        "start",
-        "--gui",
-        "--companions",
-        "--fly",
-        "--horizontal-tof",
-        "--mission",
-        args.mission,
-    ]
+    "python3",
+    str(root / "launch_linux.py"),
+    "start",
+    "--gui",
+    "--companions",
+    "--fly",
+    "--horizontal-tof",
+    "--mission",
+    args.mission,
+]
 if args.vehicle_count is not None:
-    command += ["--vehicle-count",str(args.vehicle_count)]
+    command += ["--vehicle-count", str(args.vehicle_count)]
 if args.uwb_anchors:
     command += ["--uwb-anchors"]
 if args.flow_disable:
     command += ["--flow-disable"]
-subprocess.run(command,check=True,stdout=subprocess.DEVNULL)
+subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 state = json.loads((root / "runtime/manager.json").read_text(encoding="utf-8"))
 done = threading.Event()
 last = [0.0]
@@ -86,11 +86,10 @@ report = {
     "run_dir": str(run),
     "sim_seconds": last[0],
     "mission": args.mission,
-    "vehicle_count":len(state["map"]["spawns"]),
-    "uwb_anchor_count":len(state["map"].get("uwb_anchors",[])),
+    "vehicle_count": len(state["map"]["spawns"]),
+    "uwb_anchor_count": len(state["map"].get("uwb_anchors", [])),
     "real_physics": True,
     "height_assisted": True,
-    "flight_success": "requires metric review",
     "stopped_on_team_failure": aborted,
 }
 (run / "bounded_trial.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

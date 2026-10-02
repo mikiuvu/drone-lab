@@ -84,7 +84,7 @@ class LabWindow(QMainWindow):
         self.research_panel = ResearchPanel(ROOT)
         self.tabs.addTab(self.research_panel, "⑥ 预研与仿真")
         self.gazebo_panel = GazeboPanel(ROOT)
-        self.tabs.addTab(self.gazebo_panel, "⑦ Gazebo 四机")
+        self.tabs.addTab(self.gazebo_panel, "⑦ Gazebo 多机")
         self.load_settings()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)

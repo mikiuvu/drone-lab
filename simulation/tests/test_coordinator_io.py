@@ -2,26 +2,28 @@
 
 import json
 import os
-from pathlib import Path
 import socket
 import subprocess
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
-
-BINARY = Path(os.environ.get(
-    "TEAM_COORDINATOR_BIN",
-    "/home/devcontainers/drone-sim/build-companion/team_coordinator",
-))
+BINARY = Path(
+    os.environ.get(
+        "TEAM_COORDINATOR_BIN",
+        "/home/devcontainers/drone-sim/build-companion/team_coordinator",
+    )
+)
 
 
 @unittest.skipUnless(BINARY.is_file(), "team_coordinator binary required")
 class CoordinatorIOTest(unittest.TestCase):
     def test_status_export_failure_recovers_without_stopping_commands(self):
-        with tempfile.TemporaryDirectory() as directory, socket.socket(
-            socket.AF_INET, socket.SOCK_DGRAM
-        ) as receiver:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver,
+        ):
             root = Path(directory)
             receiver.bind(("127.0.0.1", 18000))
             receiver.settimeout(3)
@@ -41,7 +43,8 @@ class CoordinatorIOTest(unittest.TestCase):
             with (root / "stderr.log").open("w", encoding="utf-8") as errors:
                 process = subprocess.Popen(
                     [str(BINARY), "--map", str(path), "--runtime", str(root)],
-                    stdout=subprocess.DEVNULL, stderr=errors,
+                    stdout=subprocess.DEVNULL,
+                    stderr=errors,
                 )
                 try:
                     sequences = []

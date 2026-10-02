@@ -44,11 +44,12 @@ def configure_fleet(config, vehicle_count=None, enable_anchors=False):
                 for i in range(count)
             ]
             mission["assembly"] = [
-                dict(id=i, x=center_x + x * 0.65, y=center_y + y * 0.65)
+                {"id": i, "x": center_x + x * 0.65, "y": center_y + y * 0.65}
                 for i, (x, y) in enumerate(offsets)
             ]
             mission["formation_offsets"] = [
-                dict(id=i, x=x * 0.65, y=y * 0.65) for i, (x, y) in enumerate(offsets)
+                {"id": i, "x": x * 0.65, "y": y * 0.65}
+                for i, (x, y) in enumerate(offsets)
             ]
             mission["order"] = list(range(count))
     if sorted(s["id"] for s in spawns) != list(range(count)):
@@ -60,7 +61,7 @@ def configure_fleet(config, vehicle_count=None, enable_anchors=False):
     }
     if enable_anchors and not result.get("uwb_anchors"):
         result["uwb_anchors"] = [
-            dict(id=i, x=x, y=y, z=2.4)
+            {"id": i, "x": x, "y": y, "z": 2.4}
             for i, (x, y) in enumerate([(-13, -7), (-13, 7), (13, -7), (13, 7)])
         ]
     else:
