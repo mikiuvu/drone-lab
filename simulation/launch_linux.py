@@ -403,6 +403,10 @@ def main():
         }
         for i in range(3)
     ]
+    if config.get("moving_armor", {}).get("source") == "original_base_mesh":
+        settings["companion"]["camera"]["strip_center_separation_m"] = config[
+            "team_mission"
+        ].get("visual_strip_separation_m", 0.195)
     (run_dir / "companion_config.json").write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
     )

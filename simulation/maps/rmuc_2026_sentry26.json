@@ -96,9 +96,9 @@
     ]
   },
   "team_mission": {
-    "cruise_z_m": 1.48,
+    "cruise_z_m": 1.5355,
     "cruise_speed_mps": 4,
-    "contact_speed_mps": 0.18,
+    "contact_speed_mps": 0.35,
     "return_tolerance_m": 0.14,
     "home_ground_z_m": 0.5,
     "team": "red",
@@ -111,13 +111,13 @@
     "approach": {
       "x": 10.6,
       "y": 0,
-      "z": 1.48,
+      "z": 1.4433,
       "yaw": 0
     },
     "target": {
-      "x": 11.5,
+      "x": 11.5156,
       "y": 0.0012,
-      "z": 1.48
+      "z": 1.4433
     },
     "order": [
       0,
@@ -173,12 +173,12 @@
       {
         "x": 0,
         "y": 0,
-        "z": 1.48
+        "z": 1.5355
       },
       {
         "x": 1,
         "y": 0,
-        "z": 1.48
+        "z": 1.5355
       }
     ],
     "loss_abort_s": 15,
@@ -195,7 +195,7 @@
     "route_speed_tolerance_mps": 5.5,
     "fly_through_route": true,
     "velocity_damping": 0.5,
-    "pipelined_contact": true,
+    "pipelined_contact": false,
     "impact_settle_s": 0.15,
     "touchdown_descent_mps": 1.0,
     "impact_acceleration_mps2": 0.5,
@@ -228,7 +228,10 @@
         "y": -1.25
       }
     ],
-    "visual_contact": true
+    "visual_contact": true,
+    "visual_strip_height_m": 0.093427,
+    "visual_strip_separation_m": 0.18409,
+    "visual_bottom_separation_m": 0.108873
   },
   "optical_flow": {
     "enabled": true,

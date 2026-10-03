@@ -151,9 +151,9 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     case TeamPhase::TAKEOFF: { bool ok=true; for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){auto p=config_.homes[i];p.z=config_.cruise_z_m;ok&=status_[i].armed&&near(static_cast<int>(i),p,false);} if(barrier(ok,sim))enter(config_.transit_waypoints.empty()?TeamPhase::ASSEMBLE:TeamPhase::TRANSIT,sim); break; }
     case TeamPhase::TRANSIT: if(transit_index_<static_cast<int>(config_.transit_waypoints.size())&&barrier(routeNear(transit_index_),sim)){if(++transit_index_==static_cast<int>(config_.transit_waypoints.size()))enter(TeamPhase::ASSEMBLE,sim); else { phase_start_=sim; stable_=false; }} break;
     case TeamPhase::ASSEMBLE: if(barrier(allNear(false),sim))enter(TeamPhase::APPROACH,sim); break;
-    case TeamPhase::APPROACH: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&barrier(near(a,config_.approach)&&std::abs(std::remainder(status_[a].yaw_rad-config_.approach.yaw,6.283185307))<=.15,sim))enter(TeamPhase::CONTACT,sim); break; }
+    case TeamPhase::APPROACH: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&barrier(config_.visual_contact?(validForBarrier(a,sim,wall)&&status_[a].visual_ready):(near(a,config_.approach)&&std::abs(std::remainder(status_[a].yaw_rad-config_.approach.yaw,6.283185307))<=.15),sim))enter(TeamPhase::CONTACT,sim); break; }
     // 接触要有新的冲击序号，且位置/航向符合基地条件；仅距离近或别的机撞击不算。
-    case TeamPhase::CONTACT: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&validForBarrier(a,sim,wall)&&status_[a].impact_seq>impact_baseline_){impact_baseline_=status_[a].impact_seq;const auto&s=status_[a];if(std::hypot(std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y),s.z_m-config_.target.z)<=.35&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.3){completed_.push_back(a);enter(TeamPhase::RETREAT,sim);}} break; }
+    case TeamPhase::CONTACT: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&validForBarrier(a,sim,wall)&&status_[a].impact_seq>impact_baseline_){impact_baseline_=status_[a].impact_seq;const auto&s=status_[a];if(config_.visual_contact||(std::hypot(std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y),s.z_m-config_.target.z)<=.35&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.3)){completed_.push_back(a);enter(TeamPhase::RETREAT,sim);}} break; }
     case TeamPhase::RETREAT: { const int a=activeVehicle();if(a<0){enter(TeamPhase::RETURN_ALL,sim);break;}
       // 流水接触：将位置投影到接触航向的前向/侧向，确认通道让出后启动下一架。
       if(config_.pipelined_contact){const auto&s=status_[a];const double dx=s.x_m-config_.approach.x,dy=s.y_m-config_.approach.y;
@@ -162,7 +162,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
         if(turn_+1==static_cast<int>(config_.order.size())&&validForBarrier(a,sim,wall)&&forward<-.12){++turn_;enter(TeamPhase::RETURN_ALL,sim);break;}
         if(validForBarrier(a,sim,wall)&&forward<-.25)retreat_assembly_=true;
         if(validForBarrier(a,sim,wall)&&retreat_assembly_&&forward<-.25&&std::abs(lateral)>.18){if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);}
-      }else if(barrier(near(a,retreat_assembly_?config_.assembly[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
+      }else if(barrier(near(a,retreat_assembly_?config_.completed_holding[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
     case TeamPhase::RETURN_ALL: case TeamPhase::ABORT_RETURN: if(return_index_>=0){if(barrier(routeNear(return_index_),sim)){--return_index_;stable_=false;phase_start_=sim;}}else if(barrier(allNear(true),sim))enter(TeamPhase::LAND_ALL,sim); break;
     default: break;
   }

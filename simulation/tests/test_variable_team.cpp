@@ -91,4 +91,23 @@ void missingVehicleAndRecovery() {
   assert(empty.phase()==TeamPhase::WAIT_READY && empty.completed().empty());
 }
 
-int main(){for(int n:{1,4,6,12}){fullMission(n);fullMission(n,true);}individualDegradation();missingVehicleAndRecovery();}
+void visionRequired() {
+  auto c=config(1);c.visual_contact=true;c.transit_waypoints.clear();
+  TeamMission mission(c);TeamVehicleStatus state;state.vehicle=0;
+  state.ready=state.xy_valid=state.z_valid=state.armed=true;state.z_m=c.cruise_z_m;
+  std::vector<TeamCommand> commands;
+  for(uint64_t i=1;i<80;++i){
+    if(!commands.empty()){state.x_m=commands[0].target_x_m;state.y_m=commands[0].target_y_m;state.z_m=commands[0].target_z_m;}
+    state.sim_time_us=i*100000;mission.updateStatus(state,state.sim_time_us);commands=mission.step(state.sim_time_us,state.sim_time_us);
+  }
+  assert(mission.phase()==TeamPhase::APPROACH);
+  state.visual_ready=true;
+  for(uint64_t i=80;i<90;++i){state.sim_time_us=i*100000;mission.updateStatus(state,state.sim_time_us);commands=mission.step(state.sim_time_us,state.sim_time_us);}
+  assert(mission.phase()==TeamPhase::CONTACT&&mission.completed().empty());
+  // 移动装甲不在地图静态目标点；视觉门控的冲击序号由 runner 提供。
+  state.y_m+=1;state.sim_time_us=9000000;++state.impact_seq;
+  mission.updateStatus(state,state.sim_time_us);mission.step(state.sim_time_us,state.sim_time_us);
+  assert(mission.phase()==TeamPhase::RETREAT&&mission.completed().size()==1);
+}
+
+int main(){for(int n:{1,4,6,12}){fullMission(n);fullMission(n,true);}individualDegradation();missingVehicleAndRecovery();visionRequired();}

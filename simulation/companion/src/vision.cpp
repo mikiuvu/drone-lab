@@ -10,6 +10,7 @@
 #include <fstream>
 #include <queue>
 #include <sstream>
+#include <stdexcept>
 
 namespace companion {
 namespace {
@@ -41,11 +42,15 @@ bool readToken(std::istream& stream, std::string* token) {
 }
 
 // 红/蓝通道突出或近白高亮像素可作为灯条候选；这里只做颜色筛选，形状和配对在后续判断。
-bool brightPixel(const PpmImage& image, int x, int y) {
+bool brightPixel(const PpmImage& image, int x, int y, const ArmorDetectionConfig& config) {
   const size_t index = static_cast<size_t>((y * image.width + x) * 3);
   const int r = image.rgb[index];
   const int g = image.rgb[index + 1];
   const int b = image.rgb[index + 2];
+  if (config.enemy_color == ArmorColor::Blue) {
+    return b >= config.min_blue_channel && b > r * config.blue_over_red_ratio &&
+           b > g * config.blue_over_green_ratio;
+  }
   const int maximum = std::max({r, g, b});
   const int minimum = std::min({r, g, b});
   const bool red = r >= 160 && r > g * 1.6 && r > b * 1.4;
@@ -107,7 +112,18 @@ std::optional<PpmImage> readPpm(const std::string& path) {
 }
 
 ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& config) {
+  return detectArmorStrips(image, config, ArmorDetectionConfig{});
+}
+
+ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& config,
+                                   const ArmorDetectionConfig& detection) {
   ArmorObservation result;
+  if (detection.enemy_color == ArmorColor::Blue &&
+      (detection.min_blue_channel < 0 || detection.min_blue_channel > 255 ||
+       !std::isfinite(detection.blue_over_red_ratio) || detection.blue_over_red_ratio <= 1.0 ||
+       !std::isfinite(detection.blue_over_green_ratio) || detection.blue_over_green_ratio <= 1.0)) {
+    throw std::invalid_argument("invalid blue armor color thresholds");
+  }
   if (image.width <= 0 || image.height <= 0 ||
       image.rgb.size() != static_cast<size_t>(image.width) * image.height * 3) {
     return result;
@@ -119,7 +135,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
   for (int y = 0; y < image.height; ++y) {
     for (int x = 0; x < image.width; ++x) {
       const size_t seed = static_cast<size_t>(y * image.width + x);
-      if (visited[seed] != 0 || !brightPixel(image, x, y)) continue;
+      if (visited[seed] != 0 || !brightPixel(image, x, y, detection)) continue;
       std::queue<std::pair<int, int>> pending;
       pending.emplace(x, y);
       visited[seed] = 1;
@@ -144,7 +160,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
                                     std::pair<int, int>{cx, cy + 1}}) {
           if (nx < 0 || nx >= image.width || ny < 0 || ny >= image.height) continue;
           const size_t index = static_cast<size_t>(ny * image.width + nx);
-          if (visited[index] == 0 && brightPixel(image, nx, ny)) {
+          if (visited[index] == 0 && brightPixel(image, nx, ny, detection)) {
             visited[index] = 1;
             pending.emplace(nx, ny);
           }
@@ -156,6 +172,13 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
           component_height >= 3) {
         component.center_x_px = static_cast<double>(sum_x) / component.area;
         component.center_y_px = static_cast<double>(sum_y) / component.area;
+        // 触边灯条可能被裁切，蓝色模式不将它用于完整灯条间距测距。
+        if (detection.enemy_color == ArmorColor::Blue &&
+            (component.min_x == 0 || component.max_x == image.width - 1 ||
+             component.min_y == 0 || component.max_y == image.height - 1)) {
+          result.image_clipped = true;
+          continue;
+        }
         components.push_back(component);
       }
     }
@@ -192,6 +215,8 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
     }
   }
   if (best_score <= 0.0) return result;
+  // 其他触边候选不影响当前完整配对；完整蓝色灯条对可重新建立观测。
+  result.image_clipped = false;
 
   // 3. 针孔模型给出水平/竖直角误差与距离 Z≈fx*真实间距/像素间距。
   //    图像右/下为正，而机体左/上为正，角误差取负号；侧视目标会改变表观间距，影响测距。
@@ -214,6 +239,112 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
   result.confidence = std::min(hleft,hright)/std::max(hleft,hright) *
       (1.0-std::abs(best_left.center_y_px-best_right.center_y_px)/std::max(hleft,hright));
   result.valid = result.confidence >= 0.6;
+  return result;
+}
+
+VisualTargetTracker::VisualTargetTracker(VisualGuidanceConfig config) : config_(config) {
+  // 配置在实例构造时校验，避免运行过程中 NaN 或负限幅传播到执行器参考。
+  for (double value : {config_.max_observation_age_s, config_.max_prediction_s,
+                       config_.max_lateral_speed_mps, config_.max_forward_speed_mps,
+                       config_.max_vertical_speed_mps, config_.max_yaw_rate_rad_s,
+                       config_.yaw_gain, config_.lateral_gain, config_.forward_gain,
+                       config_.vertical_gain, config_.stop_range_m}) {
+    if (!std::isfinite(value) || value < 0.0) {
+      throw std::invalid_argument("visual guidance constraints must be finite and nonnegative");
+    }
+  }
+  if (!std::isfinite(config_.velocity_filter_alpha) || config_.velocity_filter_alpha < 0.0 ||
+      config_.velocity_filter_alpha > 1.0 || !std::isfinite(config_.max_tracking_angle_rad) ||
+      config_.max_tracking_angle_rad <= 0.0 || config_.max_tracking_angle_rad >= kPi / 2.0) {
+    throw std::invalid_argument("invalid visual guidance filter or tracking angle");
+  }
+}
+
+void VisualTargetTracker::reset() {
+  last_observation_ = {};
+  last_now_us_ = last_frame_us_ = last_valid_us_ = 0;
+  lateral_velocity_mps_ = 0.0;
+}
+
+VisualGuidanceResult VisualTargetTracker::update(uint64_t now_us,
+                                               const ArmorObservation& observation,
+                                               uint64_t frame_time_us) {
+  VisualGuidanceResult result;
+  // 当前时钟回退时不修改缓存，也不沿旧时钟继续发出运动参考；显式 reset 可开始新序列。
+  if (now_us == 0 || now_us < last_now_us_) return result;
+  last_now_us_ = now_us;
+  const bool timestamp_valid = frame_time_us != 0 && frame_time_us <= now_us;
+  const double frame_age_s = timestamp_valid ? (now_us - frame_time_us) * 1.0e-6 : 0.0;
+  const bool observation_usable = observation.valid && !observation.image_clipped &&
+      std::isfinite(observation.angular_error_rad) &&
+      std::isfinite(observation.vertical_error_rad) &&
+      std::isfinite(observation.confidence) && observation.confidence >= 0.6 &&
+      observation.confidence <= 1.0 &&
+      std::abs(observation.angular_error_rad) <= config_.max_tracking_angle_rad &&
+      std::abs(observation.vertical_error_rad) <= config_.max_tracking_angle_rad &&
+      (!observation.range_valid ||
+       (std::isfinite(observation.range_m) && observation.range_m > 0.0));
+  bool fresh = false;
+  if (timestamp_valid && frame_time_us > last_frame_us_) {
+    const bool consecutive = last_frame_us_ == last_valid_us_ && last_valid_us_ != 0;
+    // 无效或陈旧帧同样推进水位，禁止后来到达的旧帧恢复过期目标。
+    last_frame_us_ = frame_time_us;
+    if (observation_usable && frame_age_s <= config_.max_observation_age_s) {
+      const double dt_s = last_valid_us_ != 0 ? (frame_time_us - last_valid_us_) * 1.0e-6 : 0.0;
+      if (consecutive && dt_s > 1.0e-6 && dt_s <= config_.max_prediction_s &&
+          observation.range_valid && last_observation_.range_valid) {
+        // Z*tan(水平角) 是光轴坐标中的左向位移。它的时间差分是相对运动，
+        // 含飞机自身平动/转动影响；只有相邻完整深度帧才形成前馈项。
+        const double previous_left_m = last_observation_.range_m *
+                                       std::tan(last_observation_.angular_error_rad);
+        const double current_left_m = observation.range_m * std::tan(observation.angular_error_rad);
+        const double measured_mps = clamp((current_left_m - previous_left_m) / dt_s,
+            -config_.max_lateral_speed_mps, config_.max_lateral_speed_mps);
+        lateral_velocity_mps_ = config_.velocity_filter_alpha * measured_mps +
+            (1.0 - config_.velocity_filter_alpha) * lateral_velocity_mps_;
+      } else {
+        lateral_velocity_mps_ = 0.0;
+      }
+      last_observation_ = observation;
+      last_valid_us_ = frame_time_us;
+      fresh = true;
+    }
+  } else if (timestamp_valid && frame_time_us == last_frame_us_ &&
+             frame_time_us == last_valid_us_ && observation_usable &&
+             frame_age_s <= config_.max_observation_age_s) {
+    // 控制循环可重复使用同一新鲜图像，速度估计和观测内容仍以首次接受的帧为准。
+    fresh = true;
+  }
+  if (last_valid_us_ == 0) return result;
+  result.observation_age_s = (now_us - last_valid_us_) * 1.0e-6;
+  if (!fresh && result.observation_age_s > config_.max_prediction_s) return result;
+
+  result.target_valid = fresh;
+  result.predicting = !fresh;
+  result.tracking_valid = true;
+  result.range_valid = last_observation_.range_valid;
+  result.range_m = result.range_valid ? last_observation_.range_m : 0.0;
+  result.lateral_velocity_mps = lateral_velocity_mps_;
+  result.yaw_error_rad = last_observation_.angular_error_rad;
+  if (result.range_valid) {
+    // 用有界横向相对速度补偿曝光到当前时刻的延迟；深度不外推，避免失锁时继续接近。
+    const double left_m = result.range_m * std::tan(last_observation_.angular_error_rad) +
+                          lateral_velocity_mps_ * result.observation_age_s;
+    result.yaw_error_rad = clamp(std::atan2(left_m, result.range_m),
+        -config_.max_tracking_angle_rad, config_.max_tracking_angle_rad);
+    result.velocity_flu_mps.y() = clamp(config_.lateral_gain * left_m + lateral_velocity_mps_,
+        -config_.max_lateral_speed_mps, config_.max_lateral_speed_mps);
+    if (fresh) {
+      result.velocity_flu_mps.x() = clamp(
+          config_.forward_gain * (result.range_m - config_.stop_range_m),
+          0.0, config_.max_forward_speed_mps) * std::cos(result.yaw_error_rad);
+      result.velocity_flu_mps.z() = clamp(config_.vertical_gain * result.range_m *
+          std::tan(last_observation_.vertical_error_rad),
+          -config_.max_vertical_speed_mps, config_.max_vertical_speed_mps);
+    }
+  }
+  result.yaw_rate_ref_rad_s = clamp(config_.yaw_gain * result.yaw_error_rad,
+      -config_.max_yaw_rate_rad_s, config_.max_yaw_rate_rad_s);
   return result;
 }
 

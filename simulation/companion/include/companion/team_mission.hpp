@@ -35,6 +35,7 @@ struct TeamMissionConfig {
   double route_tolerance_m = .10, route_speed_tolerance_mps = .30;
   bool fly_through_route = false; // true 允许通过航点时保持运动，不要求先降至 0.30 m/s。
   bool pipelined_contact = false; // true 在前机让出通道后切换轮次，不必等其完全停稳。
+  bool visual_contact = false; // 相机闭环接触；地图点只负责到达搜索区。
   double contact_exit_side = 0; // 接触航向左侧为正；0 按集结点决定待命侧。
   // 已接触飞机的停留点；不配置则沿用 assembly。
   std::vector<TeamPoint> completed_holding;
@@ -52,6 +53,7 @@ struct TeamVehicleStatus {
   double vx_mps = 0, vy_mps = 0, vz_mps = 0, yaw_rad = 0;
   bool xy_valid = false, z_valid = false, ready = false, armed = false, landed = false;
   bool flow_valid = false; // 协调器解码时可用有效光流补充 xy_valid。
+  bool visual_ready = false; // 近期图像锁定目标，且满足接触推进的对准条件。
   std::string xy_reason;
 };
 /**

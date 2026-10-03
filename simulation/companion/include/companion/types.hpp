@@ -273,6 +273,53 @@ struct ArmorObservation {
   double confidence{0.0};
   BrightStrip left;
   BrightStrip right;
+  bool image_clipped{false}; // 灯条触及图像边界，完整配对/测距不可用；跟踪器按失锁处理
+};
+
+/** @brief 灯条候选颜色；AnyBright 保持红、蓝和近白亮像素的兼容检测。 */
+enum class ArmorColor { AnyBright, Blue };
+
+/** @brief 像素颜色门限；蓝色模式要求 B 同时超过 R/G 的指定比例。 */
+struct ArmorDetectionConfig {
+  ArmorColor enemy_color{ArmorColor::AnyBright};
+  int min_blue_channel{160}; // B 通道下限，0..255
+  double blue_over_red_ratio{1.4};
+  double blue_over_green_ratio{1.4};
+};
+
+/**
+ * @brief 相机视轴闭环的时效、增益和 FLU 输出约束。
+ * @note range_m 为沿前向光轴的深度；stop_range_m 控制减速终点，撞击任务可设为 0。
+ *       预测窗口从最后有效帧曝光时间计时；失锁预测期间始终停止前向推进。
+ */
+struct VisualGuidanceConfig {
+  double max_observation_age_s{0.12};
+  double max_prediction_s{0.20};
+  double max_lateral_speed_mps{2.0};
+  double max_forward_speed_mps{0.8};
+  double max_vertical_speed_mps{0.4};
+  double max_yaw_rate_rad_s{1.5};
+  double yaw_gain{2.5}; // 水平角误差到偏航角速度，1/s
+  double lateral_gain{1.0}; // 横向相对位移到速度，1/s
+  double forward_gain{0.9}; // 深度到接近速度，1/s
+  double vertical_gain{0.6}; // 竖向相对位移到速度，1/s
+  double stop_range_m{0.0};
+  double velocity_filter_alpha{0.5}; // 相邻帧横向差分低通权重，0..1
+  double max_tracking_angle_rad{1.2}; // 角误差上限，必须小于 π/2
+};
+
+/** @brief 相机跟踪输出；target_valid 表示新鲜观测，predicting 表示短时失锁预测。 */
+struct VisualGuidanceResult {
+  bool target_valid{false};
+  bool predicting{false};
+  bool tracking_valid{false}; // 新鲜跟踪或窗口内预测，可用于视觉事件门控
+  bool range_valid{false}; // 预测时深度保持最近有效帧的值，需结合观测年龄核验
+  double observation_age_s{0.0}; // 最近有效观测的年龄 s；无历史时为 0
+  double yaw_error_rad{0.0};
+  double range_m{0.0};
+  Eigen::Vector3d velocity_flu_mps{Eigen::Vector3d::Zero()};
+  double yaw_rate_ref_rad_s{0.0};
+  double lateral_velocity_mps{0.0}; // 相机系相对横向运动估计，左为正，限幅 m/s
 };
 
 /** @brief 图像尺寸 px、焦距与主点 px、灯条中心间距 m、图像时效 us。 */

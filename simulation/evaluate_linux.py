@@ -15,6 +15,11 @@ from gz.msgs10.contacts_pb2 import Contacts
 from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
 
+try:
+    from simulation.contact_evaluation import armor_contact
+except ModuleNotFoundError:
+    from contact_evaluation import armor_contact
+
 
 # 创建独占的新日志并订阅异步消息；主线程等待退出信号，取消订阅后关闭文件。
 def main():
@@ -36,6 +41,7 @@ def main():
     )
     ground_z = config.get("home_marker", {}).get("ground_z_m", 0.0)
     target = config.get("team_mission", {}).get("target")
+    visual_contact = config.get("team_mission", {}).get("visual_contact", False)
     body_clearance = config.get("team_mission", {}).get("body_clearance_m", 0.0125)
     homes = {s["id"]: s for s in config.get("spawns", []) if type(s.get("id")) is int}
     vehicle_count = (
@@ -95,7 +101,7 @@ def main():
                 output.flush()
 
     # 结合最近位姿、接触法向和接触点高度判断地面接触。
-    # 地面接触保持 100 ms，事件日志按每机至少 200 ms 限频；目标接触标签使用距目标小于 0.4 m 的几何条件。
+    # 移动装甲命中核对碰撞体身份；静态历史场景保留原有近基地几何标签。
     def contacts(vehicle, message):
         if not message.contact:
             return
@@ -110,9 +116,11 @@ def main():
         )
         if ground_contact:
             ground_contact_until[vehicle] = stamp + 100000
-        if stamp - contact_times.get(vehicle, -1000000) < 200000:
+        hit_armor = armor_contact(message.contact)
+        contact_key = (vehicle, hit_armor)
+        if stamp - contact_times.get(contact_key, -1000000) < 50000:
             return
-        contact_times[vehicle] = stamp
+        contact_times[contact_key] = stamp
         home = homes.get(vehicle)
         row = {
             "kind": "physical_contact_evaluation",
@@ -121,7 +129,10 @@ def main():
             "x_m": pose["x_m"],
             "y_m": pose["y_m"],
             "z_m": pose["z_m"],
-            "enemy_base_contact": bool(
+            "enemy_armor_contact": hit_armor,
+            "enemy_base_contact": hit_armor
+            if visual_contact
+            else bool(
                 target
                 and math.dist(
                     [pose["x_m"], pose["y_m"], pose["z_m"]],

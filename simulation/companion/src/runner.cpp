@@ -9,6 +9,11 @@
 #include "companion/estimator.hpp"
 #include "companion/protocol.hpp"
 #include "companion/vision.hpp"
+#include "companion/armor_tracker.hpp"
+#ifdef COMPANION_WITH_OPENCV
+#include "companion/rm_auto_aim.hpp"
+#endif
+#include <deque>
 #include "companion/terrain.hpp"
 #include <common/mavlink.h>
 #include <nlohmann/json.hpp>
@@ -160,6 +165,24 @@ int main(int argc,char**argv){try{
   std::vector<int> vehicle_ids;for(const auto&spawn:map_settings.at("spawns"))vehicle_ids.push_back(spawn.at("id").get<int>());
   if(armor_enabled&&std::find(vehicle_ids.begin(),vehicle_ids.end(),o.mission_vehicle)==vehicle_ids.end())throw std::runtime_error("mission explorer is not in fleet");
   const auto team_settings=map_settings.value("team_mission",json::object());
+  const bool visual_contact=team_enabled&&team_settings.value("visual_contact",false);
+#ifndef COMPANION_WITH_OPENCV
+  if(visual_contact)throw std::runtime_error("移动装甲视觉任务需要启用 COMPANION_WITH_OPENCV 构建");
+#endif
+
+  companion::ArmorDetectionConfig detection; detection.enemy_color=visual_contact?companion::ArmorColor::Blue:companion::ArmorColor::AnyBright;
+  companion::VisualGuidanceConfig visual_config;
+  visual_config.max_forward_speed_mps=team_settings.value("contact_speed_mps",.18);
+  visual_config.forward_gain=3.0;visual_config.lateral_gain=2.0;visual_config.vertical_gain=2.0;
+  visual_config.yaw_gain=0.0;visual_config.max_observation_age_s=.25;visual_config.max_prediction_s=.3;
+  companion::VisualTargetTracker visual_tracker(visual_config);
+  companion::VisualGuidanceResult visual_result;
+  bool visual_ready=false;
+  uint64_t visual_lost_since=0;
+  companion::ArmorTracker armor_track;
+  std::deque<companion::Estimate> pose_history;
+  uint64_t visual_pose_stamp=0;
+
   for(const char* key:{"position_gain","cruise_speed_mps","climb_speed_mps","descent_speed_mps","landing_speed_mps","touchdown_descent_mps","yaw_gain","yaw_rate_limit_rad_s","impact_acceleration_mps2","impact_proximity_m"})
     if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<=0))throw std::runtime_error(std::string("invalid team_mission.")+key);
   for(const char* key:{"velocity_damping","impact_settle_s","impact_recovery_s","impact_pitch_rad","impact_roll_rad","touchdown_thrust"})
@@ -239,7 +262,10 @@ int main(int argc,char**argv){try{
           const double heading=team_settings.value("approach",json::object()).value("yaw",0.0);
           const double deceleration=-raw_linear.x()*std::cos(heading)-raw_linear.y()*std::sin(heading);
           const double impulse=team_settings.value("directional_impact",false)?deceleration:raw_linear.head<2>().norm();
-          if(std::hypot(estimate.pose.x_m-tx,estimate.pose.y_m-ty)<team_settings.value("impact_proximity_m",.35)&&impulse>team_settings.value("impact_acceleration_mps2",2.0)){++impact_seq;last_impact_us=sim_us;estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
+          const bool visual_near=visual_result.tracking_valid&&visual_result.range_valid&&visual_result.range_m>0&&visual_result.range_m<.16&&visual_result.observation_age_s<.45;
+          const bool close_to_target=visual_contact?visual_near:std::hypot(estimate.pose.x_m-tx,estimate.pose.y_m-ty)<team_settings.value("impact_proximity_m",.35);
+          if(visual_contact&&impulse>1.0)emit({{"kind","impact_candidate"},{"sim_time_us",sim_us},{"impulse",impulse},{"range_m",visual_result.range_m},{"age_s",visual_result.observation_age_s},{"tracking",visual_result.tracking_valid}});
+          if(close_to_target&&impulse>(visual_contact?8.0:team_settings.value("impact_acceleration_mps2",2.0))){++impact_seq;last_impact_us=sim_us;if(!visual_contact)estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
         }
         // 未解锁静置期间统计加速度偏置；样本数量和经过时间同时满足才认为可用。
         if(!bias_ready&&!armed&&age(bias_start)<2.0&&raw_linear.allFinite()&&raw_linear.norm()<40){
@@ -261,11 +287,54 @@ int main(int argc,char**argv){try{
     auto now=Clock::now();if(std::chrono::duration<double>(now-last_heartbeat).count()>=1){mavlink_message_t msg;mavlink_msg_heartbeat_pack(200,191,&msg,MAV_TYPE_ONBOARD_CONTROLLER,MAV_AUTOPILOT_INVALID,0,0,MAV_STATE_ACTIVE);sendMav(mav,msg,o.remote);last_heartbeat=now;}
     // 7. 按现实时间至少间隔 20 ms 发布；仿真时间仍取测量时戳，不随电脑运行速度伪造。
     if(std::chrono::duration<double>(now-last_publish).count()>=.02){last_publish=now;estimator.advanceTo(sim_us);auto e=estimator.estimate();
-      // 相机 PPM 与元数据序号/时间必须一致才检测；team_contact 只读元数据而不启用装甲板视觉。
+      pose_history.push_back(e);while(pose_history.size()>120)pose_history.pop_front();
+      // 相机 PPM 与元数据序号/时间一致才检测；移动装甲接触任务使用蓝色灯条像素闭环。
       auto camera_dir=o.runtime; if(std::filesystem::exists(o.runtime/"camera"))camera_dir=o.runtime/"camera";
-      try{auto meta=readJson(camera_dir/("camera_"+std::to_string(o.vehicle)+".json"));auto seq=meta.at("frame_seq").get<uint64_t>();const auto stamp=meta.at("sim_time_us").get<uint64_t>();if(seq!=frame_seq){if(armor_enabled){auto image=companion::readPpm((camera_dir/("camera_"+std::to_string(o.vehicle)+".ppm")).string());if(image && image->frame_seq==seq && image->sim_time_us==stamp){target=companion::detectArmorStrips(*image,camera);frame_seq=seq;camera_us=stamp;emit({{"kind","vision"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"pixel_only",true},{"detected",target.valid},{"centroid_x_px",target.centroid_x_px},{"centroid_y_px",target.centroid_y_px},{"angular_error_rad",target.angular_error_rad},{"range_m",target.range_m}});}}else{frame_seq=seq;camera_us=stamp;emit({{"kind","camera_metadata"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"detection_skipped",true}});}}}catch(const std::exception&){}
+      try{auto meta=readJson(camera_dir/("camera_"+std::to_string(o.vehicle)+".json"));auto seq=meta.at("frame_seq").get<uint64_t>();const auto stamp=meta.at("sim_time_us").get<uint64_t>();if(seq!=frame_seq){if(armor_enabled||visual_contact){auto image=companion::readPpm((camera_dir/("camera_"+std::to_string(o.vehicle)+".ppm")).string());if(image && image->frame_seq==seq && image->sim_time_us==stamp){target=companion::detectArmorStrips(*image,camera,detection);frame_seq=seq;camera_us=stamp;emit({{"kind","vision"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"pixel_only",true},{"detected",target.valid},{"centroid_x_px",target.centroid_x_px},{"centroid_y_px",target.centroid_y_px},{"angular_error_rad",target.angular_error_rad},{"range_m",target.range_m}});}}else{frame_seq=seq;camera_us=stamp;emit({{"kind","camera_metadata"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"detection_skipped",true}});}}}catch(const std::exception&){}
       if(!camera_us||camera_us>sim_us||sim_us-camera_us>camera.timeout_us)target.valid=false;
-      if(armor_enabled&&o.vehicle!=o.mission_vehicle)target.valid=false;
+      if(visual_contact){
+        visual_result=visual_tracker.update(sim_us,target,camera_us);
+        visual_ready=visual_result.target_valid&&visual_result.range_valid&&std::abs(target.angular_error_rad)<.15&&std::abs(target.vertical_error_rad)<.15;
+      }
+
+#ifdef COMPANION_WITH_OPENCV
+      if(visual_contact){
+        if(camera_us&&camera_us!=visual_pose_stamp&&camera_us<=sim_us){
+          auto image=companion::readPpm((camera_dir/("camera_"+std::to_string(o.vehicle)+".ppm")).string());
+          if(image&&image->sim_time_us==camera_us){
+            visual_pose_stamp=camera_us;
+            const auto detected=companion::detectRmArmor(*image,camera,team_settings.value("visual_strip_height_m",.055),team_settings.value("visual_bottom_separation_m",0.0));
+            if(detected.valid&&!pose_history.empty()){
+              auto nearest=std::min_element(pose_history.begin(),pose_history.end(),[&](const auto&a,const auto&b){return std::llabs(static_cast<int64_t>(a.sim_time_us)-static_cast<int64_t>(camera_us))<std::llabs(static_cast<int64_t>(b.sim_time_us)-static_cast<int64_t>(camera_us));});
+              if(std::llabs(static_cast<int64_t>(nearest->sim_time_us)-static_cast<int64_t>(camera_us))<80000){
+                const auto&pose=nearest->pose;
+                // 相机右下前 → 机体前左上，补相机安装平移，再用曝光时刻自身位姿转世界系。
+                Eigen::Vector3d body(detected.position_camera_m.z()+.052,-detected.position_camera_m.x(),-detected.position_camera_m.y());
+                Eigen::Vector3d world=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+rotation(pose.roll_rad,pose.pitch_rad,pose.yaw_rad)*body;
+                armor_track.observe(camera_us,world);
+                emit({{"kind","visual_pose"},{"sim_time_us",camera_us},{"pnp",true},{"x_m",world.x()},{"y_m",world.y()},{"z_m",world.z()},{"reprojection_error_px",detected.reprojection_error_px}});
+              }
+            }
+          }
+        }
+        const auto tracked=armor_track.at(sim_us);
+        visual_result={};visual_ready=false;
+        if(tracked.valid){
+          Eigen::Vector3d relative=rotation(0,0,-e.pose.yaw_rad)*(tracked.position-Eigen::Vector3d(e.pose.x_m,e.pose.y_m,e.pose.z_m));
+          Eigen::Vector3d feedforward=rotation(0,0,-e.pose.yaw_rad)*tracked.velocity;
+          visual_result.tracking_valid=tracked.age_s<=.35||relative.x()<.3;visual_result.target_valid=tracked.measured;visual_result.range_valid=true;
+          visual_result.range_m=relative.x();visual_result.observation_age_s=tracked.age_s;
+          visual_result.yaw_error_rad=std::atan2(relative.y(),relative.x());
+          visual_result.velocity_flu_mps.y()=std::clamp(2.0*relative.y()+feedforward.y(),-.65,.65);
+          visual_result.velocity_flu_mps.z()=std::clamp(2.0*relative.z()+feedforward.z(),-.4,.4);
+          // 板很近时允许最多0.8s的已锁定轨迹延拓，解决灯条离开视野到机体接触间的盲区。
+          const bool aligned=std::abs(relative.y())<.07&&std::abs(relative.z())<.05;
+          if(aligned&&visual_result.tracking_valid&&(tracked.measured||relative.x()<.3))visual_result.velocity_flu_mps.x()=team_settings.value("contact_speed_mps",.18);
+          visual_ready=tracked.measured&&std::abs(relative.y())<.12&&std::abs(relative.z())<.1;
+        }
+      }
+#endif
+      if(armor_enabled&&!visual_contact&&o.vehicle!=o.mission_vehicle)target.valid=false;
       std::vector<companion::PeerEstimate>p;for(auto&entry:peer_cache)p.push_back(entry.second);const bool schedule_active=sim_us>=static_cast<uint64_t>(start_delay_s*1e6);auto intention=companion::makeControlIntention(sim_us,e,target,camera,p,schedule_active?config.safe_waypoints:std::vector<companion::Pose2>{},&waypoint_index,config.waypoint_radius_m,armor_enabled&&schedule_active);if(!schedule_active){intention.mode="HOLD_DELAY";intention.velocity_flu_mps.setZero();intention.target_valid=false;intention.waypoint_valid=false;}
       const bool live=sim_us&&age(obs_rx)<1.0&&age(imu_rx)<.5&&age(hb_rx)<3&&age(attitude_rx)<.5;intention.safe_to_arm=intention.safe_to_arm&&live;
       if(live&&e.z_valid&&!team_enabled){
@@ -295,7 +364,7 @@ int main(int argc,char**argv){try{
           if(touchdown_zone)desired.head<2>().setZero();
           if(touchdown_zone&&!landed)desired.z()=-team_settings.value("touchdown_descent_mps",team_settings.value("landing_speed_mps",.12));
           // 接触阶段用固定航向速度推进，防止位置环在到达接近点时提前停止。
-          if(intention.mode=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle){
+          if(!visual_contact&&intention.mode=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle){
             const double heading=team_command.at("target_yaw_rad").get<double>();
             const double speed=std::max(0.0,team_command.at("contact_speed_mps").get<double>());
             desired.x()=std::cos(heading)*speed;desired.y()=std::sin(heading)*speed;
@@ -306,9 +375,39 @@ int main(int argc,char**argv){try{
           const double yaw_limit=team_settings.value("yaw_rate_limit_rad_s",.5);
           intention.yaw_rate_ref_rad_s=std::clamp(companion::wrapAngle(heading-e.pose.yaw_rad)*team_settings.value("yaw_gain",.8),-yaw_limit,yaw_limit);
           if(touchdown_zone)intention.yaw_rate_ref_rad_s=0;
+          // 终端接近仅使用相机角误差和视觉深度，绝不查询滑轨相位或板世界位置。
+          if(visual_contact&&team_command.value("active_vehicle",-1)==o.vehicle&&
+             (intention.mode=="APPROACH"||intention.mode=="CONTACT")){
+            intention.velocity_flu_mps=visual_result.velocity_flu_mps;
+            if(intention.mode=="APPROACH")intention.velocity_flu_mps.x()=0;
+            intention.yaw_rate_ref_rad_s=visual_result.yaw_rate_ref_rad_s;
+            intention.target_valid=visual_result.target_valid;
+            intention.target_range_m=visual_result.range_m;
+            intention.target_yaw_error_rad=visual_result.yaw_error_rad;
+            if(visual_result.tracking_valid)visual_lost_since=0;
+            if(!visual_result.tracking_valid){
+              if(intention.mode=="APPROACH"){
+                // 未锁定前到达配置搜索点；一旦锁定，仅视觉驱动接近。搜索点不是装甲瞬时位置。
+                intention.velocity_flu_mps=rotation(0,0,-e.pose.yaw_rad)*desired;
+                const double horizontal=intention.velocity_flu_mps.head<2>().norm();
+                if(horizontal>.35)intention.velocity_flu_mps.head<2>()*=.35/horizontal;
+              }else {
+                if(!visual_lost_since)visual_lost_since=sim_us;
+                if(sim_us-visual_lost_since<800000){
+                  intention.velocity_flu_mps.setZero();intention.velocity_flu_mps.x()=-.15;
+                }else{
+                  intention.velocity_flu_mps=rotation(0,0,-e.pose.yaw_rad)*desired;
+                  const double speed=intention.velocity_flu_mps.head<2>().norm();
+                  if(speed>.3)intention.velocity_flu_mps.head<2>()*=.3/speed;
+                }
+              }
+              intention.yaw_rate_ref_rad_s=0;
+            }
+          }
+
           if(intention.mode=="WAIT_READY"||intention.mode=="HOLD"||(last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_settle_s",.4)*1e6))||team_disarm||team_complete){intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
         }
-        team->send(json{{"schema",1},{"kind","team_status"},{"vehicle",o.vehicle},{"sim_time_us",sim_us},{"x_m",e.pose.x_m},{"y_m",e.pose.y_m},{"z_m",e.pose.z_m},{"yaw_rad",e.pose.yaw_rad},{"vx_mps",e.velocity_enu_mps.x()},{"vy_mps",e.velocity_enu_mps.y()},{"vz_mps",e.velocity_enu_mps.z()},{"xy_valid",e.xy_valid||e.flow_valid},{"z_valid",e.z_valid},{"ready",team_ready},{"xy_reason",e.localization_mode},{"flow_valid",e.flow_valid},{"position_confidence",e.position_confidence},{"armed",armed},{"landed",landed},{"impact_seq",impact_seq}}.dump(),18100);
+        team->send(json{{"schema",1},{"kind","team_status"},{"vehicle",o.vehicle},{"sim_time_us",sim_us},{"x_m",e.pose.x_m},{"y_m",e.pose.y_m},{"z_m",e.pose.z_m},{"yaw_rad",e.pose.yaw_rad},{"vx_mps",e.velocity_enu_mps.x()},{"vy_mps",e.velocity_enu_mps.y()},{"vz_mps",e.velocity_enu_mps.z()},{"xy_valid",e.xy_valid||e.flow_valid},{"z_valid",e.z_valid},{"ready",team_ready},{"xy_reason",e.localization_mode},{"flow_valid",e.flow_valid},{"visual_ready",visual_ready},{"position_confidence",e.position_confidence},{"armed",armed},{"landed",landed},{"impact_seq",impact_seq}}.dump(),18100);
       }
       if(team_enabled&&landed&&!landing_recorded&&(team_command.value("phase","")=="LAND_ALL"||team_complete)){emit({{"kind","contact_final"},{"sim_time_us",sim_us},{"landed",true},{"phase","LANDED"}});landing_recorded=true;}
       if(!intention.safe_to_arm){intention.mode=armed?"RECOVER_ODOMETRY":"WAIT_SENSORS";intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}

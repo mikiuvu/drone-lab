@@ -1,6 +1,6 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>多机定位、基地撞击与返航</title>
 <style>body{font:16px/1.75 "Microsoft YaHei",sans-serif;max-width:1120px;margin:32px auto;padding:0 24px;color:#183449;background:#f6f9fc}section{background:white;border:1px solid #d4e0e9;border-radius:10px;padding:22px;margin:18px 0}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccdbe7;padding:9px;text-align:left}img{max-width:100%;height:auto}code{background:#edf3f8;padding:2px 5px}a{color:#096c91}</style>
-<h1>多机定位、基地撞击与返航</h1><p>移动装甲板场景使用原基地顶部滑轨板件，见<a href="original-base-armor.html">原模型结构与验证状态</a>。下方快速任务数据为固定表面历史配置。</p>
+<h1>多机定位、基地撞击与返航</h1><p>当前移动目标任务见<a href="visual-armor.html">移动基地装甲视觉闭环</a>。</p><p>移动装甲板场景使用原基地顶部滑轨板件，见<a href="original-base-armor.html">原模型结构与验证状态</a>。下方快速任务数据为固定表面历史配置。</p>
 <section><h2>四机快速任务</h2>
 <p>默认四机配置以 30 s 内完成起飞、依次接触基地、共同返航和落地确认为目标。飞行计时从第一架离开平台 3 cm 开始，到全队落地确认结束；环境启动和飞控初始化另计。</p>
 <table><tr><th>参数</th><th>设置</th></tr><tr><td>航行速度上限</td><td>4.0 m/s</td></tr><tr><td>接触速度</td><td>0.25 m/s</td></tr><tr><td>巡航／接触高度</td><td>0.75／0.58 m，世界坐标</td></tr><tr><td>稳定确认时间</td><td>0.05 s</td></tr><tr><td>基地通行</td><td>上侧待命、下侧退出；下一架提前侧方就位</td></tr></table>

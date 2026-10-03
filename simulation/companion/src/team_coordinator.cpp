@@ -114,6 +114,7 @@ TeamMissionConfig readConfig(const std::string& path) {
   c.route_speed_tolerance_mps=m.value("route_speed_tolerance_mps",.30);
   c.fly_through_route=m.value("fly_through_route",false);
   c.pipelined_contact=m.value("pipelined_contact",false);
+  c.visual_contact=m.value("visual_contact",false);
   if(m.contains("stable_s")) {
     const double seconds=number(m,"stable_s");
     if(seconds<=0||seconds>10)throw std::invalid_argument("稳定确认时间无效");
@@ -165,6 +166,7 @@ TeamVehicleStatus readStatus(const char* data, int length) {
   s.yaw_rad = number(j,"yaw_rad");
   s.xy_valid = boolean(j,"xy_valid");
   s.flow_valid = j.contains("flow_valid") ? boolean(j,"flow_valid") : false;
+  s.visual_ready = j.contains("visual_ready") ? boolean(j,"visual_ready") : false;
   s.xy_valid = s.xy_valid || s.flow_valid;
   s.z_valid = boolean(j,"z_valid"); s.ready = boolean(j,"ready"); s.armed = boolean(j,"armed");
   s.landed = j.contains("landed") ? boolean(j,"landed") : false;
