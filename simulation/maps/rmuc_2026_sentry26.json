@@ -234,7 +234,10 @@
     "visual_bottom_separation_m": 0.108873,
     "visual_lateral_gate_m": 0.1,
     "visual_vertical_gate_m": 0.075,
-    "contact_confirmation": "armor_pressure"
+    "contact_confirmation": "armor_pressure",
+    "intercept_enabled": true,
+    "intercept_speed_mps": 0.8,
+    "intercept_accel_mps2": 1.5
   },
   "optical_flow": {
     "enabled": true,

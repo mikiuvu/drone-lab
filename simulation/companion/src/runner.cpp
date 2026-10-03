@@ -10,6 +10,7 @@
 #include "companion/protocol.hpp"
 #include "companion/vision.hpp"
 #include "companion/armor_tracker.hpp"
+#include "companion/intercept.hpp"
 #include "companion/periodic_motion.hpp"
 #include "companion/vision_delay.hpp"
 #ifdef COMPANION_WITH_OPENCV
@@ -364,6 +365,19 @@ int main(int argc,char**argv){try{
           const bool aligned=std::abs(relative.y())<team_settings.value("visual_lateral_gate_m",.10)&&std::abs(relative.z())<team_settings.value("visual_vertical_gate_m",.075);
           if(aligned&&visual_result.tracking_valid&&(tracked.measured||relative.x()<.3))visual_result.velocity_flu_mps.x()=team_settings.value("contact_speed_mps",.18);
           visual_ready=tracked.measured&&std::abs(relative.y())<.12&&std::abs(relative.z())<.1;
+          if(team_settings.value("intercept_enabled",false)&&visual_result.tracking_valid){
+            const auto plan=companion::planIntercept({e.pose.x_m,e.pose.y_m,e.pose.z_m},e.velocity_enu_mps,tracked.position,tracked.velocity,
+                team_settings.value("intercept_speed_mps",1.0),team_settings.value("intercept_accel_mps2",1.5),std::max(.05,.8-tracked.age_s));
+            if(plan.valid){
+              auto body=rotation(0,0,-e.pose.yaw_rad)*plan.velocity;
+              visual_result.velocity_flu_mps=body;
+              visual_result.velocity_flu_mps.z()=std::clamp(body.z(),-.4,.4);
+              if(!tracked.measured&&relative.x()>=.3)visual_result.velocity_flu_mps.x()=0;
+              visual_ready=tracked.measured&&relative.x()>0&&std::abs(visual_result.yaw_error_rad)<.5;
+              emit({{"kind","intercept_plan"},{"sim_time_us",sim_us},{"arrival_s",plan.arrival_s},{"reachable",plan.reachable},{"aim_x_m",plan.aim.x()},{"aim_y_m",plan.aim.y()},{"aim_z_m",plan.aim.z()}});
+            }
+          }
+
         }
       }
 #endif

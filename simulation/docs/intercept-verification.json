@@ -1,0 +1,307 @@
+{
+  "method": "rolling constant-velocity intercept; approximate acceleration-limited arrival search",
+  "runs": [
+    {
+      "run": "run_20261004_032640",
+      "vehicle_count": 4,
+      "phases": [
+        {
+          "time_s": 0.0,
+          "phase": "WAIT_READY",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 6.441,
+          "phase": "TAKEOFF",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 11.201,
+          "phase": "TRANSIT",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 12.061,
+          "phase": "ASSEMBLE",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 16.261,
+          "phase": "APPROACH",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 16.361,
+          "phase": "CONTACT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 26.401,
+          "phase": "RETREAT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 30.941,
+          "phase": "APPROACH",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 31.221,
+          "phase": "CONTACT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 36.001,
+          "phase": "RETREAT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 40.081,
+          "phase": "APPROACH",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 40.381,
+          "phase": "CONTACT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 49.421,
+          "phase": "RETREAT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 52.801,
+          "phase": "APPROACH",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 53.521,
+          "phase": "CONTACT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 62.501,
+          "phase": "RETREAT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 66.681,
+          "phase": "RETURN_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 71.201,
+          "phase": "LAND_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 77.781,
+          "phase": "COMPLETE",
+          "active_vehicle": -1
+        }
+      ],
+      "physical_flight_s": 65.915,
+      "confirmed_mission_s": 68.67200000000001,
+      "complete": true,
+      "vehicles": [
+        {
+          "id": 0,
+          "takeoff_s": 9.133,
+          "landed_s": 75.024,
+          "impact_s": [
+            26.37
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.0364219859658968,
+          "armed_at_stop": false
+        },
+        {
+          "id": 1,
+          "takeoff_s": 9.109,
+          "landed_s": 74.995,
+          "impact_s": [
+            35.95
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.02164630339493427,
+          "armed_at_stop": false
+        },
+        {
+          "id": 2,
+          "takeoff_s": 9.109,
+          "landed_s": 75.024,
+          "impact_s": [
+            49.413
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.016363836168983893,
+          "armed_at_stop": false
+        },
+        {
+          "id": 3,
+          "takeoff_s": 9.133,
+          "landed_s": 74.765,
+          "impact_s": [
+            62.475
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.024418076466326804,
+          "armed_at_stop": false
+        }
+      ]
+    },
+    {
+      "run": "run_20261004_033444",
+      "vehicle_count": 4,
+      "phases": [
+        {
+          "time_s": 0.0,
+          "phase": "WAIT_READY",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 7.421,
+          "phase": "TAKEOFF",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 12.201,
+          "phase": "TRANSIT",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 13.101,
+          "phase": "ASSEMBLE",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 16.261,
+          "phase": "APPROACH",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 16.501,
+          "phase": "CONTACT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 25.181,
+          "phase": "RETREAT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 28.901,
+          "phase": "APPROACH",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 29.041,
+          "phase": "CONTACT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 33.781,
+          "phase": "RETREAT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 37.461,
+          "phase": "APPROACH",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 37.781,
+          "phase": "CONTACT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 45.281,
+          "phase": "RETREAT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 49.141,
+          "phase": "APPROACH",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 49.281,
+          "phase": "CONTACT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 62.401,
+          "phase": "RETREAT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 67.801,
+          "phase": "RETURN_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 72.381,
+          "phase": "LAND_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 79.061,
+          "phase": "COMPLETE",
+          "active_vehicle": -1
+        }
+      ],
+      "physical_flight_s": 66.332,
+      "confirmed_mission_s": 68.99100000000001,
+      "complete": true,
+      "vehicles": [
+        {
+          "id": 0,
+          "takeoff_s": 10.134,
+          "landed_s": 76.265,
+          "impact_s": [
+            25.142
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.04303490818841675,
+          "armed_at_stop": false
+        },
+        {
+          "id": 1,
+          "takeoff_s": 10.07,
+          "landed_s": 76.297,
+          "impact_s": [
+            33.761
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.02159973974545021,
+          "armed_at_stop": false
+        },
+        {
+          "id": 2,
+          "takeoff_s": 10.07,
+          "landed_s": 76.402,
+          "impact_s": [
+            45.255
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.006913720119169839,
+          "armed_at_stop": false
+        },
+        {
+          "id": 3,
+          "takeoff_s": 10.07,
+          "landed_s": 76.134,
+          "impact_s": [
+            62.395
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.039250815234899296,
+          "armed_at_stop": false
+        }
+      ]
+    }
+  ],
+  "failed_variant": "run_20261004_033056 extra velocity-reference limiter: 2/4 within 120s",
+  "comparison_limit": "prior pursuit runs used a different speed; not a controlled single-variable comparison"
+}
