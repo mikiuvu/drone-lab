@@ -61,11 +61,27 @@ def add_moving_armor(world, config, output=None, source=None):
     for key in ("ixy", "ixz", "iyz"):
         node(inertia, key, 0)
     visual = mesh(
-        armor, "visual", "original_carriage", output / "base_original_carriage.stl"
+        armor, "visual", "original_carriage", output / "carriage_body_surfaces.stl"
     )
     material = node(visual, "material")
     node(material, "ambient", "0.42 0.48 0.50 1")
     node(material, "diffuse", "0.55 0.61 0.63 1")
+    visual = mesh(
+        armor, "visual", "original_blue_surfaces", output / "carriage_blue_surfaces.stl"
+    )
+    material = node(visual, "material")
+    for key in ("ambient", "diffuse", "emissive"):
+        node(material, key, "0 0.03 1 1")
+    for part, color in (("white", "1 1 1 1"), ("black", "0.005 0.005 0.005 1")):
+        visual = mesh(
+            armor,
+            "visual",
+            "original_base_logo_" + part,
+            output / ("logo_" + part + ".stl"),
+        )
+        material = node(visual, "material")
+        node(material, "ambient", color)
+        node(material, "diffuse", color)
     plate_collision = mesh(
         armor, "collision", "armor_plate", output / "base_original_carriage.stl"
     )

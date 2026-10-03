@@ -47,6 +47,56 @@ def partition(source, output):
         raise ValueError("场地网格版本不匹配，需重新检查原板件分组")
     # 三角面原坐标完整保留，关节零位与静态原模型完全相同。
     write_stl(output / "base_original_carriage.stl", moving)
+    surfaces = json.loads(
+        (Path(__file__).with_name("original_armor_faces.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    if hashlib.sha256(source.read_bytes()).hexdigest() != surfaces["source_sha256"]:
+        raise ValueError("原装甲面材质索引与场地版本不一致")
+    blue = np.zeros(len(triangles), dtype=bool)
+    blue[surfaces["blue_surface_faces"]] = True
+    if not np.all(selected[blue]):
+        raise ValueError("灯条材质面不属于原滑块")
+    front = triangles[blue]
+    write_stl(
+        output / "carriage_blue_surfaces.stl",
+        np.concatenate([front, front[:, [0, 2, 1]]]),
+    )
+    logo = np.zeros(len(triangles), dtype=bool)
+    logo[surfaces["logo_surface_faces"]] = True
+    colored = triangles[logo].copy()
+    # 在原三角面内细分材质采样，几何曲面和碰撞面保持不变。
+    for _ in range(6):
+        a, b, c = colored[:, 0], colored[:, 1], colored[:, 2]
+        ab, bc, ca = (a + b) / 2, (b + c) / 2, (c + a) / 2
+        colored = np.concatenate(
+            [
+                np.stack(v, axis=1)
+                for v in [(a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca)]
+            ]
+        )
+    mask = np.asarray(
+        json.loads(
+            (Path(__file__).parent / "assets/base-sticker-mask.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+    centers = colored.mean(axis=1)
+    low, high = triangles[logo].min(axis=(0, 1)), triangles[logo].max(axis=(0, 1))
+    u = np.clip(
+        ((high[1] - centers[:, 1]) / (high[1] - low[1]) * 127).astype(int), 0, 127
+    )
+    v = np.clip(
+        ((high[2] - centers[:, 2]) / (high[2] - low[2]) * 127).astype(int), 0, 127
+    )
+    white = mask[v, u] > 0
+    write_stl(output / "logo_white.stl", colored[white])
+    write_stl(output / "logo_black.stl", colored[~white])
+    write_stl(
+        output / "carriage_body_surfaces.stl", triangles[selected & ~blue & ~logo]
+    )
     write_stl(output / "terrain_fixed.stl", fixed)
     fixed.astype("<f4").tofile(output / "terrain_fixed.f32")
     report = {
