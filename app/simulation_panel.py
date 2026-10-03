@@ -174,6 +174,7 @@ class GazeboPanel(QWidget):
         self.current_map = self.root / "simulation/maps/rmuc_2026_sentry26.json"
         self.map_config = {}
         self._terrain_cache = None
+        self.flight_dashboard = None
         outer = QVBoxLayout(self)
         title = QLabel("多机协同定位评估")
         title.setStyleSheet("font-size:16px;font-weight:bold")
@@ -221,6 +222,9 @@ class GazeboPanel(QWidget):
         report = QPushButton("保存定位报告")
         report.clicked.connect(self.save_report)
         row.addWidget(report)
+        plots = QPushButton("飞行数据曲线")
+        plots.clicked.connect(self.open_flight_dashboard)
+        row.addWidget(plots)
         outer.addLayout(row)
         tof_row = QHBoxLayout()
         tof_row.addWidget(QLabel("ToF 安装："))
@@ -271,6 +275,38 @@ class GazeboPanel(QWidget):
         self.timer.timeout.connect(self.refresh)
         self.timer.start(800)
 
+    def open_flight_dashboard(self):
+        from app.flight_dashboard import FlightDashboard
+
+        if self.flight_dashboard is not None:
+            self.flight_dashboard.show()
+            self.flight_dashboard.raise_()
+            self.flight_dashboard.activateWindow()
+            return
+        self.refresh()
+        folder = self.current_folder
+        if folder is None:
+            selected = QFileDialog.getExistingDirectory(
+                self, "选择仿真运行目录", str(self.root / "simulation/runtime")
+            )
+            if not selected:
+                return
+            folder = Path(selected)
+        self.flight_dashboard = FlightDashboard(folder, self)
+        self.flight_dashboard.destroyed.connect(self._dashboard_closed)
+        self.flight_dashboard.show()
+
+    def _dashboard_closed(self):
+        self.flight_dashboard = None
+
+    def close_flight_dashboard(self):
+        if self.flight_dashboard is not None:
+            self.flight_dashboard.close()
+
+    def closeEvent(self, event):
+        self.close_flight_dashboard()
+        super().closeEvent(event)
+
     def _set_camera_count(self, count):
         while self.cameras:
             camera = self.cameras.pop()
@@ -280,7 +316,9 @@ class GazeboPanel(QWidget):
         colors = [(31, 119, 180), (214, 39, 40), (44, 160, 44), (148, 103, 189)]
         for i in range(count):
             camera = QLabel(f"无人机 {i} · 等待 Gazebo 相机图像")
-            camera.setMinimumSize(112, 72) if count > 4 else camera.setMinimumSize(180, 100)
+            camera.setMinimumSize(112, 72) if count > 4 else camera.setMinimumSize(
+                180, 100
+            )
             camera.setToolTip(f"无人机 {i} · GC4653 相机")
             camera.setAlignment(Qt.AlignmentFlag.AlignCenter)
             camera.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)

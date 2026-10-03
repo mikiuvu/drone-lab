@@ -825,6 +825,7 @@ class LabWindow(QMainWindow):
             event.ignore()
             return
         self.stop_record()
+        self.gazebo_panel.close_flight_dashboard()
         self.save_settings(silent=True)
         event.accept()
 
