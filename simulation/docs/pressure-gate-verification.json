@@ -1,0 +1,457 @@
+{
+  "criterion": "simulated armor contact switch; not calibrated force",
+  "trial_limit_s": 160,
+  "runs": [
+    {
+      "run": "run_20261004_025556",
+      "vehicle_count": 4,
+      "phases": [
+        {
+          "time_s": 0.0,
+          "phase": "WAIT_READY",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 6.401,
+          "phase": "TAKEOFF",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 11.101,
+          "phase": "TRANSIT",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 12.061,
+          "phase": "ASSEMBLE",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 15.181,
+          "phase": "APPROACH",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 22.661,
+          "phase": "CONTACT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 27.081,
+          "phase": "RETREAT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 30.701,
+          "phase": "APPROACH",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 33.261,
+          "phase": "CONTACT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 45.061,
+          "phase": "RETREAT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 48.221,
+          "phase": "APPROACH",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 51.201,
+          "phase": "CONTACT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 67.281,
+          "phase": "RETREAT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 70.601,
+          "phase": "APPROACH",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 73.461,
+          "phase": "CONTACT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 100.441,
+          "phase": "RETREAT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 104.741,
+          "phase": "RETURN_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 109.281,
+          "phase": "LAND_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 114.861,
+          "phase": "COMPLETE",
+          "active_vehicle": -1
+        }
+      ],
+      "physical_flight_s": 104.156,
+      "confirmed_mission_s": 105.915,
+      "complete": true,
+      "vehicles": [
+        {
+          "id": 0,
+          "takeoff_s": 9.012,
+          "landed_s": 113.102,
+          "impact_s": [
+            27.048
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.030459098515604986,
+          "armed_at_stop": false
+        },
+        {
+          "id": 1,
+          "takeoff_s": 8.978,
+          "landed_s": 113.102,
+          "impact_s": [
+            45.033
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.007773118340445883,
+          "armed_at_stop": false
+        },
+        {
+          "id": 2,
+          "takeoff_s": 8.946,
+          "landed_s": 113.102,
+          "impact_s": [
+            67.243
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.004461290264924324,
+          "armed_at_stop": false
+        },
+        {
+          "id": 3,
+          "takeoff_s": 8.978,
+          "landed_s": 112.978,
+          "impact_s": [
+            100.41
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.015215461429862189,
+          "armed_at_stop": false
+        }
+      ],
+      "lateral_gate_m": 0.1,
+      "vertical_gate_m": 0.075,
+      "pressure_vehicle_ids": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "run": "run_20261004_025945",
+      "vehicle_count": 4,
+      "phases": [
+        {
+          "time_s": 0.0,
+          "phase": "WAIT_READY",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 7.521,
+          "phase": "TAKEOFF",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 12.201,
+          "phase": "TRANSIT",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 13.181,
+          "phase": "ASSEMBLE",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 17.601,
+          "phase": "APPROACH",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 19.561,
+          "phase": "CONTACT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 48.421,
+          "phase": "RETREAT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 52.381,
+          "phase": "APPROACH",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 53.781,
+          "phase": "CONTACT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 84.441,
+          "phase": "RETREAT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 88.301,
+          "phase": "APPROACH",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 91.121,
+          "phase": "CONTACT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 137.381,
+          "phase": "RETREAT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 140.521,
+          "phase": "APPROACH",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 143.461,
+          "phase": "CONTACT",
+          "active_vehicle": 3
+        }
+      ],
+      "physical_flight_s": null,
+      "confirmed_mission_s": null,
+      "complete": false,
+      "vehicles": [
+        {
+          "id": 0,
+          "takeoff_s": 10.134,
+          "landed_s": null,
+          "impact_s": [
+            48.403
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 9.604444770788318,
+          "armed_at_stop": true
+        },
+        {
+          "id": 1,
+          "takeoff_s": 10.068,
+          "landed_s": null,
+          "impact_s": [
+            84.401
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 9.694089804264573,
+          "armed_at_stop": true
+        },
+        {
+          "id": 2,
+          "takeoff_s": 10.034,
+          "landed_s": null,
+          "impact_s": [
+            137.347
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 8.210581774017019,
+          "armed_at_stop": true
+        },
+        {
+          "id": 3,
+          "takeoff_s": 10.134,
+          "landed_s": null,
+          "impact_s": [],
+          "physical_contact_confirmed": false,
+          "home_error_m": 10.438496451627273,
+          "armed_at_stop": true
+        }
+      ],
+      "lateral_gate_m": 0.07,
+      "vertical_gate_m": 0.05,
+      "pressure_vehicle_ids": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "run": "run_20261004_030410",
+      "vehicle_count": 4,
+      "phases": [
+        {
+          "time_s": 0.0,
+          "phase": "WAIT_READY",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 7.521,
+          "phase": "TAKEOFF",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 12.201,
+          "phase": "TRANSIT",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 13.181,
+          "phase": "ASSEMBLE",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 17.221,
+          "phase": "APPROACH",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 18.841,
+          "phase": "CONTACT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 51.401,
+          "phase": "RETREAT",
+          "active_vehicle": 0
+        },
+        {
+          "time_s": 55.041,
+          "phase": "APPROACH",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 56.921,
+          "phase": "CONTACT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 67.261,
+          "phase": "RETREAT",
+          "active_vehicle": 1
+        },
+        {
+          "time_s": 70.341,
+          "phase": "APPROACH",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 73.721,
+          "phase": "CONTACT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 90.601,
+          "phase": "RETREAT",
+          "active_vehicle": 2
+        },
+        {
+          "time_s": 94.581,
+          "phase": "APPROACH",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 97.001,
+          "phase": "CONTACT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 122.321,
+          "phase": "RETREAT",
+          "active_vehicle": 3
+        },
+        {
+          "time_s": 126.121,
+          "phase": "RETURN_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 131.441,
+          "phase": "LAND_ALL",
+          "active_vehicle": -1
+        },
+        {
+          "time_s": 137.501,
+          "phase": "COMPLETE",
+          "active_vehicle": -1
+        }
+      ],
+      "physical_flight_s": 125.458,
+      "confirmed_mission_s": 127.416,
+      "complete": true,
+      "vehicles": [
+        {
+          "id": 0,
+          "takeoff_s": 10.117,
+          "landed_s": 135.432,
+          "impact_s": [
+            51.359
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.028956513855841512,
+          "armed_at_stop": false
+        },
+        {
+          "id": 1,
+          "takeoff_s": 10.085,
+          "landed_s": 134.89,
+          "impact_s": [
+            67.239
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.01615979112127429,
+          "armed_at_stop": false
+        },
+        {
+          "id": 2,
+          "takeoff_s": 10.085,
+          "landed_s": 135.543,
+          "impact_s": [
+            90.594
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.010187136423195513,
+          "armed_at_stop": false
+        },
+        {
+          "id": 3,
+          "takeoff_s": 10.117,
+          "landed_s": 134.791,
+          "impact_s": [
+            122.308
+          ],
+          "physical_contact_confirmed": true,
+          "home_error_m": 0.03372499715549142,
+          "armed_at_stop": false
+        }
+      ],
+      "lateral_gate_m": 0.1,
+      "vertical_gate_m": 0.075,
+      "pressure_vehicle_ids": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  ]
+}

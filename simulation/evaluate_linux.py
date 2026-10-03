@@ -8,6 +8,7 @@ import json
 import math
 import re
 import signal
+import socket
 import threading
 from pathlib import Path
 
@@ -16,9 +17,9 @@ from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
 
 try:
-    from simulation.contact_evaluation import armor_contact
+    from simulation.contact_evaluation import PressureSwitch, armor_contact
 except ModuleNotFoundError:
-    from contact_evaluation import armor_contact
+    from contact_evaluation import PressureSwitch, armor_contact
 
 
 # 创建独占的新日志并订阅异步消息；主线程等待退出信号，取消订阅后关闭文件。
@@ -59,6 +60,8 @@ def main():
     ground_contact_until = {}
     mutex = threading.Lock()
     stop = threading.Event()
+    pressure_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    pressure_switch = PressureSwitch()
     last = -1
 
     # 处理世界位姿消息，以微秒时间戳按至少 20 ms 间隔记录；四元数转换得到偏航角（rad）。
@@ -117,6 +120,16 @@ def main():
         if ground_contact:
             ground_contact_until[vehicle] = stamp + 100000
         hit_armor = armor_contact(message.contact)
+        # 板端触压开关的仿真等效输入：只报告接触身份，不传板位置或运动真值。
+        # 连续接触合并成一次事件，避免一次撞击产生多个成功计数。
+        packet = pressure_switch.update(vehicle, stamp, hit_armor)
+        if packet is not None:
+            pressure_socket.sendto(
+                json.dumps(packet).encode("utf-8"), ("127.0.0.1", 19000 + vehicle)
+            )
+            with mutex:
+                event_output.write(json.dumps(packet) + "\n")
+                event_output.flush()
         contact_key = (vehicle, hit_armor)
         if stamp - contact_times.get(contact_key, -1000000) < 50000:
             return
@@ -171,6 +184,7 @@ def main():
     with mutex:
         output.close()
         event_output.close()
+    pressure_socket.close()
 
 
 if __name__ == "__main__":

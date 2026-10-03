@@ -15,6 +15,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--sim-seconds", type=float, default=30)
 parser.add_argument("--vehicle-count", type=int)
 parser.add_argument("--vision-delay-ms", type=float, default=0)
+parser.add_argument("--visual-lateral-gate", type=float)
+parser.add_argument("--visual-vertical-gate", type=float)
 parser.add_argument("--uwb-anchors", action="store_true")
 parser.add_argument("--flow-disable", action="store_true")
 parser.add_argument(
@@ -36,6 +38,10 @@ command = [
     args.mission,
 ]
 command += ["--vision-delay-ms", str(args.vision_delay_ms)]
+if args.visual_lateral_gate is not None:
+    command += ["--visual-lateral-gate", str(args.visual_lateral_gate)]
+if args.visual_vertical_gate is not None:
+    command += ["--visual-vertical-gate", str(args.visual_vertical_gate)]
 if args.vehicle_count is not None:
     command += ["--vehicle-count", str(args.vehicle_count)]
 if args.uwb_anchors:

@@ -274,6 +274,8 @@ def main():
     parser.add_argument("--horizontal-tof", action="store_true")
     parser.add_argument("--vehicle-count", type=int)
     parser.add_argument("--vision-delay-ms", type=float, default=None)
+    parser.add_argument("--visual-lateral-gate", type=float)
+    parser.add_argument("--visual-vertical-gate", type=float)
     parser.add_argument(
         "--uwb-anchors", action=argparse.BooleanOptionalAction, default=None
     )
@@ -336,6 +338,14 @@ def main():
     count = len(config["spawns"])
     if count > 245:
         raise SystemExit("PX4 MAVLink system IDs permit at most 245 local instances")
+    for name, value in [
+        ("visual_lateral_gate_m", args.visual_lateral_gate),
+        ("visual_vertical_gate_m", args.visual_vertical_gate),
+    ]:
+        if value is not None:
+            if not math.isfinite(value) or not 0 < value <= 0.5:
+                raise ValueError("visual gate must be 0..0.5m")
+            config.setdefault("team_mission", {})[name] = value
     if args.vision_delay_ms is not None:
         if (
             not math.isfinite(args.vision_delay_ms)

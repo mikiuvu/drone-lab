@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from simulation.contact_evaluation import armor_contact
+from simulation.contact_evaluation import PressureSwitch, armor_contact
 from simulation.moving_armor import add_moving_armor
 
 
@@ -45,3 +45,14 @@ def test_base_and_rail_collisions_are_not_armor_hits():
         [contact("enemy_base_moving_armor::rail::rail_collision_0")]
     )
     assert armor_contact([contact("enemy_base_moving_armor::armor::armor_plate")])
+
+
+def test_pressure_switch_counts_contacts_not_frames():
+    switch = PressureSwitch()
+    assert switch.update(0, 1000000, False) is None
+    assert switch.update(0, 1000000, True)["sequence"] == 1
+    assert switch.update(0, 1050000, True) is None
+    assert switch.update(0, 1040000, True) is None
+    assert switch.update(0, 1100000, True) is None
+    assert switch.update(0, 1400000, True)["sequence"] == 2
+    assert switch.update(1, 1400000, True)["sequence"] == 1

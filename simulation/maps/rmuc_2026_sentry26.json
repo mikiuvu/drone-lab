@@ -231,7 +231,10 @@
     "visual_contact": true,
     "visual_strip_height_m": 0.093427,
     "visual_strip_separation_m": 0.18409,
-    "visual_bottom_separation_m": 0.108873
+    "visual_bottom_separation_m": 0.108873,
+    "visual_lateral_gate_m": 0.1,
+    "visual_vertical_gate_m": 0.075,
+    "contact_confirmation": "armor_pressure"
   },
   "optical_flow": {
     "enabled": true,

@@ -214,6 +214,7 @@ int main(int argc,char**argv){try{
   std::filesystem::create_directories(o.runtime);std::ofstream log(o.runtime/("companion_"+std::to_string(o.vehicle)+".jsonl"));if(!log)throw std::runtime_error("cannot open runtime log");
   auto emit=[&](json j){j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';log.flush();};
   emit({{"kind","startup"},{"simulation_only",true},{"height_assist_allowed",true},{"map",o.map.string()},{"gnss_position_ignored",true},{"mavlink_local_port",o.local},{"mavlink_remote_port",o.remote}});
+  Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
   uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;bool armed=false,mode_offboard=false;companion::ArmorObservation target;double roll=0,pitch=0,yaw=0;bool attitude=false;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},hb_rx{},bias_start{};uint64_t first_imu=0,first_imu_sim=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
   auto start=Clock::now(),last_publish=start,last_heartbeat=start,last_command=start;bool intervals_requested=false;std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
@@ -230,6 +231,17 @@ int main(int argc,char**argv){try{
         if(!finite)continue;
         if(cmd.value("phase","")=="CONTACT"&&team_command.value("phase","")!="CONTACT")contact_enter_us=cmd.at("sim_time_us").get<uint64_t>();
         team_command=std::move(cmd);team_sequence=sequence;team_rx=Clock::now();
+      }catch(const std::exception&){}
+    }
+    // 压力开关只用于命中反馈，不参与视觉定位或轨迹预测。
+    if(visual_contact)for(int n=0;n<16;++n){
+      auto packet=pressure.receive();if(packet.empty())break;
+      try{auto j=json::parse(packet);const auto seq=j.at("sequence").get<uint64_t>();const auto stamp=j.at("sim_time_us").get<uint64_t>();
+        if(j.value("kind","")!="armor_pressure"||j.value("source","")!="SIM_ARMOR_CONTACT_SWITCH"||j.value("vehicle",-1)!=o.vehicle||!j.value("pressed",false)||seq<=pressure_sequence)continue;
+        pressure_sequence=seq;
+        if(team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&stamp>=contact_enter_us&&stamp+500000>=sim_us){
+          ++impact_seq;last_impact_us=stamp;emit({{"kind","impact"},{"sim_time_us",stamp},{"impact_seq",impact_seq},{"confirmation","armor_pressure"}});
+        }
       }catch(const std::exception&){}
     }
     // 3. 测量按 kind 分流。UWB 必须配合邻机估计；仅有距离不能直接得到世界位置。
@@ -273,7 +285,7 @@ int main(int argc,char**argv){try{
           const bool visual_near=visual_result.tracking_valid&&visual_result.range_valid&&visual_result.range_m>0&&visual_result.range_m<.16&&visual_result.observation_age_s<.45;
           const bool close_to_target=visual_contact?visual_near:std::hypot(estimate.pose.x_m-tx,estimate.pose.y_m-ty)<team_settings.value("impact_proximity_m",.35);
           if(visual_contact&&impulse>1.0)emit({{"kind","impact_candidate"},{"sim_time_us",sim_us},{"impulse",impulse},{"range_m",visual_result.range_m},{"age_s",visual_result.observation_age_s},{"tracking",visual_result.tracking_valid}});
-          if(close_to_target&&impulse>(visual_contact?8.0:team_settings.value("impact_acceleration_mps2",2.0))){++impact_seq;last_impact_us=sim_us;if(!visual_contact)estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
+          if(!visual_contact&&close_to_target&&impulse>(visual_contact?8.0:team_settings.value("impact_acceleration_mps2",2.0))){++impact_seq;last_impact_us=sim_us;if(!visual_contact)estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
         }
         // 未解锁静置期间统计加速度偏置；样本数量和经过时间同时满足才认为可用。
         if(!bias_ready&&!armed&&age(bias_start)<2.0&&raw_linear.allFinite()&&raw_linear.norm()<40){
@@ -349,7 +361,7 @@ int main(int argc,char**argv){try{
           visual_result.velocity_flu_mps.y()=std::clamp(2.0*relative.y()+feedforward.y(),-.65,.65);
           visual_result.velocity_flu_mps.z()=std::clamp(2.0*relative.z()+feedforward.z(),-.4,.4);
           // 板很近时允许最多0.8s的已锁定轨迹延拓，解决灯条离开视野到机体接触间的盲区。
-          const bool aligned=std::abs(relative.y())<.07&&std::abs(relative.z())<.05;
+          const bool aligned=std::abs(relative.y())<team_settings.value("visual_lateral_gate_m",.10)&&std::abs(relative.z())<team_settings.value("visual_vertical_gate_m",.075);
           if(aligned&&visual_result.tracking_valid&&(tracked.measured||relative.x()<.3))visual_result.velocity_flu_mps.x()=team_settings.value("contact_speed_mps",.18);
           visual_ready=tracked.measured&&std::abs(relative.y())<.12&&std::abs(relative.z())<.1;
         }

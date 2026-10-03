@@ -1,0 +1,61 @@
+{
+  "source": "https://github.com/sipeed/LicheeRV-Nano-Build/blob/main/build/boards/sg200x/sg2002_licheervnano_sd/memmap.py",
+  "sha256": "d16f774413a371369b42477b4633b82d192c7b1fdaaf8a5137e8fb6db2952c1e",
+  "physical_mib": 256,
+  "ion_mib": 105,
+  "freertos_mib": 2,
+  "bootlogo_framebuffer_mib": 7.8125,
+  "opensbi_mib": 0.5,
+  "linux_upper_before_bootlogo_mib": 149,
+  "conservative_before_kernel_mib": 140.6875,
+  "ion_internal_isp_mib": 20,
+  "ion_internal_bitstream_mib": 2,
+  "runtime_measurement": false,
+  "scenarios": [
+    {
+      "kernel_services_mib": 25,
+      "app_budget_mib": 35,
+      "headroom_mib": 80.69
+    },
+    {
+      "kernel_services_mib": 25,
+      "app_budget_mib": 55,
+      "headroom_mib": 60.69
+    },
+    {
+      "kernel_services_mib": 25,
+      "app_budget_mib": 80,
+      "headroom_mib": 35.69
+    },
+    {
+      "kernel_services_mib": 40,
+      "app_budget_mib": 35,
+      "headroom_mib": 65.69
+    },
+    {
+      "kernel_services_mib": 40,
+      "app_budget_mib": 55,
+      "headroom_mib": 45.69
+    },
+    {
+      "kernel_services_mib": 40,
+      "app_budget_mib": 80,
+      "headroom_mib": 20.69
+    },
+    {
+      "kernel_services_mib": 55,
+      "app_budget_mib": 35,
+      "headroom_mib": 50.69
+    },
+    {
+      "kernel_services_mib": 55,
+      "app_budget_mib": 55,
+      "headroom_mib": 30.69
+    },
+    {
+      "kernel_services_mib": 55,
+      "app_budget_mib": 80,
+      "headroom_mib": 5.69
+    }
+  ]
+}
