@@ -7,6 +7,12 @@ find_package(gz-msgs10 REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
+# 基地滑轨装甲板：模型关节驱动，接触由世界 Contact 系统处理。
+add_library(moving_armor_system SHARED src/moving_armor_system.cc)
+target_compile_features(moving_armor_system PRIVATE cxx_std_17)
+target_compile_options(moving_armor_system PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(moving_armor_system PRIVATE gz-sim8::gz-sim8)
+
 add_library(peer_height_system SHARED
   src/peer_height_system.cc
   ../companion/src/terrain.cpp

@@ -65,12 +65,26 @@ def prepare_world(output, map_path, config=None):
     # 先加入接触检测和 50 Hz 观测插件，再写入每机模型，保证观测编号与出生点一致。
     tree = ET.parse(map_path.parent / config["world_file"])
     world = tree.getroot().find("world")
-    ET.SubElement(
-        world,
-        "plugin",
-        filename="gz-sim-contact-system",
-        name="gz::sim::systems::Contact",
-    )
+    try:
+        from simulation.moving_armor import add_moving_armor
+    except ModuleNotFoundError:
+        from moving_armor import add_moving_armor
+    if config.get("moving_armor", {}).get("enabled", False):
+        add_moving_armor(
+            world,
+            config,
+            output.parent / "original_base",
+            (map_path.parent / config["terrain_triangles_file"]).resolve(),
+        )
+    if not any(
+        p.get("name") == "gz::sim::systems::Contact" for p in world.findall("plugin")
+    ):
+        ET.SubElement(
+            world,
+            "plugin",
+            filename="gz-sim-contact-system",
+            name="gz::sim::systems::Contact",
+        )
     plugin = ET.SubElement(
         world,
         "plugin",

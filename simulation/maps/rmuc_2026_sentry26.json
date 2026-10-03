@@ -96,9 +96,9 @@
     ]
   },
   "team_mission": {
-    "cruise_z_m": 0.75,
+    "cruise_z_m": 1.48,
     "cruise_speed_mps": 4,
-    "contact_speed_mps": 0.25,
+    "contact_speed_mps": 0.18,
     "return_tolerance_m": 0.14,
     "home_ground_z_m": 0.5,
     "team": "red",
@@ -109,15 +109,15 @@
       "source": "Official RM2026 Figures 4-1/4-7, matched to Sentry26 mesh"
     },
     "approach": {
-      "x": 11.06,
+      "x": 10.6,
       "y": 0,
-      "z": 0.58,
+      "z": 1.48,
       "yaw": 0
     },
     "target": {
-      "x": 11.21736351335351,
-      "y": 0,
-      "z": 0.58
+      "x": 11.5,
+      "y": 0.0012,
+      "z": 1.48
     },
     "order": [
       0,
@@ -128,23 +128,23 @@
     "assembly": [
       {
         "id": 0,
-        "x": 9.9,
-        "y": 0.65
+        "x": 8.8,
+        "y": 0.9
       },
       {
         "id": 1,
-        "x": 9.9,
-        "y": 1.0
+        "x": 9.15,
+        "y": 0.9
       },
       {
         "id": 2,
-        "x": 10.5,
-        "y": 0.65
+        "x": 8.8,
+        "y": 1.25
       },
       {
         "id": 3,
-        "x": 10.5,
-        "y": 1.0
+        "x": 9.15,
+        "y": 1.25
       }
     ],
     "formation_offsets": [
@@ -173,12 +173,12 @@
       {
         "x": 0,
         "y": 0,
-        "z": 0.75
+        "z": 1.48
       },
       {
         "x": 1,
         "y": 0,
-        "z": 0.75
+        "z": 1.48
       }
     ],
     "loss_abort_s": 15,
@@ -209,25 +209,26 @@
     "completed_holding": [
       {
         "id": 0,
-        "x": 9.9,
-        "y": -1.0
+        "x": 8.8,
+        "y": -0.9
       },
       {
         "id": 1,
-        "x": 9.9,
-        "y": -0.65
+        "x": 9.15,
+        "y": -0.9
       },
       {
         "id": 2,
-        "x": 10.5,
-        "y": -1.0
+        "x": 8.8,
+        "y": -1.25
       },
       {
         "id": 3,
-        "x": 10.5,
-        "y": -0.65
+        "x": 9.15,
+        "y": -1.25
       }
-    ]
+    ],
+    "visual_contact": true
   },
   "optical_flow": {
     "enabled": true,
@@ -244,5 +245,11 @@
     "MPC_XY_VEL_D_ACC": 0.3,
     "MC_ROLL_P": 6.0,
     "MC_PITCH_P": 6.0
+  },
+  "moving_armor": {
+    "enabled": true,
+    "source": "original_base_mesh",
+    "half_travel_m": 0.22,
+    "speed_mps": 0.2
   }
 }
