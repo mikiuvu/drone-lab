@@ -1,0 +1,14 @@
+{
+  "associated_frames": 1249,
+  "evaluation_reference": "future visual measurements, not independent physical truth",
+  "forecast_horizon_s": 0.1,
+  "future_visual_rmse_m": null,
+  "high_confidence_forecasts": 0,
+  "matched_future_visual_frames": 0,
+  "max_confidence": 0.0,
+  "max_future_visual_error_m": null,
+  "model_valid_forecasts": 0,
+  "source": "/mnt/d/Robomaster code/drone/simulation/runtime/run_20261004_013341/companion_0.jsonl",
+  "span_s": 196.614,
+  "visual_frames": 1249
+}

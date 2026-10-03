@@ -1,0 +1,453 @@
+{
+  "scope": "hypothetical CPU-only service-time sweep; excludes ISP and OS overhead",
+  "runs": [
+    {
+      "assumed_slowdown": 5,
+      "hardware_calibrated": false,
+      "config": {
+        "camera_fps": 15,
+        "cpu_pre_ms": 1.907345,
+        "cpu_post_ms": 0,
+        "npu_ms": 0,
+        "nav_ms": 4.549305,
+        "nav_hz": 45,
+        "duration_s": 20,
+        "cpu_capture_ms": 0,
+        "cpu_tracking_ms": 0,
+        "frame_bytes": 691200
+      },
+      "policies": {
+        "fifo": {
+          "cpu_utilization": 0.23332890000000375,
+          "frames": {
+            "generated": 300,
+            "completed": 300,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "outstanding": 0,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 300,
+              "p50": 6.45665,
+              "p95": 6.45665,
+              "max": 6.45665
+            },
+            "queue_wait_ms": {
+              "count": 300,
+              "p50": 4.549305,
+              "p95": 4.549305,
+              "max": 4.549305
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 0
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 900,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 900,
+              "p50": 4.549305,
+              "p95": 4.549305,
+              "max": 4.549305
+            },
+            "deadline_misses_observed": 0
+          },
+          "peak_frame_bytes": 691200
+        },
+        "latest": {
+          "cpu_utilization": 0.23332890000000375,
+          "frames": {
+            "generated": 300,
+            "completed": 300,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "outstanding": 0,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 300,
+              "p50": 6.45665,
+              "p95": 6.45665,
+              "max": 6.45665
+            },
+            "queue_wait_ms": {
+              "count": 300,
+              "p50": 4.549305,
+              "p95": 4.549305,
+              "max": 4.549305
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 0
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 900,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 900,
+              "p50": 4.549305,
+              "p95": 4.549305,
+              "max": 4.549305
+            },
+            "deadline_misses_observed": 0
+          },
+          "peak_frame_bytes": 691200
+        }
+      }
+    },
+    {
+      "assumed_slowdown": 10,
+      "hardware_calibrated": false,
+      "config": {
+        "camera_fps": 15,
+        "cpu_pre_ms": 3.81469,
+        "cpu_post_ms": 0,
+        "npu_ms": 0,
+        "nav_ms": 9.09861,
+        "nav_hz": 45,
+        "duration_s": 20,
+        "cpu_capture_ms": 0,
+        "cpu_tracking_ms": 0,
+        "frame_bytes": 691200
+      },
+      "policies": {
+        "fifo": {
+          "cpu_utilization": 0.466657799999985,
+          "frames": {
+            "generated": 300,
+            "completed": 300,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "outstanding": 0,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 300,
+              "p50": 12.9133,
+              "p95": 12.9133,
+              "max": 12.9133
+            },
+            "queue_wait_ms": {
+              "count": 300,
+              "p50": 9.09861,
+              "p95": 9.09861,
+              "max": 9.09861
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 0
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 900,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 900,
+              "p50": 9.09861,
+              "p95": 9.09861,
+              "max": 9.09861
+            },
+            "deadline_misses_observed": 0
+          },
+          "peak_frame_bytes": 691200
+        },
+        "latest": {
+          "cpu_utilization": 0.466657799999985,
+          "frames": {
+            "generated": 300,
+            "completed": 300,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "outstanding": 0,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 300,
+              "p50": 12.9133,
+              "p95": 12.9133,
+              "max": 12.9133
+            },
+            "queue_wait_ms": {
+              "count": 300,
+              "p50": 9.09861,
+              "p95": 9.09861,
+              "max": 9.09861
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 0
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 900,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 900,
+              "p50": 9.09861,
+              "p95": 9.09861,
+              "max": 9.09861
+            },
+            "deadline_misses_observed": 0
+          },
+          "peak_frame_bytes": 691200
+        }
+      }
+    },
+    {
+      "assumed_slowdown": 20,
+      "hardware_calibrated": false,
+      "config": {
+        "camera_fps": 15,
+        "cpu_pre_ms": 7.62938,
+        "cpu_post_ms": 0,
+        "npu_ms": 0,
+        "nav_ms": 18.19722,
+        "nav_hz": 45,
+        "duration_s": 20,
+        "cpu_capture_ms": 0,
+        "cpu_tracking_ms": 0,
+        "frame_bytes": 691200
+      },
+      "policies": {
+        "fifo": {
+          "cpu_utilization": 0.9333155999999845,
+          "frames": {
+            "generated": 300,
+            "completed": 300,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "outstanding": 0,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 300,
+              "p50": 44.02382,
+              "p95": 44.02382,
+              "max": 44.02382
+            },
+            "queue_wait_ms": {
+              "count": 300,
+              "p50": 18.19722,
+              "p95": 18.19722,
+              "max": 18.19722
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 0
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 900,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 900,
+              "p50": 18.19722,
+              "p95": 21.801598,
+              "max": 21.801598
+            },
+            "deadline_misses_observed": 0
+          },
+          "peak_frame_bytes": 691200
+        },
+        "latest": {
+          "cpu_utilization": 0.9333155999999845,
+          "frames": {
+            "generated": 300,
+            "completed": 300,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "outstanding": 0,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 300,
+              "p50": 44.02382,
+              "p95": 44.02382,
+              "max": 44.02382
+            },
+            "queue_wait_ms": {
+              "count": 300,
+              "p50": 18.19722,
+              "p95": 18.19722,
+              "max": 18.19722
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 0
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 900,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 0,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 900,
+              "p50": 18.19722,
+              "p95": 21.801598,
+              "max": 21.801598
+            },
+            "deadline_misses_observed": 0
+          },
+          "peak_frame_bytes": 691200
+        }
+      }
+    },
+    {
+      "assumed_slowdown": 30,
+      "hardware_calibrated": false,
+      "config": {
+        "camera_fps": 15,
+        "cpu_pre_ms": 11.44407,
+        "cpu_post_ms": 0,
+        "npu_ms": 0,
+        "nav_ms": 27.295830000000002,
+        "nav_hz": 45,
+        "duration_s": 20,
+        "cpu_capture_ms": 0,
+        "cpu_tracking_ms": 0,
+        "frame_bytes": 691200
+      },
+      "policies": {
+        "fifo": {
+          "cpu_utilization": 1.0,
+          "frames": {
+            "generated": 300,
+            "completed": 0,
+            "dropped": 0,
+            "deadline_misses_completed": 0,
+            "pending": 300,
+            "in_flight": 0,
+            "outstanding": 300,
+            "overdue_at_end": 299,
+            "deadline_misses_observed": 299,
+            "deadline_miss_fraction_generated": 0.9966666666666667,
+            "age_ms": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "max": null
+            },
+            "queue_wait_ms": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "max": null
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 20000
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 732,
+            "dropped": 167,
+            "deadline_misses_completed": 732,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 1,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 732,
+              "p50": 38.372301,
+              "p95": 48.405276,
+              "max": 49.43978
+            },
+            "deadline_misses_observed": 732
+          },
+          "peak_frame_bytes": 207360000
+        },
+        "latest": {
+          "cpu_utilization": 1.0,
+          "frames": {
+            "generated": 300,
+            "completed": 0,
+            "dropped": 299,
+            "deadline_misses_completed": 0,
+            "pending": 1,
+            "in_flight": 0,
+            "outstanding": 1,
+            "overdue_at_end": 0,
+            "deadline_misses_observed": 0,
+            "deadline_miss_fraction_generated": 0.0,
+            "age_ms": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "max": null
+            },
+            "queue_wait_ms": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "max": null
+            },
+            "stale_completed": 0,
+            "oldest_outstanding_age_ms": 66.666667
+          },
+          "navigation": {
+            "generated": 900,
+            "completed": 732,
+            "dropped": 167,
+            "deadline_misses_completed": 732,
+            "deadline_misses_dropped": 0,
+            "pending": 0,
+            "in_flight": 1,
+            "overdue_at_end": 0,
+            "age_ms": {
+              "count": 732,
+              "p50": 38.372301,
+              "p95": 48.405276,
+              "max": 49.43978
+            },
+            "deadline_misses_observed": 732
+          },
+          "peak_frame_bytes": 691200
+        }
+      }
+    }
+  ]
+}

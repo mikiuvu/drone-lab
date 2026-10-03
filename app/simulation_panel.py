@@ -44,9 +44,9 @@ class LocalizationMap(QWidget):
     """@brief 在同一米制平面中绘制地形、起点框、真值轨迹和估计轨迹。
     @note snapshot 为统计快照，config 为地图配置，terrain_image 持有已转换的地形像素。
     """
+
     def __init__(self):
-        """@brief 初始化全场视图和空的地形、定位缓存。
-        """
+        """@brief 初始化全场视图和空的地形、定位缓存。"""
         super().__init__()
         self.setMinimumHeight(250)
         self.snapshot = None
@@ -56,14 +56,12 @@ class LocalizationMap(QWidget):
         self.center_zoom = False
 
     def toggle_center(self):
-        """@brief 在全场范围与原点附近 5 m×5 m 范围之间切换。
-        """
+        """@brief 在全场范围与原点附近 5 m×5 m 范围之间切换。"""
         self.center_zoom = not self.center_zoom
         self.update()
 
     def view_bounds(self):
-        """@return (xmin, xmax, ymin, ymax)，单位 m；未提供地图边界时使用默认范围。
-        """
+        """@return (xmin, xmax, ymin, ymax)，单位 m；未提供地图边界时使用默认范围。"""
         bounds = map_bounds(self.config) or (-6.0, 6.0, -5.0, 5.0)
         if self.center_zoom:
             return -2.5, 2.5, -2.5, 2.5
@@ -99,8 +97,7 @@ class LocalizationMap(QWidget):
         self.update()
 
     def set_data(self, snapshot, config):
-        """@brief 保存定位快照和地图配置，并请求 Qt 重绘。
-        """
+        """@brief 保存定位快照和地图配置，并请求 Qt 重绘。"""
         self.snapshot, self.config = snapshot, config
         self.update()
 
@@ -121,8 +118,7 @@ class LocalizationMap(QWidget):
         top = (self.height() - (y1 - y0) * scale) / 2
 
         def xy(point):
-            """@brief 把世界 XY 米制位置转为控件像素坐标；反转屏幕 Y 方向。
-            """
+            """@brief 把世界 XY 米制位置转为控件像素坐标；反转屏幕 Y 方向。"""
             return (left + (point[0] - x0) * scale, top + (y1 - point[1]) * scale)
 
         painter.setPen(QPen(self.palette().mid(), 1))
@@ -198,9 +194,9 @@ class GazeboPanel(QWidget):
     """@brief 管理 WSL 仿真命令与运行状态展示。
     @note process 跟踪当前管理命令；metrics 持续读取当前运行目录；800 ms 定时器刷新状态与相机画面。
     """
+
     def __init__(self, root):
-        """@param root 项目根目录，用于地图、运行状态和文档路径。
-        """
+        """@param root 项目根目录，用于地图、运行状态和文档路径。"""
         super().__init__()
         self.root = Path(root)
         self.process = None
@@ -268,6 +264,14 @@ class GazeboPanel(QWidget):
         self.tof_mount.addItem("水平三颗 ToF", "horizontal")
         self.tof_mount.addItem("下视 20°", "down20")
         tof_row.addWidget(self.tof_mount)
+        tof_row.addWidget(QLabel("视觉处理延迟："))
+        self.vision_delay = QSpinBox()
+        self.vision_delay.setRange(0, 2000)
+        self.vision_delay.setSuffix(" ms")
+        self.vision_delay.setToolTip(
+            "模拟视觉处理服务时间；单在途任务和最新等待帧，保留曝光时间。"
+        )
+        tof_row.addWidget(self.vision_delay)
         tof_row.addStretch()
         outer.addLayout(tof_row)
         self.height_only = QCheckBox("仅融合高度")
@@ -336,19 +340,16 @@ class GazeboPanel(QWidget):
         self.flight_dashboard.show()
 
     def _dashboard_closed(self):
-        """@brief 对话框销毁时释放面板中的引用。
-        """
+        """@brief 对话框销毁时释放面板中的引用。"""
         self.flight_dashboard = None
 
     def close_flight_dashboard(self):
-        """@brief 关闭附属飞行窗口，由其关闭流程结束日志线程。
-        """
+        """@brief 关闭附属飞行窗口，由其关闭流程结束日志线程。"""
         if self.flight_dashboard is not None:
             self.flight_dashboard.close()
 
     def closeEvent(self, event):
-        """@brief 先关闭附属飞行窗口，再交给 QWidget 处理关闭事件。
-        """
+        """@brief 先关闭附属飞行窗口，再交给 QWidget 处理关闭事件。"""
         self.close_flight_dashboard()
         super().closeEvent(event)
 
@@ -378,8 +379,7 @@ class GazeboPanel(QWidget):
             self.cameras.append(camera)
 
     def _load_maps(self):
-        """@brief 枚举可解析的地图 JSON，将路径保存在选项数据中。
-        """
+        """@brief 枚举可解析的地图 JSON，将路径保存在选项数据中。"""
         self.map_choice.clear()
         for path in sorted((self.root / "simulation/maps").glob("*.json")):
             try:
@@ -397,8 +397,7 @@ class GazeboPanel(QWidget):
             self.map_choice.setCurrentIndex(index)
 
     def choose_map(self):
-        """@brief 把用户选择的地图加入选项并选中，供下次启动使用。
-        """
+        """@brief 把用户选择的地图加入选项并选中，供下次启动使用。"""
         path, _ = QFileDialog.getOpenFileName(
             self, "选择地图 JSON", str(self.root / "simulation/maps"), "JSON (*.json)"
         )
@@ -437,6 +436,8 @@ class GazeboPanel(QWidget):
                 self.mission_choice.currentData(),
                 "--vehicle-count",
                 str(self.vehicle_count.value()),
+                "--vision-delay-ms",
+                str(self.vision_delay.value()),
             ]
             args += [
                 "--uwb-anchors" if self.uwb_anchors.isChecked() else "--no-uwb-anchors"
@@ -463,8 +464,7 @@ class GazeboPanel(QWidget):
         process.start("wsl.exe", args)
 
     def _finished(self, process, action, code):
-        """@brief 接收管理命令退出，释放 QProcess 并刷新运行状态。
-        """
+        """@brief 接收管理命令退出，释放 QProcess 并刷新运行状态。"""
         self.log.appendPlainText(
             f"{action} 命令退出码 {code}；请查看定位指标和进程状态。"
         )
@@ -588,8 +588,7 @@ class GazeboPanel(QWidget):
             )
 
     def open_guide(self):
-        """@brief 打开项目中的多机任务说明。
-        """
+        """@brief 打开项目中的多机任务说明。"""
         path = self.root / "simulation/docs/team-mission.html"
         if path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
@@ -659,8 +658,7 @@ class GazeboPanel(QWidget):
             validity = v["validity"]
 
             def pct(key, validity=validity):
-                """@brief 将当前机的有效比例转成百分数，None 保留为缺失标记。
-                """
+                """@brief 将当前机的有效比例转成百分数，None 保留为缺失标记。"""
                 return "--" if validity[key] is None else f"{validity[key] * 100:.0f}%"
 
             error = (
@@ -714,8 +712,7 @@ class GazeboPanel(QWidget):
             if home:
 
                 def offset_text(offset):
-                    """@brief 格式化米制回家点偏移，保留 dx/dy 的正负方向。
-                    """
+                    """@brief 格式化米制回家点偏移，保留 dx/dy 的正负方向。"""
                     return (
                         "--"
                         if offset is None
@@ -750,8 +747,7 @@ class GazeboPanel(QWidget):
         return "\n".join(rows)
 
     def save_report(self):
-        """@brief 将当前统计快照保存为 UTF-8 JSON，供离线分析使用。
-        """
+        """@brief 将当前统计快照保存为 UTF-8 JSON，供离线分析使用。"""
         if not self.metrics:
             return
         path, _ = QFileDialog.getSaveFileName(

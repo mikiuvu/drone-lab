@@ -1,0 +1,45 @@
+{
+  "scope": "SITL output-latency sensitivity, not Nano cycle simulation",
+  "runs": [
+    {
+      "run": "run_20261004_023858",
+      "delay_ms": 100.0,
+      "phase": "APPROACH",
+      "sim_seconds": 65.001,
+      "frames": 623,
+      "p95_age_ms": 184.0,
+      "last": {
+        "completed": 623,
+        "completed_sim_us": 65001000,
+        "dropped": 339,
+        "frame_age_ms": 188.0,
+        "kind": "vision_service",
+        "received": 963,
+        "sim_time_us": 64813000,
+        "source": "ESTIMATE",
+        "valid": true,
+        "vehicle": 0
+      }
+    },
+    {
+      "run": "run_20261004_024145",
+      "delay_ms": 0.0,
+      "phase": "CONTACT",
+      "sim_seconds": 64.981,
+      "frames": 967,
+      "p95_age_ms": 50.0,
+      "last": {
+        "completed": 967,
+        "completed_sim_us": 65041000,
+        "dropped": 0,
+        "frame_age_ms": 30.0,
+        "kind": "vision_service",
+        "received": 967,
+        "sim_time_us": 65011000,
+        "source": "ESTIMATE",
+        "valid": false,
+        "vehicle": 0
+      }
+    }
+  ]
+}

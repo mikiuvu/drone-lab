@@ -1,0 +1,193 @@
+{
+  "scope": "assumed CPU scheduling, not hardware measurement",
+  "runs": [
+    {
+      "vision_service_ms": 0,
+      "frames": {
+        "generated": 300,
+        "completed": 300,
+        "dropped": 0,
+        "deadline_misses_completed": 0,
+        "pending": 0,
+        "in_flight": 0,
+        "outstanding": 0,
+        "overdue_at_end": 0,
+        "deadline_misses_observed": 0,
+        "deadline_miss_fraction_generated": 0.0,
+        "age_ms": {
+          "count": 300,
+          "p50": 9.480079,
+          "p95": 9.480079,
+          "max": 9.480079
+        },
+        "queue_wait_ms": {
+          "count": 300,
+          "p50": 9.09861,
+          "p95": 9.09861,
+          "max": 9.09861
+        },
+        "stale_completed": 0,
+        "oldest_outstanding_age_ms": 0
+      },
+      "navigation": {
+        "generated": 900,
+        "completed": 900,
+        "dropped": 0,
+        "deadline_misses_completed": 0,
+        "deadline_misses_dropped": 0,
+        "pending": 0,
+        "in_flight": 0,
+        "overdue_at_end": 0,
+        "age_ms": {
+          "count": 900,
+          "p50": 9.09861,
+          "p95": 9.09861,
+          "max": 9.09861
+        },
+        "deadline_misses_observed": 0
+      },
+      "cpu_utilization": 0.41515948499998995
+    },
+    {
+      "vision_service_ms": 40,
+      "frames": {
+        "generated": 300,
+        "completed": 300,
+        "dropped": 0,
+        "deadline_misses_completed": 0,
+        "pending": 0,
+        "in_flight": 0,
+        "outstanding": 0,
+        "overdue_at_end": 0,
+        "deadline_misses_observed": 0,
+        "deadline_miss_fraction_generated": 0.0,
+        "age_ms": {
+          "count": 300,
+          "p50": 58.19722,
+          "p95": 58.19722,
+          "max": 58.19722
+        },
+        "queue_wait_ms": {
+          "count": 300,
+          "p50": 9.09861,
+          "p95": 9.09861,
+          "max": 9.09861
+        },
+        "stale_completed": 0,
+        "oldest_outstanding_age_ms": 0
+      },
+      "navigation": {
+        "generated": 900,
+        "completed": 600,
+        "dropped": 300,
+        "deadline_misses_completed": 0,
+        "deadline_misses_dropped": 0,
+        "pending": 0,
+        "in_flight": 0,
+        "overdue_at_end": 0,
+        "age_ms": {
+          "count": 600,
+          "p50": 9.09861,
+          "p95": 13.752776,
+          "max": 13.752776
+        },
+        "deadline_misses_observed": 0
+      },
+      "cpu_utilization": 0.8729582999999941
+    },
+    {
+      "vision_service_ms": 100,
+      "frames": {
+        "generated": 300,
+        "completed": 179,
+        "dropped": 119,
+        "deadline_misses_completed": 179,
+        "pending": 1,
+        "in_flight": 1,
+        "outstanding": 2,
+        "overdue_at_end": 1,
+        "deadline_misses_observed": 180,
+        "deadline_miss_fraction_generated": 0.6,
+        "age_ms": {
+          "count": 179,
+          "p50": 146.34015,
+          "p95": 173.04301,
+          "max": 173.72069
+        },
+        "queue_wait_ms": {
+          "count": 180,
+          "p50": 36.47915,
+          "p95": 61.476263,
+          "max": 62.238653
+        },
+        "stale_completed": 179,
+        "oldest_outstanding_age_ms": 133.333333
+      },
+      "navigation": {
+        "generated": 900,
+        "completed": 220,
+        "dropped": 679,
+        "deadline_misses_completed": 40,
+        "deadline_misses_dropped": 0,
+        "pending": 1,
+        "in_flight": 0,
+        "overdue_at_end": 0,
+        "age_ms": {
+          "count": 220,
+          "p50": 14.563682,
+          "p95": 30.663691,
+          "max": 31.288747
+        },
+        "deadline_misses_observed": 40
+      },
+      "cpu_utilization": 1.0
+    },
+    {
+      "vision_service_ms": 200,
+      "frames": {
+        "generated": 300,
+        "completed": 92,
+        "dropped": 206,
+        "deadline_misses_completed": 92,
+        "pending": 1,
+        "in_flight": 1,
+        "outstanding": 2,
+        "overdue_at_end": 1,
+        "deadline_misses_observed": 93,
+        "deadline_miss_fraction_generated": 0.31,
+        "age_ms": {
+          "count": 92,
+          "p50": 254.9305,
+          "p95": 282.22633,
+          "max": 282.90401
+        },
+        "queue_wait_ms": {
+          "count": 93,
+          "p50": 36.73328,
+          "p95": 64.02911,
+          "max": 64.70679
+        },
+        "stale_completed": 92,
+        "oldest_outstanding_age_ms": 200.0
+      },
+      "navigation": {
+        "generated": 900,
+        "completed": 156,
+        "dropped": 743,
+        "deadline_misses_completed": 63,
+        "deadline_misses_dropped": 0,
+        "pending": 1,
+        "in_flight": 0,
+        "overdue_at_end": 0,
+        "age_ms": {
+          "count": 156,
+          "p50": 19.923506,
+          "p95": 30.240141,
+          "max": 31.288747
+        },
+        "deadline_misses_observed": 63
+      },
+      "cpu_utilization": 1.0
+    }
+  ]
+}

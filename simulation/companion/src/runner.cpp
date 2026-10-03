@@ -11,6 +11,7 @@
 #include "companion/vision.hpp"
 #include "companion/armor_tracker.hpp"
 #include "companion/periodic_motion.hpp"
+#include "companion/vision_delay.hpp"
 #ifdef COMPANION_WITH_OPENCV
 #include "companion/rm_auto_aim.hpp"
 #endif
@@ -184,6 +185,11 @@ int main(int argc,char**argv){try{
   companion::PeriodicMotion periodic_motion;
   std::deque<companion::Estimate> pose_history;
   uint64_t visual_pose_stamp=0;
+  struct DelayedPose {uint64_t stamp;Eigen::Vector3d world;bool valid;double error;};
+  const double vision_delay_ms=team_settings.value("vision_delay_ms",0.0);
+  if(!std::isfinite(vision_delay_ms)||vision_delay_ms<0||vision_delay_ms>2000)throw std::runtime_error("vision_delay_ms must be 0..2000");
+  companion::VisionDelay<DelayedPose> vision_queue(static_cast<uint64_t>(vision_delay_ms*1000));
+
 
   for(const char* key:{"position_gain","cruise_speed_mps","climb_speed_mps","descent_speed_mps","landing_speed_mps","touchdown_descent_mps","yaw_gain","yaw_rate_limit_rad_s","impact_acceleration_mps2","impact_proximity_m"})
     if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<=0))throw std::runtime_error(std::string("invalid team_mission.")+key);
@@ -306,6 +312,7 @@ int main(int argc,char**argv){try{
           if(image&&image->sim_time_us==camera_us){
             visual_pose_stamp=camera_us;
             const auto detected=companion::detectRmArmor(*image,camera,team_settings.value("visual_strip_height_m",.055),team_settings.value("visual_bottom_separation_m",0.0));
+            DelayedPose task{camera_us,Eigen::Vector3d::Zero(),false,detected.reprojection_error_px};
             if(detected.valid&&!pose_history.empty()){
               auto nearest=std::min_element(pose_history.begin(),pose_history.end(),[&](const auto&a,const auto&b){return std::llabs(static_cast<int64_t>(a.sim_time_us)-static_cast<int64_t>(camera_us))<std::llabs(static_cast<int64_t>(b.sim_time_us)-static_cast<int64_t>(camera_us));});
               if(std::llabs(static_cast<int64_t>(nearest->sim_time_us)-static_cast<int64_t>(camera_us))<80000){
@@ -313,11 +320,17 @@ int main(int argc,char**argv){try{
                 // 相机右下前 → 机体前左上，补相机安装平移，再用曝光时刻自身位姿转世界系。
                 Eigen::Vector3d body(detected.position_camera_m.z()+.052,-detected.position_camera_m.x(),-detected.position_camera_m.y());
                 Eigen::Vector3d world=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+rotation(pose.roll_rad,pose.pitch_rad,pose.yaw_rad)*body;
-                if(armor_track.observe(camera_us,world))periodic_motion.observe(camera_us,world);
-                emit({{"kind","visual_pose"},{"sim_time_us",camera_us},{"pnp",true},{"x_m",world.x()},{"y_m",world.y()},{"z_m",world.z()},{"reprojection_error_px",detected.reprojection_error_px}});
+                task.world=world;task.valid=true;
               }
             }
+            vision_queue.submit(task,sim_us);
           }
+        }
+        if(auto done=vision_queue.poll(sim_us)){
+          emit({{"kind","vision_service"},{"sim_time_us",done->stamp},{"completed_sim_us",sim_us},{"frame_age_ms",(sim_us-done->stamp)*.001},{"valid",done->valid},{"received",vision_queue.received},{"completed",vision_queue.completed},{"dropped",vision_queue.dropped}});
+          const bool accepted=done->valid&&armor_track.observe(done->stamp,done->world);
+          if(accepted)periodic_motion.observe(done->stamp,done->world);
+          if(done->valid)emit({{"kind","visual_pose"},{"sim_time_us",done->stamp},{"completed_sim_us",sim_us},{"frame_age_ms",(sim_us-done->stamp)*.001},{"vision_delay_ms",vision_delay_ms},{"dropped",vision_queue.dropped},{"accepted",accepted},{"pnp",true},{"x_m",done->world.x()},{"y_m",done->world.y()},{"z_m",done->world.z()},{"reprojection_error_px",done->error}});
         }
         auto tracked=armor_track.at(sim_us);
         const auto periodic=periodic_motion.predict(sim_us);

@@ -273,6 +273,7 @@ def main():
     parser.add_argument("--dynamics", choices=["micro", "x500"], default="micro")
     parser.add_argument("--horizontal-tof", action="store_true")
     parser.add_argument("--vehicle-count", type=int)
+    parser.add_argument("--vision-delay-ms", type=float, default=None)
     parser.add_argument(
         "--uwb-anchors", action=argparse.BooleanOptionalAction, default=None
     )
@@ -335,6 +336,13 @@ def main():
     count = len(config["spawns"])
     if count > 245:
         raise SystemExit("PX4 MAVLink system IDs permit at most 245 local instances")
+    if args.vision_delay_ms is not None:
+        if (
+            not math.isfinite(args.vision_delay_ms)
+            or not 0 <= args.vision_delay_ms <= 2000
+        ):
+            raise ValueError("vision-delay-ms must be 0..2000")
+        config.setdefault("team_mission", {})["vision_delay_ms"] = args.vision_delay_ms
     if args.flow_disable:
         config["optical_flow"]["enabled"] = False
     world_name, config = prepare_world(

@@ -244,6 +244,7 @@ class TeamContactQtTests(unittest.TestCase):
             self.assertEqual(args[args.index("--mission") + 1], "team_contact")
             self.assertEqual(args[args.index("--dynamics") + 1], "micro")
             self.assertEqual(args[args.index("--vehicle-count") + 1], "4")
+            self.assertEqual(args[args.index("--vision-delay-ms") + 1], "0")
             self.assertNotIn("--uwb-anchors", args)
             self.assertNotIn("--fly", args)
 
