@@ -1,0 +1,45 @@
+{
+  "detected_iterations": 320,
+  "host_arch": "x86_64",
+  "host_name": "DESKTOP-OMA8G0G",
+  "image_bytes": 691200,
+  "measurement_scope": "host algorithm microbenchmark, not calibrated Nano timing",
+  "opencv": "4.5.4",
+  "opencv_threads": 1,
+  "peak_rss_kib": 23368,
+  "stages": {
+    "flow_height_predict": {
+      "max_ms": 0.11816,
+      "mean_ms": 0.001029746000000003,
+      "p50_ms": 0.000874,
+      "p95_ms": 0.0009,
+      "p99_ms": 0.001615,
+      "samples": 1000
+    },
+    "target_tracker": {
+      "max_ms": 0.000504,
+      "mean_ms": 0.0003115240000000026,
+      "p50_ms": 0.000309,
+      "p95_ms": 0.000331,
+      "p99_ms": 0.000338,
+      "samples": 1000
+    },
+    "tof_frame": {
+      "max_ms": 1.067457,
+      "mean_ms": 0.8264114933333337,
+      "p50_ms": 0.814583,
+      "p95_ms": 0.909861,
+      "p99_ms": 0.996308,
+      "samples": 300
+    },
+    "vision_detect_pnp": {
+      "max_ms": 0.583712,
+      "mean_ms": 0.2950644799999998,
+      "p50_ms": 0.276242,
+      "p95_ms": 0.381469,
+      "p99_ms": 0.43203,
+      "samples": 300
+    }
+  },
+  "terrain_storage_bytes": 5126100
+}

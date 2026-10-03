@@ -10,6 +10,7 @@
 #include "companion/protocol.hpp"
 #include "companion/vision.hpp"
 #include "companion/armor_tracker.hpp"
+#include "companion/periodic_motion.hpp"
 #ifdef COMPANION_WITH_OPENCV
 #include "companion/rm_auto_aim.hpp"
 #endif
@@ -180,6 +181,7 @@ int main(int argc,char**argv){try{
   bool visual_ready=false;
   uint64_t visual_lost_since=0;
   companion::ArmorTracker armor_track;
+  companion::PeriodicMotion periodic_motion;
   std::deque<companion::Estimate> pose_history;
   uint64_t visual_pose_stamp=0;
 
@@ -311,13 +313,19 @@ int main(int argc,char**argv){try{
                 // 相机右下前 → 机体前左上，补相机安装平移，再用曝光时刻自身位姿转世界系。
                 Eigen::Vector3d body(detected.position_camera_m.z()+.052,-detected.position_camera_m.x(),-detected.position_camera_m.y());
                 Eigen::Vector3d world=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+rotation(pose.roll_rad,pose.pitch_rad,pose.yaw_rad)*body;
-                armor_track.observe(camera_us,world);
+                if(armor_track.observe(camera_us,world))periodic_motion.observe(camera_us,world);
                 emit({{"kind","visual_pose"},{"sim_time_us",camera_us},{"pnp",true},{"x_m",world.x()},{"y_m",world.y()},{"z_m",world.z()},{"reprojection_error_px",detected.reprojection_error_px}});
               }
             }
           }
         }
-        const auto tracked=armor_track.at(sim_us);
+        auto tracked=armor_track.at(sim_us);
+        const auto periodic=periodic_motion.predict(sim_us);
+        // 周期模型只使用通过关联的视觉观测，且独立周期验证合格才覆盖短时预测。
+        if(periodic.valid&&periodic.confidence>=.85){
+          tracked.position=periodic.position;tracked.velocity=periodic.velocity;
+          emit({{"kind","periodic_prediction"},{"sim_time_us",sim_us},{"confidence",periodic.confidence},{"horizon_s",periodic.horizon},{"y_m",periodic.position.y()}});
+        }
         visual_result={};visual_ready=false;
         if(tracked.valid){
           Eigen::Vector3d relative=rotation(0,0,-e.pose.yaw_rad)*(tracked.position-Eigen::Vector3d(e.pose.x_m,e.pose.y_m,e.pose.z_m));
