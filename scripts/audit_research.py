@@ -1,4 +1,6 @@
-"""Check the research deliverable against current source and local evidence."""
+"""@file audit_research.py
+@brief 检查研究证据文件、本地 HTML 链接和源码摘要的一致性；只读检查，失败以非零退出。
+"""
 
 import hashlib
 import json
@@ -10,16 +12,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Links(HTMLParser):
+    """@brief 收集 HTML 的 a/img 标签中的 href/src，用于本地文件存在性检查。
+    """
     def __init__(self):
+        """@brief 初始化解析器和链接列表。
+        """
         super().__init__()
         self.links = []
 
     def handle_starttag(self, tag, attrs):
+        """@brief 收集链接属性；远端 URL 的排除在 main 中处理。
+        """
         if tag in ("a", "img"):
             self.links.extend(value for key, value in attrs if key in ("href", "src"))
 
 
 def main():
+    """@brief 读取证据清单、总览 HTML 和 baseline 摘要，报告缺失或过期来源。
+    @note 不重跑模型或修复结果；注释改变也会改变完整源码 SHA256。
+    """
     evidence = json.loads(
         (ROOT / "research" / "completion_matrix.json").read_text(encoding="utf-8")
     )

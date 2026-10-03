@@ -1,9 +1,17 @@
+# @file fleet_config.py
+# @brief 依据机队数量生成连续编号、出生点和编队位置，配置固定 UWB 锚点。
+
 """Resolve fleet cardinality and optional fixed UWB geometry."""
 
 import copy
 import math
 
 
+# @brief 深拷贝地图并调整机队配置，原始 config 不被修改。
+# @param config 含 spawns 的地图；改变数量时，已有任务编队按其中心重新布置。
+# @param vehicle_count 正整数；None 保留现有数量，候选出生点不足或编号不连续时抛出 ValueError。
+# @param enable_anchors False 清空锚点，True 在缺少锚点时添加默认锚点，None 保留配置。
+# @return 配置副本，包含数量、每机航点以及缺省光流参数。
 def configure_fleet(config, vehicle_count=None, enable_anchors=None):
     result = copy.deepcopy(config)
     spawns = result["spawns"]

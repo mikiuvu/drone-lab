@@ -1,3 +1,6 @@
+# @file render_team_map.py
+# @brief 以米制等比例绘制地形、编队中心航路、起点标记和机体尺寸。
+
 """Render configured team routes, home markers and model dimensions."""
 
 import json
@@ -10,6 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Circle, Rectangle
 
 
+# 读取地图、尺寸核对数据与高度栅格，在全场和起点局部视图中绘制等比例几何并保存图片。
 def main():
     root = Path(__file__).resolve().parent
     config = json.loads(

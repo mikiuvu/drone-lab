@@ -1,4 +1,7 @@
-"""Flight plots with live log following and synchronized playback."""
+"""@file flight_dashboard.py
+@brief 飞行日志跟随、曲线绘制与同步时间游标。
+FlightLoader 读取历史快照，FlightDashboard 在主线程绘图；横轴使用日志中的仿真秒，播放节奏使用电脑单调时钟。
+"""
 
 import math
 import time
@@ -68,18 +71,28 @@ COLORS = [
 
 
 class FlightLoader(QThread):
+    """@brief 持续读取飞行日志的后台线程，向界面发送独立历史快照。
+    """
     loaded = Signal(object)
     failed = Signal(str)
 
     def __init__(self, folder, parent=None):
+        """@param folder 含 companion 等日志的运行目录。
+        @param parent Qt 父对象，管理线程对象的归属。
+        """
         super().__init__(parent)
         self.folder = folder
 
     def run(self):
+        """@brief 分批追赶历史并继续跟随文件追加。
+        @note 有积压时每次最多 poll 两轮，快照节流至约 0.7 秒；追平时立即发出变化并降低轮询频率。
+        """
         try:
             history = FlightHistory(self.folder)
             last_emit = 0.0
             while not self.isInterruptionRequested():
+                # 增量读取与快照发送分别节流：历史追赶保持吞吐，界面减少重绘次数；
+                # 快照与后续累积的数据分离，工作线程继续读取时不改界面正在使用的数据。
                 changed = history.poll(rounds=2)
                 now = time.monotonic()
                 if changed and (now - last_emit > 0.7 or not history.backlog):
@@ -91,7 +104,13 @@ class FlightLoader(QThread):
 
 
 class FlightDashboard(QDialog):
+    """@brief 用同一仿真时间游标关联轨迹、高度、速度、误差和任务阶段。
+    @note snapshot 是后台数据快照；plot_data 是本次绘图缓存，cursor 为仿真秒数。控件与 Matplotlib 操作在界面线程执行。
+    """
     def __init__(self, folder=None, parent=None):
+        """@param folder 可选运行目录，提供时立即开始读取。
+        @param parent 所属窗口；对话框关闭后由 Qt 删除。
+        """
         super().__init__(parent)
         self.setWindowTitle("飞行数据可视化")
         self.resize(1420, 960)
@@ -99,7 +118,7 @@ class FlightDashboard(QDialog):
         self.snapshot = None
         self.worker = None
         self.cursor = 0.0
-        self.plot_data = {}
+        self.plot_data = {}  # 机号 -> (估计数组, 真值数组, 对齐误差 m, 速度模 m/s)。
         self.cursor_lines = []
         self.position_markers = []
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -177,6 +196,8 @@ class FlightDashboard(QDialog):
             self.load_folder(folder)
 
     def stop_worker(self):
+        """@brief 请求读取线程中断并等待退出后删除，供换目录和关闭窗口使用。
+        """
         if self.worker:
             self.worker.requestInterruption()
             self.worker.wait()
@@ -184,6 +205,9 @@ class FlightDashboard(QDialog):
             self.worker = None
 
     def load_folder(self, folder):
+        """@brief 停止旧读取器与播放，清空画布并启动新目录读取器。
+        @param folder 新运行目录。
+        """
         self.stop_worker()
         self.player.stop()
         self.play.setText("播放")
@@ -197,16 +221,25 @@ class FlightDashboard(QDialog):
         self.worker.start()
 
     def load_failed(self, error):
+        """@brief 将读取线程报告的错误显示到摘要栏。
+        """
         self.summary.setText("读取失败：" + error)
 
     def choose_folder(self):
+        """@brief 选择运行目录，默认定位到当前快照的目录。
+        """
         current = self.snapshot["folder"] if self.snapshot else ""
         folder = QFileDialog.getExistingDirectory(self, "选择仿真运行目录", current)
         if folder:
             self.load_folder(folder)
 
     def accept_snapshot(self, snapshot):
+        """@brief 接收历史快照，更新机号、时间范围和读取状态。
+        @param snapshot FlightHistory.snapshot 返回的字典。
+        @note 忽略旧读取器迟到的信号；手动回看时仍接收快照，但已有曲线不会随每次追加重建。
+        """
         sender = self.sender()
+        # 旧线程停止前发出的信号可能仍在 Qt 队列中，换目录后必须识别发送者。
         if isinstance(sender, FlightLoader) and sender is not self.worker:
             return
         had_data = bool(self.plot_data)
@@ -267,18 +300,25 @@ class FlightDashboard(QDialog):
             self.redraw()
 
     def selected_ids(self):
+        """@return 当前选中的机号列表；全部模式返回快照机号，无快照返回空列表。
+        """
         if not self.snapshot:
             return []
         vehicle = self.vehicle.currentData()
         return self.snapshot["ids"] if vehicle is None else [vehicle]
 
     def redraw(self, *_):
+        """@brief 在局部字体配置中重建图形；可直接连接带参数的 Qt 信号。
+        """
         if not self.snapshot:
             return
         with rc_context(FONT):
             self._draw()
 
     def _draw(self):
+        """@brief 从快照重建六幅曲线、任务阶段条和游标标记。
+        @note 估计列依次为时间 s、XYZ m、VXYZ m/s、航向 rad、置信度及两个有效标志。真值列为时间、XYZ、航向。
+        """
         self.figure.clear()
         grid = self.figure.add_gridspec(
             4, 2, height_ratios=[1, 1, 1, 0.25], hspace=0.56, wspace=0.2
@@ -324,6 +364,8 @@ class FlightDashboard(QDialog):
                 color="#24465d",
             )
         for vehicle in selected:
+            # 1. 把每机历史转成数组，按时间匹配真值得到 XY 误差；未匹配处保留 NaN，
+            #    曲线出现缺口，避免把缺失真值绘成零误差。速度模包含 XYZ 三个分量。
             estimate = np.asarray(
                 self.snapshot["estimates"].get(vehicle, []), dtype=float
             )
@@ -349,6 +391,7 @@ class FlightDashboard(QDialog):
             )
             self.axes[3].plot(times, errors, color=color, lw=1.2, label=label)
             yaw = np.rad2deg(estimate[:, 7]).copy()
+            # 2. 航向在角度边界跳变时用 NaN 断线，避免跨 ±180°画出虚假的长斜线。
             yaw[np.r_[False, np.abs(np.diff(yaw)) > 180]] = np.nan
             self.axes[4].plot(times, yaw, color=color, lw=1.2, label=label)
             self.axes[5].plot(times, estimate[:, 8], color=color, lw=1.2, label=label)
@@ -430,6 +473,7 @@ class FlightDashboard(QDialog):
                     ncol=min(4, len(handles)),
                     framealpha=0.8,
                 )
+        # 3. 相邻阶段事件围成时间区间；末段延伸到最新采样，并裁剪到曲线时间范围。
         phases = self.snapshot["phases"]
         for index, (stamp, phase, active) in enumerate(phases):
             end = phases[index + 1][0] if index + 1 < len(phases) else self.end_time
@@ -468,16 +512,22 @@ class FlightDashboard(QDialog):
         self.canvas.draw_idle()
 
     def update_cursor(self):
+        """@brief 同步各时间轴竖线、XY 位置标记、滑块和文字读数。
+        @note XY 标记使用游标之前最后一个估计，超过 0.20 s 则隐藏；滑块更新时阻断信号以避免回调递归。
+        """
         for line in self.cursor_lines:
             line.set_xdata([self.cursor, self.cursor])
         for vehicle, marker in self.position_markers:
             estimate = self.plot_data[vehicle][0]
+            # 有序时间数组中找第一个大于游标的位置，再退一格，得到不晚于游标的帧；
+            # 与文字读数的最近邻策略不同，这里不会提前显示未来位置。
             index = np.searchsorted(estimate[:, 0], self.cursor, side="right") - 1
             if index >= 0 and self.cursor - estimate[index, 0] <= 0.2:
                 marker.set_data([estimate[index, 1]], [estimate[index, 2]])
             else:
                 marker.set_data([], [])
         self.slider.blockSignals(True)
+        # 程序同步进度条时阻断 valueChanged，否则会进入 slider_changed 并关闭跟随。
         self.slider.setValue(
             round(
                 10000
@@ -491,6 +541,10 @@ class FlightDashboard(QDialog):
         self.canvas.draw_idle()
 
     def show_values(self, stamp):
+        """@brief 显示指定仿真时刻附近的高度、速度、误差和任务阶段。
+        @param stamp 仿真时间，单位 s。
+        @note 读数取距离该时刻最近的估计，超过 0.15 s 显示无数据；误差无有效真值匹配时显示缺失。
+        """
         phase = (
             next(
                 (
@@ -523,6 +577,8 @@ class FlightDashboard(QDialog):
         )
 
     def slider_changed(self, value):
+        """@brief 将 0–10000 的滑块位置转换为仿真时间，并退出实时跟随。
+        """
         self.follow.setChecked(False)
         self.cursor = self.start_time + value / 10000 * (
             self.end_time - self.start_time
@@ -530,6 +586,8 @@ class FlightDashboard(QDialog):
         self.update_cursor()
 
     def follow_changed(self, checked):
+        """@brief 启用跟随时停止播放，把游标移到最新数据并重绘。
+        """
         if checked:
             self.player.stop()
             self.play.setText("播放")
@@ -537,6 +595,8 @@ class FlightDashboard(QDialog):
             self.redraw()
 
     def toggle_play(self):
+        """@brief 切换手动播放；从末尾启动时回到起点，并记录电脑单调时钟。
+        """
         if self.player.isActive():
             self.player.stop()
             self.play.setText("播放")
@@ -551,6 +611,8 @@ class FlightDashboard(QDialog):
         self.play.setText("暂停")
 
     def advance_playback(self):
+        """@brief 按真实经过秒数乘倍率推进仿真游标，到数据末尾自动暂停。
+        """
         now = time.monotonic()
         self.cursor = min(
             self.end_time,
@@ -563,6 +625,9 @@ class FlightDashboard(QDialog):
             self.play.setText("播放")
 
     def plot_clicked(self, event):
+        """@brief 点击时间曲线或阶段条时定位游标。
+        @note XY 图横轴不是时间，且工具栏缩放/平移模式要保留自身鼠标操作，因此不参与定位。
+        """
         if (
             event.inaxes
             in [*getattr(self, "axes", [])[1:], getattr(self, "timeline", None)]
@@ -574,10 +639,14 @@ class FlightDashboard(QDialog):
             self.update_cursor()
 
     def hover(self, event):
+        """@brief 悬停时间曲线时预览该时刻读数，不改变播放游标。
+        """
         if event.inaxes in getattr(self, "axes", [])[1:] and event.xdata is not None:
             self.show_values(event.xdata)
 
     def save_image(self):
+        """@brief 将当前完整图形导出为 PNG 或 PDF，保存当前曲线选择和游标。
+        """
         if not self.snapshot:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -597,6 +666,8 @@ class FlightDashboard(QDialog):
                 QMessageBox.warning(self, "导出失败", str(exc))
 
     def save_csv(self):
+        """@brief 导出快照中选定机号的采样与对齐误差，不按当前游标截断数据。
+        """
         if not self.snapshot:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -613,12 +684,16 @@ class FlightDashboard(QDialog):
                 QMessageBox.warning(self, "导出失败", str(exc))
 
     def closeEvent(self, event):
+        """@brief 关闭前停止播放定时器并等待日志线程退出。
+        """
         self.player.stop()
         self.stop_worker()
         super().closeEvent(event)
 
 
 def main():
+    """@brief 独立启动飞行曲线窗口，--run-dir 可指定运行目录。
+    """
     import argparse
     import sys
 

@@ -1,3 +1,6 @@
+# @file plot_team_route.py
+# @brief 根据地图配置绘制全场航路及基地接触、侧方待命位置。
+
 """Render the configured team route and contact handoff geometry."""
 
 import json
@@ -11,6 +14,7 @@ import numpy as np
 from matplotlib.patches import Rectangle
 
 
+# 从地图和高度栅格绘制规划几何，保存 team-route.png；图中位置使用世界 XY 米制坐标。
 def main():
     root = Path(__file__).resolve().parent
     path = root / "maps/rmuc_2026_sentry26.json"

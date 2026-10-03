@@ -1,3 +1,6 @@
+# @file import_sentry26.py
+# @brief 导入静态地形，生成三角网格先验、最高表面高度栅格及来源记录。
+
 """Import the pinned Sentry26 terrain and export the static geometry prior."""
 
 import hashlib
@@ -17,6 +20,8 @@ DTYPE = np.dtype(
 )
 
 
+# 读取二进制 STL：80 字节头、4 字节小端数量、每三角形 50 字节。
+# @return 可写的结构化数组；文件长度不符或顶点非有限时抛出 ValueError。
 def read_stl(path):
     data = path.read_bytes()
     count = struct.unpack_from("<I", data, 80)[0]
@@ -28,6 +33,10 @@ def read_stl(path):
     return records
 
 
+# @param triangles 三角形顶点数组，形状为 N×3×3，坐标单位米。
+# @param step XY 采样间距（米）。
+# @return x、y 轴和形状为 [y,x] 的高度数组，未覆盖处为 NaN。
+# @note 在三角形 XY 包围盒内用重心坐标插值 z，重叠处保留最高表面，跳过投影退化的面。
 def height_grid(triangles, step=0.1):
     """Offline top-down raster of known static prior; keeps highest surface."""
     x = np.arange(-14.6, 14.61, step)
@@ -58,7 +67,13 @@ def height_grid(triangles, step=0.1):
     return x, y, height
 
 
+# 复制来源资产和许可证，按高度过滤并平移地形，再输出网格、来源校验信息、世界文件和高度图。
 def main():
+    """@brief 导入固定来源地形并生成仿真所需的网格、SDF 和高度图。
+
+    @note 先保留上游资产，再过滤超过 5 m 的包围墙三角形并沿 Z 平移；
+    输出的 provenance.json 记录来源提交、哈希、过滤数量和已知限制。
+    """
     source = SOURCE / "rmu_gazebo_simulator/resource/models/rmuc_2026"
     output = ROOT / "models/terrain/rmuc_2026_sentry26"
     output.mkdir(parents=True, exist_ok=True)

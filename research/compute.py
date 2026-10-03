@@ -1,8 +1,6 @@
-"""Synthetic CPU/NPU scheduling study; no board I/O and no import side effects.
-
-One Linux CPU, one NPU, one admitted vision frame through the entire pipeline.
-Only navigation can overlap vision's NPU stage. Camera arrivals represent frames
-made available by a driver, not modeled exposure/ISP operations.
+"""@file compute.py
+@brief 用离散事件模拟一个 Linux CPU 与一个 NPU 上的导航和视觉排队。
+@note 驱动可用帧周期到达，视觉管线同时只处理一帧；各阶段耗时由输入指定，未模拟曝光或 ISP。
 """
 
 from collections import deque
@@ -23,19 +21,22 @@ DEFAULT_CONFIG = {
     "cpu_tracking_ms": 1,
     "cpu_copy_ms": 0,
     "frame_deadline_ms": 100,
-    "nav_deadline_ms": None,  # default: one navigation period
-    "frame_bytes": 640 * 480 * 3 // 2,  # illustrative tightly packed NV12
-    "fixed_memory_bytes": 0,  # caller's driver/model/tensor pools; not auto-estimated
-    "npu_ms_pattern": [],  # cyclic by admitted camera frame ID; [] uses npu_ms
-    "bursts": [],  # start_s/end_s/cpu_factor/npu_factor; latch at stage start
-    "trace_limit": 0,  # bounded diagnostic trace; not a modeled frame buffer
+    "nav_deadline_ms": None,  # 默认一个导航周期，ms。
+    "frame_bytes": 640 * 480 * 3 // 2,  # 示例紧密排列 NV12，字节。
+    "fixed_memory_bytes": 0,  # 调用者提供的驱动、模型与张量池，字节。
+    "npu_ms_pattern": [],  # 按原始帧 ID 周期选取耗时，ms；空列表用 npu_ms。
+    "bursts": [],  # 起止时间 s 与资源倍率，阶段开始时锁定。
+    "trace_limit": 0,  # 最多保存的诊断事件数，不计作帧缓冲。
 }
 
 OVERLOAD_CONFIG = {"npu_ms": 60, "cpu_pre_ms": 6, "cpu_post_ms": 4}
-EPS = 1e-8  # milliseconds, only for ordering/roundoff
+EPS = 1e-8  # ms，仅用于排序与浮点容差。
 
 
 def _number(value, name, minimum=0, strict=False):
+    """@brief 校验有限数值和下界，strict 决定是否拒绝等于下界的值。
+    @return 原值；布尔量、非有限值或越界输入抛 ValueError。
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} 必须是有限数值")
     if not math.isfinite(value) or value < minimum or (strict and value == minimum):
@@ -44,6 +45,10 @@ def _number(value, name, minimum=0, strict=False):
 
 
 def _config(config):
+    """@brief 深拷贝并校验配置，补全导航期限，限制事件数量和耗时乘积。
+    @param config 参数覆盖字典或 None；耗时/期限单位 ms，持续时间与突发区间单位 s。
+    @return 与调用者容器独立的配置字典。
+    """
     if config is not None and not isinstance(config, dict):
         raise ValueError("config 必须是 dict 或 None")
     cfg = deepcopy(DEFAULT_CONFIG)
@@ -120,7 +125,10 @@ def _config(config):
 
 
 def _stats(values):
-    """Nearest-rank quantiles; no completed samples returns null, never zero."""
+    """@brief 计算最近秩分位数，以 ceil(p·N) 选择排序后的样本。
+    @param values 同一单位的样本序列。
+    @return count、p50、p95、max；空序列的统计值为 None，避免被误读为零延迟。
+    """
     if not values:
         return {"count": 0, "p50": None, "p95": None, "max": None}
     ordered = sorted(values)
@@ -133,11 +141,19 @@ def _stats(values):
 
 
 def _simulate(cfg, policy):
+    """@brief 按事件时间推进资源状态，统计指定策略的帧龄、积压、导航期限和持帧内存。
+    @param cfg 已校验的配置，内部事件时间统一为 ms。
+    @param policy fifo 保留全部等待帧，latest 覆盖等待帧而保留正在处理的帧。
+    @return frames、navigation、memory、resources 和有界 trace。
+    @note CPU 阶段不抢占，导航在阶段边界优先；NPU 阶段释放 CPU 给导航，但不接纳第二个视觉帧。
+    """
     horizon = cfg["duration_s"] * 1000
     events = []
     serial = 0
 
     def event(t, kind, payload=None):
+        """@brief 压入带稳定序号的事件；同一时刻完成事件优先于到达事件。
+        """
         nonlocal serial
         # Completion events win ties; dispatch only after the whole timestamp.
         priority = 0 if kind.endswith("done") else 1
@@ -147,6 +163,7 @@ def _simulate(cfg, policy):
     # Arrivals are scheduled lazily, so the heap also stays small.
     event(0, "camera", 0)
     event(0, "nav", 0)
+    # 1. 等待帧与在途 active 分开；NPU 阶段继续持有 active，避免接纳第二个视觉帧。
     queue = deque()
     active = None
     cpu_ready = None
@@ -161,10 +178,18 @@ def _simulate(cfg, policy):
     npu_interval = None
 
     def record(t, kind, ident):
+        """@brief 按 trace_limit 截断诊断轨迹，时间单位 ms；轨迹不计入图像缓冲预算。
+        """
         if len(trace) < cfg["trace_limit"]:
             trace.append({"time_ms": round(t, 6), "event": kind, "id": ident})
 
     def service(base, t, resource):
+        """@brief 在阶段开始时锁定服务耗时；当前覆盖的突发倍率相乘。
+        @param base 基准耗时，ms。
+        @param t 阶段开始时刻，ms。
+        @param resource cpu 或 npu。
+        @return 本阶段耗时，ms。
+        """
         factor = 1.0
         for burst in cfg["bursts"]:
             if burst["start_s"] * 1000 <= t < burst["end_s"] * 1000:
@@ -172,11 +197,15 @@ def _simulate(cfg, policy):
         return base * factor
 
     def peaks():
+        """@brief 更新等待队列峰值及等待帧加在途帧的持有峰值。
+        """
         nonlocal max_queue, max_buffers
         max_queue = max(max_queue, len(queue))
         max_buffers = max(max_buffers, len(queue) + (active is not None))
 
     def start_cpu(t, stage, item):
+        """@brief 开始不可抢占的 CPU 阶段，并记录窗口内忙碌和 CPU/NPU 重叠时间。
+        """
         nonlocal cpu, cpu_busy, overlap
         key = "nav_ms" if stage == "nav" else "cpu_" + stage + "_ms"
         duration = service(cfg[key], t, "cpu")
@@ -190,6 +219,8 @@ def _simulate(cfg, policy):
         event(end, "cpu_done")
 
     def dispatch(t):
+        """@brief CPU 空闲时先派发导航，再推进视觉阶段；仅在视觉管线空闲时取新帧。
+        """
         nonlocal active, cpu_ready, nav_pending
         if cpu is not None:
             return
@@ -207,7 +238,7 @@ def _simulate(cfg, policy):
 
     while events and events[0][0] <= horizon + EPS:
         t = events[0][0]
-        # Handle every simultaneous completion/arrival before choosing CPU work.
+        # 2. 同时刻事件全部处理后再派发 CPU，避免事件顺序改变导航优先的结果。
         while events and abs(events[0][0] - t) <= EPS:
             _, _, _, kind, payload = heapq.heappop(events)
             if kind == "camera":
@@ -278,6 +309,7 @@ def _simulate(cfg, policy):
                 stage, cpu_ready = cpu_ready, None
                 start_cpu(t, stage, active)
 
+    # 3. 不排空期末积压，另计未完成及逾期任务，避免仅看完成帧龄低估延迟。
     outstanding = list(queue) + ([active] if active is not None else [])
     overdue = sum(horizon - item["created"] > cfg["frame_deadline_ms"] + EPS
                   for item in outstanding)
@@ -304,6 +336,7 @@ def _simulate(cfg, policy):
         deadline_misses_observed=navigation["deadline_misses_completed"]
         + navigation["deadline_misses_dropped"] + nav_overdue,
     )
+    # 4. 应用动态内存为等待帧加在途帧乘单帧字节数，固定池占用由配置补充。
     memory = dict(
         frame_bytes=cfg["frame_bytes"], max_queue_frames=max_queue,
         queue_frames_end=len(queue), max_held_frames=max_buffers,
@@ -331,11 +364,11 @@ def _simulate(cfg, policy):
 
 
 def run_compute(config: dict | None = None) -> dict:
-    """Compare FIFO vs latest-frame admission using synthetic milliseconds.
-
-    No file access or dependencies. The horizon is half-open for releases and
-    closed for completions. No post-window drain: unfinished frames and their
-    expired deadlines are explicitly reported, never hidden in age quantiles.
+    """@brief 用相同输入比较 FIFO 与最新等待帧覆盖策略。
+    @param config 覆盖 DEFAULT_CONFIG 的字典或 None；服务时间 ms，输入频率 Hz，内存参数字节。
+    @return summary、config、assumptions 与两种策略的指标。
+    @note 窗口对释放事件左闭右开、对完成事件包含右端；结束后不排空队列。帧龄分位数只含已完成帧，未完成和逾期帧另计。
+    @note 应用持帧内存为持有帧数×frame_bytes 加 fixed_memory_bytes；SDK 池和模型内存须由调用者提供。
     """
     cfg = _config(config)
     fifo = _simulate(cfg, "fifo")

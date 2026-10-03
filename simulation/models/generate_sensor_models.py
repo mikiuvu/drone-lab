@@ -1,3 +1,6 @@
+# @file generate_sensor_models.py
+# @brief 生成带三向 ToF 和前视相机的 SDF 模型，并输出安装参数及微型机动力学配置。
+
 """Add Gazebo-rendered sensing to a supplied PX4 model without editing it.
 
 Default output is a sensor-only static fixture for engine smoke verification.
@@ -15,24 +18,38 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 
+# 创建并返回 XML 子节点；text 非 None 时转为字符串，属性通过 attrs 传入。
 def child(parent: ET.Element, tag: str, text: object | None = None, **attrs: str):
+    """@brief 创建 XML 子元素并可选写入文本和属性。
+
+    @param parent 父元素。
+    @param tag 元素名称。
+    @param text 元素文本；None 表示保留空文本。
+    @param attrs 元素属性。
+    @return 新建的 XML 元素。
+    """
     node = ET.SubElement(parent, tag, attrs)
     if text is not None:
         node.text = str(text)
     return node
 
 
+# @param mass 均匀长方体质量（kg）。
+# @param x,y,z 沿三轴的完整边长（m）。
+# @return 质心处 (Ixx,Iyy,Izz)，单位 kg·m²，使用各垂直边长平方和乘 mass/12。
 def box_inertia(mass: float, x: float, y: float, z: float) -> tuple[float, float, float]:
     return (mass * (y * y + z * z) / 12,
             mass * (x * x + z * z) / 12,
             mass * (x * x + y * y) / 12)
 
 
+# 计算均匀实心圆柱的主惯量，轴线沿 Z；mass 为 kg，radius/height 为 m，返回 kg·m²。
 def cylinder_inertia(mass: float, radius: float, height: float) -> tuple[float, float, float]:
     radial = mass * (3 * radius * radius + height * height) / 12
     return radial, radial, mass * radius * radius / 2
 
 
+# 给 link 添加质量及对角惯量；inertia 顺序为 Ixx/Iyy/Izz（kg·m²），惯性积写零。
 def add_inertial(parent: ET.Element, mass: float,
                  inertia: tuple[float, float, float]) -> None:
     inertial = child(parent, "inertial")
@@ -44,8 +61,10 @@ def add_inertial(parent: ET.Element, mass: float,
         child(inertia_node, axis, "0")
 
 
+# 原位展开 x500_base 的 merge include；从源模型同级目录取基础模型，以深拷贝保留原节点顺序。
 def expand_x500_base(source: Path, model: ET.Element) -> None:
     """Inline PX4's merge include so the generated sensor model is standalone."""
+    # 只展开标记为 merge 的 x500_base，其他 include 保持原样。
     for include in list(model.findall("include")):
         if ((include.get("merge") or "").lower() != "true" or
                 (include.findtext("uri") or "").strip() != "model://x500_base"):
@@ -61,6 +80,11 @@ def expand_x500_base(source: Path, model: ET.Element) -> None:
             model.insert(position, copy.deepcopy(element))
 
 
+# @param vehicle 车辆编号，用于隔离传感器话题。
+# @param pitch_down_deg ToF 在 FLU 机体系绕 +Y 的俯角（度），正值朝下。
+# @param camera_width,camera_height 相机输出像素尺寸；camera_hfov 为水平视场弧度。
+# @param mount_radius,sensor_z,camera_x 安装位置参数（米），mass 为传感器连杆质量（kg）。
+# @return 含三个 8×8 深度相机及一个 RGB 相机的 link 元素，均以 15 Hz 更新。
 def sensor_link(vehicle: int, pitch_down_deg: float, camera_width: int,
                 camera_height: int, camera_hfov: float,
                 mount_radius: float, sensor_z: float,
@@ -103,7 +127,17 @@ def sensor_link(vehicle: int, pitch_down_deg: float, camera_width: int,
     return link
 
 
+# @param args 命令行解析结果，包括模型类型、安装几何、质量、转速及输出目录。
+# @note x500 从外部 SDF 深拷贝，micro 构造刚体与旋翼，fixture 构造静态传感器支架。
+# 输出每机 SDF、模型描述及共享传感器契约；micro 另写物理清单和对应 PX4 参数。
 def generate(args):
+    """@brief 按动力学模式生成每机 SDF、模型描述和共享传感器契约。
+
+    @param args 命令行解析结果，包括模型类型、安装几何、质量、转速及输出目录。
+    @note x500 从外部 SDF 深拷贝并附加传感器 link；micro 计算刚体/旋翼惯量和 PX4 参数；
+    fixture 只生成静态传感器支架。输出契约统一使用 FLU 机体、ENU 世界和米制单位。
+    """
+    # 1. 确定模型来源并校验输出目录；x500 的 merge include 在内存副本中展开。
     mode = "x500" if args.base_model else args.dynamics
     if args.dynamics == "micro" and args.base_model:
         raise ValueError("--dynamics micro cannot use --base-model")
@@ -131,6 +165,7 @@ def generate(args):
         expand_x500_base(source, template)
     else:
         template = None
+    # 2. 按总质量分配机身、四个旋翼和传感器质量，再以几何尺寸计算主惯量（kg·m²）。
     micro_mass = args.mass_kg
     micro_rotor_mass = micro_mass / 30
     micro_sensor_mass = micro_mass / 30
@@ -151,6 +186,7 @@ def generate(args):
             hover_speed >= args.max_motor_speed_rad_s or
             micro_rotor_radius >= arm or arm + micro_rotor_radius > 0.058):
         raise ValueError("mass/speed must be positive, hover below max speed, and rotors must fit within 0.116m without overlap")
+    # 悬停时四桨总推力等于 mg；由单桨 T=kω² 反推 k，ω 使用命令转速 rad/s。
     motor_constant = micro_mass * gravity / (4 * hover_speed * hover_speed)
     micro_rotors = (
         (arm, -arm, "ccw", moment_constant),
@@ -159,8 +195,7 @@ def generate(args):
         (-arm, -arm, "cw", -moment_constant),
     )
     if mode == "micro":
-        # Keep optical centers above the contact plane when the body rests on
-        # the ground. Lateral offsets clear the body without going below it.
+        # 光心保持在机体接地面上方，侧向安装偏移避开机身遮挡。
         mount_radius, sensor_z, camera_x, sensor_mass = 0.055, 0.0, 0.052, micro_sensor_mass
     elif mode == "x500":
         mount_radius, sensor_z, camera_x, sensor_mass = 0.4, 0.08, 0.4, 0.001
@@ -168,6 +203,7 @@ def generate(args):
         mount_radius, sensor_z, camera_x, sensor_mass = 0.0, 0.0, 0.0, 0.001
     tof_origins = [[mount_radius * math.cos(yaw), mount_radius * math.sin(yaw), sensor_z]
                    for yaw in (0, math.radians(120), math.radians(-120))]
+    # 3. 传感器模型与伴随端共享安装外参；轴向深度不等同于归一化射线上的斜距。
     contract = {
         "schema": 1, "distance_mode": "axial", "tof_resolution": [8, 8],
         "tof_hfov_rad": math.pi / 4, "tof_vfov_rad": math.pi / 4,
@@ -194,7 +230,7 @@ def generate(args):
         parameters.update({'MC_ROLLRATE_P': 0.025, 'MC_PITCHRATE_P': 0.035, 'MC_YAWRATE_P': 0.1, 'MC_ROLLRATE_I': 0.03, 'MC_PITCHRATE_I': 0.04, 'MC_YAWRATE_I': 0.03, 'MC_ROLLRATE_D': 0.0003, 'MC_PITCHRATE_D': 0.0004, 'MC_YAWRATE_D': 0.0, 'MC_ROLL_P': 4.0, 'MC_PITCH_P': 4.0, 'MC_YAW_P': 2.0})
         parameters["LNDMC_Z_VEL_MAX"] = 0.08
         for rotor_id, (x, y, _, km) in enumerate(micro_rotors):
-            # PX4 allocation uses FRD: x_frd=x_flu, y_frd=-y_flu, z_frd=-z_flu.
+            # PX4 分配器使用 FRD：x 保持、y/z 取反；推力沿 FRD 的 -Z。
             parameters.update({f"CA_ROTOR{rotor_id}_PX": x, f"CA_ROTOR{rotor_id}_PY": -y,
                                f"CA_ROTOR{rotor_id}_PZ": -0.015,
                                f"CA_ROTOR{rotor_id}_AX": 0, f"CA_ROTOR{rotor_id}_AY": 0,
@@ -239,6 +275,7 @@ def generate(args):
     if vehicle_count < 1:
         raise ValueError("vehicle_count must be positive")
     contract["vehicle_count"] = vehicle_count
+    # 4. 每机使用独立模型名和观测话题；动力学 link 与传感器 link 通过固定关节连接。
     for vehicle in range(vehicle_count):
         model_dir = output / f"micro_{vehicle}"
         model_dir.mkdir(exist_ok=True)
@@ -247,7 +284,7 @@ def generate(args):
             model = copy.deepcopy(template)
             model.set("name", f"micro_{vehicle}")
             root.append(model)
-            # Relative asset URIs must keep referring to the untouched source.
+            # 模型复制到输出目录后，相对资源 URI 转为原来源的绝对 URI。
             for uri in model.iter("uri"):
                 value = (uri.text or "").strip()
                 if value and "://" not in value and not Path(value).is_absolute():
@@ -353,6 +390,7 @@ def generate(args):
         child(config, "description", contract["dynamics"])
         ET.indent(config)
         ET.ElementTree(config).write(model_dir / "model.config", encoding="utf-8", xml_declaration=True)
+    # 5. 保存共享契约；micro 模式同时导出物理清单与匹配该模型的 PX4 参数。
     (output / "sensor_contract.json").write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
     if mode == "micro":
         (output / "micro_physics_manifest.json").write_text(

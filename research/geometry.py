@@ -1,8 +1,6 @@
-"""Synthetic two-VL53L5CX geometry and local observability.
-
-Coordinates are x forward, y left, z up; positive pitch points upward.
-Fixed height and known roll/pitch leave pose (x, y, yaw) to estimate.
-Imports do not run simulations, write files, connect hardware or seed globals.
+"""@file geometry.py
+@brief 双 8×8 ToF 中心射线与有限墙面的合成观测、局部可观测性和噪声拟合。
+@note x 前、y 左、z 上，正俯仰朝上；高度和机体 roll/pitch 已知，只估计 x、y、yaw。
 """
 
 from __future__ import annotations
@@ -44,15 +42,18 @@ _OPTIONS = {
 
 @dataclass(frozen=True)
 class Wall:
-    """Finite vertical rectangle from start/end at z_min to z_max (metres)."""
+    """@brief 由平面起止点和高度上下界定义的有限竖直矩形，坐标单位 m。
+    """
 
     name: str
-    start: tuple[float, float]
-    end: tuple[float, float]
-    z_max: float
-    z_min: float = 0.0
+    start: tuple[float, float]  # 水平起点 (x,y)，m。
+    end: tuple[float, float]  # 水平终点 (x,y)，m。
+    z_max: float  # 上沿高度，m。
+    z_min: float = 0.0  # 下沿高度，m。
 
     def __post_init__(self):
+        """@brief 拒绝非有限坐标、零长度墙段及非正高度。
+        """
         values = (*self.start, *self.end, self.z_min, self.z_max)
         if not all(math.isfinite(v) for v in values):
             raise ValueError("墙面坐标必须有限")
@@ -61,12 +62,19 @@ class Wall:
 
     @property
     def normal(self) -> np.ndarray:
+        """@brief 返回墙段切线在水平面内旋转 90° 后的单位法向量。
+        """
         tangent = np.asarray(self.end) - self.start
         return np.array([-tangent[1], tangent[0], 0.0]) / np.linalg.norm(tangent)
 
 
 def rotation(yaw: float = 0.0, pitch: float = 0.0, roll: float = 0.0) -> np.ndarray:
-    """Rz(yaw) Ry(-pitch) Rx(roll), angles in radians, pitch positive up."""
+    """@brief 构造 Rz(yaw)·Ry(-pitch)·Rx(roll) 旋转矩阵。
+    @param yaw 偏航，rad。
+    @param pitch 俯仰，rad，正值将光轴转向上方。
+    @param roll 横滚，rad。
+    @return 3×3 旋转矩阵；行向量应用时乘矩阵转置。
+    """
     cy, sy = math.cos(yaw), math.sin(yaw)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cr, sr = math.cos(roll), math.sin(roll)
@@ -77,17 +85,21 @@ def rotation(yaw: float = 0.0, pitch: float = 0.0, roll: float = 0.0) -> np.ndar
 
 
 def axis_fov_from_diagonal(diagonal_deg: float) -> float:
-    """Compute axis angles for an ideal square perspective field of view."""
+    """@brief 由理想方形透视视场的对角角度换算轴向角度。
+    @param diagonal_deg 对角视场角，度，范围 (0,179)。
+    @return 水平与垂直轴向视场角，度；使用 tan(对角半角)/√2 得到轴向半角正切。
+    """
     if not math.isfinite(diagonal_deg) or not 0 < diagonal_deg < 179:
         raise ValueError("对角视场必须在 0 到 179 度之间")
     return math.degrees(2 * math.atan(math.tan(math.radians(diagonal_deg / 2)) / math.sqrt(2)))
 
 
 def zone_rays(diagonal_deg: float = 65.0, *, axis_fov_deg: float | None = None) -> np.ndarray:
-    """8x8 cell centres on an ideal square projection plane, unit rays.
-
-    Row zero is upper, column zero left in this synthetic sensor frame.
-    Physical zone numbering, mirroring and boresights require calibration.
+    """@brief 在理想投影平面上取 8×8 分区中心并归一化为方向。
+    @param diagonal_deg 对角视场角，度。
+    @param axis_fov_deg 显式轴向视场角，度；非 None 时优先使用。
+    @return 64×3 单位方向，首行在上、首列在左。
+    @note 真实分区编号、镜像及光轴需标定，区域脚印并未建模为独立激光。
     """
     axis = axis_fov_from_diagonal(diagonal_deg) if axis_fov_deg is None else axis_fov_deg
     if not math.isfinite(axis) or not 0 < axis < 179:
@@ -99,10 +111,13 @@ def zone_rays(diagonal_deg: float = 65.0, *, axis_fov_deg: float | None = None) 
 
 
 def intersect_wall(origin, direction, wall: Wall, max_range_m: float = 3.0) -> float | None:
-    """Nearest intersection with one finite rectangle, physical radial metres.
-
-    Normalises direction. Parallel, behind, beyond range, outside segment or
-    outside wall height returns None. Endpoints are included with 1e-10 slack.
+    """@brief 求单位化射线与有限墙面的有效交点距离。
+    @param origin 三维射线起点，m。
+    @param direction 非零三维方向，会在内部归一化。
+    @param wall 有限竖直墙面。
+    @param max_range_m 最大沿射线距离，m。
+    @return 沿射线距离，m；平行、背向、超量程或越出墙面时返回 None。
+    @note 先求平面交点，再检查线段投影和高度；端点含 1e-10 数值容差。
     """
     origin = np.asarray(origin, dtype=float)
     direction = np.asarray(direction, dtype=float)
@@ -131,6 +146,10 @@ def intersect_wall(origin, direction, wall: Wall, max_range_m: float = 3.0) -> f
 
 
 def _config(config: dict | None) -> dict:
+    """@brief 合并公开参数与可选控制，校验角度、距离、噪声、试验数与模型选项。
+    @param config 覆盖字典或 None；单位由 _m、_mm、_ms、_deg、_m_s 等后缀标明。
+    @return 完整配置，试验次数和随机种子归一化为整数。
+    """
     if config is not None and not isinstance(config, dict):
         raise ValueError("config 必须是字典或 None")
     merged = DEFAULT_CONFIG | _OPTIONS
@@ -174,6 +193,11 @@ def _config(config: dict | None) -> dict:
 
 
 def _sensor_geometry(config: dict):
+    """@brief 生成两颗传感器的 128 条机体方向、安装偏移和距离投影比例。
+    @param config 完整配置；安装先横滚再俯仰再偏航，随后应用已知机体姿态。
+    @return directions、offsets、scale、轴向视场角；偏移 m，视场角度。
+    @note axial 使用局部光轴分量缩放沿射线距离，radial 的比例为 1。
+    """
     axis = 45.0 if config["fov_model"] == "datasheet_axes" else axis_fov_from_diagonal(config["diagonal_fov_deg"])
     rays = zone_rays(axis_fov_deg=axis)
     pitch, roll = np.radians([config["mount_pitch_deg"], config["mount_roll_deg"]])
@@ -187,12 +211,25 @@ def _sensor_geometry(config: dict):
 
 
 def _world_geometry(pose, directions, offsets, height):
+    """@brief 将机体系安装偏移与射线按当前偏航转换到世界系。
+    @param pose (x,y,yaw)，位置 m、偏航 rad。
+    @param directions 机体方向数组。
+    @param offsets 安装偏移数组，m。
+    @param height 已知高度，m。
+    @return 世界系起点和方向数组。
+    """
     rz = rotation(yaw=float(pose[2]))
     origins = offsets @ rz.T + np.array([pose[0], pose[1], height])
     return origins, directions @ rz.T
 
 
 def _observe(walls, config, geometry):
+    """@brief 用匀速模型回推两颗的采样位姿，各射线选择量程内最近墙面交点。
+    @param walls 合成有限墙面列表。
+    @param config 含 latency_ms、sensor_skew_ms 和速度的配置。
+    @param geometry 机体系几何。
+    @return 命中列表及两颗采样位姿；第二颗年龄比第一颗多 sensor_skew_ms。
+    """
     directions, offsets, scale, _ = geometry
     pose_now = np.zeros(3)
     velocity = np.array([config["velocity_x_m_s"], config["velocity_y_m_s"], math.radians(config["yaw_rate_deg_s"])])
@@ -214,6 +251,9 @@ def _observe(walls, config, geometry):
 
 
 def _measurement_model(walls, hits, config, geometry):
+    """@brief 固定已命中射线的墙面关联，提取平面法向与锚点供连续局部拟合。
+    @return 预测函数所需几何元组；后续扰动不重新判断有限端点或切换墙面。
+    """
     indices = np.array([hit["ray"] for hit in hits], dtype=int)
     directions, offsets, scale, _ = geometry
     normals = np.array([walls[hit["wall"]].normal for hit in hits]).reshape(-1, 3)
@@ -222,6 +262,11 @@ def _measurement_model(walls, hits, config, geometry):
 
 
 def _predict(pose, model):
+    """@brief 在固定平面关联下预测距离，按 scale 转为 axial 或 radial 输出。
+    @param pose (x,y,yaw)，m、m、rad。
+    @param model 固定关联的几何元组。
+    @return 各命中射线的预测距离，m；近似平行时抛 ValueError。
+    """
     directions, offsets, scale, normals, anchors, height = model
     origins, world_directions = _world_geometry(pose, directions, offsets, height)
     denominator = np.einsum("ij,ij->i", normals, world_directions)
@@ -231,7 +276,12 @@ def _predict(pose, model):
 
 
 def _jacobian(pose, model, length_scale):
-    """Central differences in q=(x,y,L*yaw); frozen plane association."""
+    """@brief 对 q=(x,y,L·yaw) 作中心差分，统一三个方向的长度尺度。
+    @param pose 位姿，m、m、rad。
+    @param model 固定墙面关联。
+    @param length_scale L，m；偏航扰动为 1e-5/L rad。
+    @return 距离对 q 的雅可比矩阵；差分分母为 2e-5。
+    """
     columns = []
     for dim in range(3):
         delta = np.zeros(3)
@@ -241,6 +291,13 @@ def _jacobian(pose, model, length_scale):
 
 
 def _observability(model, config, hit_count):
+    """@brief 用 J/√命中数的奇异值分解评估局部秩和弱约束方向。
+    @param model 固定关联模型。
+    @param config 提供偏航长度尺度。
+    @param hit_count 命中数。
+    @return 秩、奇异值、条件数和 q 零空间；秩不足 3 时条件数为 None。
+    @note 归一化降低命中数量对幅值的影响；局部满秩不等于全局唯一匹配。
+    """
     if not hit_count:
         return {"rank": 0, "singular_values": [0.0, 0.0, 0.0], "smallest_singular_value": 0.0,
                 "condition_number": None, "nullspace_q": np.eye(3).tolist(),
@@ -262,11 +319,19 @@ def _observability(model, config, hit_count):
 
 
 def _fit_ranges(measured, model, config):
+    """@brief 从近真值初值进行最多 12 次局部最小二乘迭代。
+    @param measured 距离观测，m。
+    @param model 固定关联模型。
+    @param config 提供偏航长度尺度。
+    @return 位姿 (m,m,rad) 和收敛标志。
+    @note 先求 q 增量、限制其范数至 0.4，再将偏航增量除以 L；未实现全局搜索。
+    """
     pose = np.array([0.08, -0.06, math.radians(3.0)])
     length = config["yaw_length_scale_m"]
     for _ in range(12):
         residual = measured - _predict(pose, model)
         jq = _jacobian(pose, model, length)
+        # 在统一长度尺度 q 中求增量，限幅后将偏航分量除以 L 还原为 rad。
         update, _, _, _ = np.linalg.lstsq(jq, residual, rcond=1e-6)
         magnitude = float(np.linalg.norm(update))
         if magnitude > 0.4:
@@ -278,6 +343,15 @@ def _fit_ranges(measured, model, config):
 
 
 def _monte_carlo(hits, model, observability, config, seed):
+    """@brief 在满秩场景重复噪声生成和局部拟合，统计成功样本误差。
+    @param hits 合成命中距离。
+    @param model 固定关联模型。
+    @param observability 局部秩结果。
+    @param config 噪声 mm、共享偏差 mm、同传感器相关系数及试验次数。
+    @param seed 当前场景随机种子，使用局部 RNG。
+    @return 状态、成功/失败数、平移 RMSE m 和偏航 RMSE 度。
+    @note 噪声由分区独立项与每传感器共享项按相关系数组合；真值为当前零位姿，旧帧按当前帧拟合以暴露时延偏差。
+    """
     status = "disabled" if not config["monte_carlo_trials"] else "unobservable"
     result = {"status": status, "requested_trials": config["monte_carlo_trials"],
               "successful_trials": 0, "failed_trials": 0,
@@ -292,6 +366,7 @@ def _monte_carlo(hits, model, observability, config, seed):
     correlation = config["noise_correlation"]
     errors = []
     for _ in range(config["monte_carlo_trials"]):
+        # 独立项权重 √(1-ρ)、每颗共享项权重 √ρ，保持每区边际方差不变。
         noise = config["noise_mm"] / 1000 * (math.sqrt(1 - correlation) * rng.normal(size=len(hits))
                 + math.sqrt(correlation) * rng.normal(size=2)[sensors])
         measured = base + config["bias_mm"] / 1000 + noise
@@ -320,6 +395,8 @@ def _monte_carlo(hits, model, observability, config, seed):
 
 
 def _scenarios():
+    """@brief 返回单墙、直角、走廊、开阔区与低结构等合成场景及解释。
+    """
     def corner(height):
         return [Wall("x_wall", (2.0, -8.0), (2.0, 2.0), height),
                 Wall("y_wall", (-8.0, 2.0), (2.0, 2.0), height)]
@@ -339,11 +416,10 @@ def _scenarios():
 
 
 def run_geometry(config: dict | None = None) -> dict:
-    """Return deterministic finite JSON data for a GUI; no I/O or hardware.
-
-    DEFAULT_CONFIG is the five-field public contract. Optional controls are
-    documented in docs/research/geometry.html. Scenes use synthetic wall segments.
-    max_range_m caps physical radial travel, even in axial-output mode.
+    """@brief 逐场景生成观测、评估局部秩并运行蒙特卡洛拟合。
+    @param config 参数覆盖字典或 None，默认公开参数为高度、量程、安装俯仰、两颗夹角及噪声。
+    @return 可供 JSON/界面消费的 config、metrics、scenarios、assumptions 与来源。
+    @note max_range_m 限制物理沿射线距离，即使选择 axial 输出也如此；高度和姿态误差、反射率、多目标与遮挡未建模。
     """
     cfg = _config(config)
     geometry = _sensor_geometry(cfg)

@@ -1,3 +1,7 @@
+"""@file preview_research.py
+@brief 依次运行五个研究模型并截取结果与总览页，覆盖 docs/research/ui-*.png。
+@note 导入即运行 Qt；模型结果由界面工作线程保存，logs/research-preview-trace.txt 会重写为超时诊断输出。
+"""
 import sys
 import time
 import faulthandler

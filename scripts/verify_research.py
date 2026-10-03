@@ -1,4 +1,7 @@
-"""Produce durable evidence for current offline research artifacts and native build."""
+"""@file verify_research.py
+@brief 串联离线测试、WSL 原生检查、Nano 交叉编译与研究报告生成。
+@note 会更新构建产物、研究结果、图表、总览和 docs/research/verification.json；不是只读检查。
+"""
 
 import hashlib
 import json
@@ -12,6 +15,9 @@ PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 
 
 def main():
+    """@brief 按顺序运行检查并保存退出码、输出末尾与源码/产物摘要。
+    @note 每条命令限时 180 s；非零退出先保存失败记录再结束，成功后写入离线检查状态。
+    """
     result = {
         "verified_utc": datetime.now(timezone.utc).isoformat(),
         "scope": "PC/offline research, collector and native build checks",

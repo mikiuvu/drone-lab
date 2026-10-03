@@ -1,3 +1,10 @@
+/**
+ * @file team_coordinator.cpp
+ * @brief 全队任务协调进程：接收状态报文，调用 TeamMission，分发每机目标。
+ * runner 经 UDP 18100 发 team_status；协调器经 18000+机号 回发 team_command。
+ * 状态机不依赖网络，本文件负责 JSON 类型校验、收发、现实时间和日志输出。
+ * 任务按最大已知 sim_time_us 推进；wallTime() 仅负责检查真实经过时间和发送节拍。
+ */
 #include "companion/team_mission.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -33,10 +40,12 @@ using json = nlohmann::json;
 using namespace companion;
 volatile std::sig_atomic_t running = 1;
 void stop(int) { running = 0; }
+/** @brief 当前单调时间，μs；用于现实超时，不与 sim_time_us 直接作差。 */
 uint64_t wallTime() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+// JSON 数字校验：非数字和 NaN/Inf 都不进入控制配置。
 double number(const json& j, const char* key) {
   const auto& value = j.at(key);
   if (!value.is_number()) throw std::invalid_argument(std::string("数值字段无效：")+key);
@@ -65,6 +74,7 @@ TeamPoint point(const json& j, double defaultZ) {
   p.yaw = j.contains("yaw") ? number(j,"yaw") : 0;
   return p;
 }
+/** @brief 将 JSON 航点按 id 放入向量；机号需连续且唯一，不能依赖 JSON 排列顺序。 */
 void pointsById(const json& entries, std::vector<TeamPoint>& result, double z) {
   if (!entries.is_array() || entries.empty()) throw std::invalid_argument("必须配置至少一个机号");
   result.assign(entries.size(), {}); std::vector<bool> seen(entries.size());
@@ -86,6 +96,12 @@ void ensureDirectory(const std::string& directory) {
   if (mkdir(directory.c_str(),0777) != 0 && errno != EEXIST) throw std::runtime_error("无法创建运行目录");
 #endif
 }
+/**
+ * @brief 将地图配置转换成状态机参数。
+ * @param path 地图 JSON 路径，须包含 spawns 和 team_mission。
+ * @return 配置值对象；构造 TeamMission 时还会校验全队数量与几何参数。
+ * @note stable_s/stage_timeout_s/loss_abort_s 以秒配置，内部转换成 μs。
+ */
 TeamMissionConfig readConfig(const std::string& path) {
   std::ifstream input(path);
   if (!input) throw std::runtime_error("无法读取地图配置");
@@ -132,6 +148,12 @@ TeamMissionConfig readConfig(const std::string& path) {
   }
   return c;
 }
+/**
+ * @brief 解码单架状态；异常报文通过异常返回到主循环计数，不终止整个队伍。
+ * @param data UDP 数据起始地址，按 length 解析，不要求末尾有字符串零字符。
+ * @param length 收到的字节数。
+ * @return 只含任务需要的估计位姿、有效性、解锁/落地及冲击序号。
+ */
 TeamVehicleStatus readStatus(const char* data, int length) {
   const json j = json::parse(data,data+length);
   if (!j.is_object() || integer(j,"schema") != 1 || j.at("kind") != "team_status")
@@ -150,6 +172,7 @@ TeamVehicleStatus readStatus(const char* data, int length) {
       (j.contains("xy_reason") ? j.at("xy_reason").get<std::string>() : "");
   return s;
 }
+// 对失效成员在报文 phase 中显示 HOLD，同时保留 mission_phase 表示全队实际阶段。
 json commandJson(const TeamCommand& c) {
   return {{"schema",1},{"kind","team_command"},{"vehicle",c.vehicle},
       {"sim_time_us",c.sim_time_us},{"sequence",c.sequence},
@@ -161,6 +184,10 @@ json commandJson(const TeamCommand& c) {
       {"degraded",c.degraded},{"degraded_reason",c.degraded_reason},{"skipped",c.skipped},
       {"disarm",c.disarm},{"complete",c.complete}};
 }
+/**
+ * @brief 先写临时文件再替换状态 JSON，防止界面读到半截报文。
+ * @note Windows/WSL 文件占用可能让替换失败；调用者记录错误并继续发控制命令。
+ */
 void atomicStatus(const std::string& path, const json& status) {
   const auto temporary = path + ".tmp";
   {
@@ -204,6 +231,7 @@ struct UdpSocket {
 };
 }  // namespace
 
+/** @brief 协调进程入口；参数为地图路径和运行目录，直到收到停止信号。 */
 int main(int argc, char** argv) {
   try {
     std::string map, runtime;
@@ -214,6 +242,7 @@ int main(int argc, char** argv) {
       } else throw std::invalid_argument("用法：team_coordinator --map 地图.json --runtime 输出目录");
     }
     if (map.empty() || runtime.empty()) throw std::invalid_argument("必须指定地图和输出目录");
+    // 1. 一份状态机管理整支队伍；每机状态由独立 runner 进程汇总到这里。
     TeamMission mission(readConfig(map));
     ensureDirectory(runtime);
     std::ofstream log(joinPath(runtime,"team_mission.jsonl"),std::ios::binary | std::ios::app);
@@ -227,6 +256,7 @@ int main(int argc, char** argv) {
     const size_t team_count = mission.statuses().size();
     std::vector<bool> seen(team_count);
     std::vector<uint64_t> received(team_count), stamps(team_count);
+    // 2. 等待 UDP 最多 20 ms。即使本轮没有包，也继续检查失联和发布队伍目标。
     while (running) {
       fd_set reads; FD_ZERO(&reads); FD_SET(udp.fd,&reads); timeval wait{0,20000};
       const int selected = select(static_cast<int>(udp.fd)+1,&reads,nullptr,nullptr,&wait);
@@ -242,6 +272,7 @@ int main(int argc, char** argv) {
             reinterpret_cast<sockaddr*>(&sender),&senderLength));
         if (count > 0 && sender.sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
           try {
+            // 先校验报文，再提交状态机；过时包不能覆盖上一次有效状态。
             const auto s = readStatus(data,count); const auto wall = wallTime();
             if (!mission.updateStatus(s,wall)) ++rejected;
             else {
@@ -254,6 +285,7 @@ int main(int argc, char** argv) {
       const auto wall = wallTime();
       if (wall-lastEmit < 50000) continue;
       lastEmit = wall;
+      // 3. 发布节拍至少间隔 50 ms（现实时间）；状态机使用传入的仿真时间判阶段。
       const auto commands = mission.step(sim,wall); json targets = json::array(), vehicles = json::array();
       for (const auto& c : commands) {
         const json value = commandJson(c); const auto payload = value.dump(); targets.push_back(value);
@@ -275,6 +307,7 @@ int main(int argc, char** argv) {
           {"flight_elapsed_s",mission.flightElapsedSeconds()},
           {"complete",mission.phase() == TeamPhase::COMPLETE},{"partial",mission.partial()},{"skipped",mission.skipped()},{"reason",mission.reason()},
           {"rejected_datagrams",rejected},{"telemetry_errors",telemetry_errors},{"send_errors",send_errors},{"vehicles",vehicles},{"commands",targets}};
+      // 4. 文件输出是观测通道，不是控制前置条件；磁盘失败时保留错误计数并重试。
       log << snapshot.dump() << '\n'; log.flush();
       if (!log) {
         ++telemetry_errors;

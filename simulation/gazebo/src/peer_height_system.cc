@@ -1,3 +1,7 @@
+/**
+ * @file peer_height_system.cc
+ * @brief 根据 Gazebo 物理状态生成高度、光流速度、基站测距和机间 UWB 观测。
+ */
 #include "drone_sim/peer_height_system.hh"
 
 #include <algorithm>
@@ -29,6 +33,11 @@ namespace
 constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr double kTwoPi = 2.0 * kPi;
 
+/**
+ * @brief 将有限方位角归一到 [-π,π]，便于视场检查和角噪声叠加。
+ * @param _angle 角度，单位 rad。
+ * @return 与输入等价的主值角，单位 rad。
+ */
 double WrapBearing(double _angle)
 {
   while (_angle > kPi)
@@ -38,6 +47,7 @@ double WrapBearing(double _angle)
   return _angle;
 }
 
+// 可选 SDF 元素缺失时保留默认值；存在时由 SDF 完成类型转换。
 template<typename T>
 T GetOr(const std::shared_ptr<const sdf::Element> &_sdf,
         const std::string &_name, const T &_fallback)
@@ -63,6 +73,12 @@ PeerHeightSystem::~PeerHeightSystem()
     ::close(socketFd_);
 }
 
+/**
+ * @brief 读取世界插件参数、加载遮挡地形并创建观测发送套接字。
+ * @param _sdf 插件配置；缺失字段使用默认值。
+ * @note 位置/距离为 m，速度为 m/s，角度为 rad，发布周期为 us；
+ *       光流和基站非法参数可抛异常，其他已检查的配置失败记录错误后返回。
+ */
 void PeerHeightSystem::Configure(
     const gz::sim::Entity &,
     const std::shared_ptr<const sdf::Element> &_sdf,
@@ -179,6 +195,11 @@ void PeerHeightSystem::Configure(
             << ", height assist at " << publishHz << " Hz\n";
 }
 
+/**
+ * @brief 按模型名重新查找实体，未找到的车辆保持空实体编号。
+ * @param _ecm 当前仿真实体组件视图。
+ * @note 每次发布重新查询，以适应模型延后加入或移除。
+ */
 void PeerHeightSystem::RefreshEntities(
     const gz::sim::EntityComponentManager &_ecm)
 {
@@ -200,12 +221,23 @@ void PeerHeightSystem::RefreshEntities(
       });
 }
 
+/**
+ * @brief 把物理更新的仿真时间转换为微秒。
+ * @param _info Gazebo 更新信息。
+ * @return 仿真时间，单位 us，不使用本机墙钟。
+ */
 int64_t PeerHeightSystem::SimTimeUs(const gz::sim::UpdateInfo &_info)
 {
   return std::chrono::duration_cast<std::chrono::microseconds>(
       _info.simTime).count();
 }
 
+/**
+ * @brief 向 portBase + vehicle 发送一条完整 JSON 观测。
+ * @param _vehicle 配置中有效的车辆编号。
+ * @param _json 单个数据报的内容。
+ * @return 套接字有效且全部字节被 sendto 接受时为 true。
+ */
 bool PeerHeightSystem::Send(int _vehicle, const std::string &_json) const
 {
   if (socketFd_ < 0 || _vehicle < 0 || static_cast<size_t>(_vehicle) >= vehicles_.size())
@@ -222,6 +254,12 @@ bool PeerHeightSystem::Send(int _vehicle, const std::string &_json) const
   return result == static_cast<ssize_t>(_json.size());
 }
 
+/**
+ * @brief 将当前物理位姿和相邻时刻差分转换为带误差与质量标志的观测。
+ * @param _info 当前更新信息；暂停时不发送。
+ * @param _ecm 用于读取模型世界位姿的组件视图。
+ * @note 世界坐标为 ENU，机体速度和方位角使用 FLU；无有效位姿的车辆跳过。
+ */
 void PeerHeightSystem::Publish(
     const gz::sim::UpdateInfo &_info,
     const gz::sim::EntityComponentManager &_ecm)
@@ -259,9 +297,7 @@ void PeerHeightSystem::Publish(
     if (!poseValid[i])
       continue;
 
-    // Height assistance is explicitly authorized as a scalar world ENU z.
-    // It is marked separately so the companion can keep the z source distinct
-    // from peer localization and avoid treating it as a full pose truth feed.
+    // 1. 高度观测直接取世界 ENU 的 z（m），以 SIM_HEIGHT_ASSIST 标记其来源。
     {
       std::ostringstream height;
       height << std::setprecision(9)
@@ -272,6 +308,8 @@ void PeerHeightSystem::Publish(
       Send(i, height.str());
     }
 
+    // 2. 世界位移除以仿真间隔得到速度，再用当前姿态逆旋转到机体 FLU。
+    // 间隔须小于 0.25 s；倾角超过 0.65 rad 或随机丢帧时质量置零，速度单位 m/s。
     auto&vehicle=vehicles_[i];
     if(flowEnabled_&&vehicle.previousTimeUs>=0&&simUs>vehicle.previousTimeUs){
       const double dt=(simUs-vehicle.previousTimeUs)*1e-6;
@@ -288,6 +326,8 @@ void PeerHeightSystem::Publish(
       }
     }
     vehicle.previousPosition=poses[i].Pos();vehicle.previousTimeUs=simUs;
+    // 3. 基站提供三维距离；地形遮挡附加正偏差并降低质量，地形加载失败则 valid=false。
+    // 基站分支只使用普通丢帧和距离噪声，额外 NLOS 丢帧与半正态噪声用于后面的机间分支。
     for(const auto&anchor:anchors_){
       const auto delta=anchor.position-poses[i].Pos();
       const Eigen::Vector3d from(poses[i].Pos().X(),poses[i].Pos().Y(),poses[i].Pos().Z());
@@ -300,6 +340,8 @@ void PeerHeightSystem::Publish(
          <<",\"valid\":"<<(valid?"true":"false")<<"}";
       Send(i,message.str());
     }
+    // 4. 对每个有向机对，将相对位置转到观察者机体系：模长为三维距离，atan2(y,x) 为水平方位。
+    // 先检查视场、量程、遮挡和丢帧，再叠加测量误差；无效帧仍发送 valid=false。
     for (size_t j = 0; j < vehicles_.size(); ++j)
     {
       if (i == j || !poseValid[j])
@@ -328,7 +370,7 @@ void PeerHeightSystem::Publish(
         range = trueRange + rangeNoise(random_);
         if (nlos)
         {
-          // Positive excess path is a configurable stress assumption only.
+          // 遮挡距离增加固定正偏差和半正态随机量，用于模拟偏大的测距误差。
           range += nlosRangeBiasM_;
           if (nlosRangeNoiseStdM_ > 0.0)
             range += nlosRangeNoiseStdM_ * std::abs(nlosRangeNoise(random_));
@@ -353,6 +395,12 @@ void PeerHeightSystem::Publish(
   }
 }
 
+/**
+ * @brief 在物理更新后按仿真周期触发观测发布。
+ * @param _info 仿真时刻与暂停状态。
+ * @param _ecm 只读实体组件视图。
+ * @note 时间倒退会绕过周期等待；不补发未执行的历史周期。
+ */
 void PeerHeightSystem::PostUpdate(
     const gz::sim::UpdateInfo &_info,
     const gz::sim::EntityComponentManager &_ecm)

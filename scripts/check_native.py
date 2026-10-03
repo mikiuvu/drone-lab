@@ -1,3 +1,7 @@
+"""@file check_native.py
+@brief 在 WSL 编译并运行 C 编码契约，再用 Python 验证 JSON 字段、字节翻转与无效目标过滤。
+@note 导入即执行检查，更新 build/native/nano-contract；输入来自测试替身，不是传感器。
+"""
 import json
 import subprocess
 import sys

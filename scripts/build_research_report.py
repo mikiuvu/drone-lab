@@ -1,4 +1,7 @@
-"""Generate the local, linked research overview from authoritative saved results."""
+"""@file build_research_report.py
+@brief 读取已保存研究结果和风险清单，生成 docs/research/index.html 总览。
+@note 写入会覆盖现有总览；只使用与源码摘要匹配的结果。
+"""
 
 import html
 import json
@@ -10,6 +13,11 @@ e = html.escape
 
 
 def verify_sources(bundle, root=ROOT):
+    """@brief 检查每个结果来源位于项目内且 SHA256 与当前完整文件一致。
+    @param bundle 保存的 runs 字典所在结果包。
+    @param root 项目根路径。
+    @note 失败抛 ValueError；源码注释变化也会使已有摘要过期。
+    """
     for name, run in bundle["runs"].items():
         source = (root / run["source"]).resolve()
         if not source.is_relative_to(root.resolve()):
@@ -21,10 +29,14 @@ def verify_sources(bundle, root=ROOT):
 
 
 def numeric(value):
+    """@brief 将空统计值显示为无完成样本，数值保留一位小数。
+    """
     return "无完成样本" if value is None else f"{value:.1f}"
 
 
 def main():
+    """@brief 校验来源并从现有指标生成 HTML，覆盖 index.html；不重新计算模型。
+    """
     bundle = json.loads(
         (ROOT / "research" / "results" / "baseline.json").read_text(encoding="utf-8")
     )

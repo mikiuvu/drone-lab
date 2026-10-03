@@ -1,6 +1,6 @@
-"""Offline control readiness and failure policy reference.
-
-Returns mode transitions, input evidence and control-readiness decisions.
+"""@file control_policy.py
+@brief 以显式时间样本评估离线导航准入、降级、恢复与终止锁存。
+@note 输出状态和处理意图；实际飞控动作由接口调用者执行。
 """
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Any, Iterable, Mapping
 
 
 class Mode(str, Enum):
+    """@brief 控制数据准入阶段；TERMINATED 锁存，需新建策略实例才能重新开始。
+    """
     STANDBY = "STANDBY"
     NAVIGATE = "NAVIGATE"
     DEGRADED = "DEGRADED"
@@ -36,7 +38,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class Evidence:
-    time_s: float
+    """@brief 单个样本校验后得到的不可变证据；时间统一为 s，confidence 为 [0,1]。
+    """
+    time_s: float  # 本次判断的共同基准时间，s。
     estimator_epoch: str | int | None
     setpoint_epoch: str | int | None
     connection_alive: bool
@@ -44,10 +48,10 @@ class Evidence:
     position_valid: bool
     velocity_valid: bool
     yaw_valid: bool
-    clock_confidence: float
-    odom_time_s: float | None
-    odom_frame_seq: int | None
-    setpoint_time_s: float | None
+    clock_confidence: float  # 外部同步质量指标，[0,1]。
+    odom_time_s: float | None  # 来源时间，s，与 time_s 同基准。
+    odom_frame_seq: int | None  # 同代次内严格递增的可选帧序号。
+    setpoint_time_s: float | None  # 指令来源时间，s。
     fresh_odom: bool
     fresh_setpoint: bool
     terminal_flags: tuple[str, ...]
@@ -57,7 +61,8 @@ class Evidence:
 
 @dataclass
 class ControlPolicy:
-    """Stateful policy evaluator with explicit, injected event times."""
+    """@brief 保存代次、样本身份和恢复计数的策略实例；每个独立时间流使用独立实例。
+    """
 
     config: Mapping[str, Any] = field(default_factory=dict)
     mode: Mode = Mode.STANDBY
@@ -81,12 +86,20 @@ class ControlPolicy:
     valid_samples: int = 0
 
     def __post_init__(self) -> None:
+        """@brief 校验配置并设置初始模式；初始终止模式记一次终止样本。
+        """
         self.config = _validate_config(self.config)
         self.mode = Mode(self.config["initial_mode"])
         if self.mode == Mode.TERMINATED:
             self.terminal_samples = 1
 
     def step(self, sample: Mapping[str, Any]) -> dict[str, Any]:
+        """@brief 消费一个样本，依次判断代次变化、终止、有效性及独立性，推进模式。
+        @param sample 输入映射，时间为同一基准的 s；新鲜度由时间戳推导，外部声明不能绕过检查。
+        @return 当前/前一模式、决策、请求动作、原因和证据字典。
+        @note 终止优先并锁存；代次变化清除旧样本身份和恢复证据，本次不计作恢复样本。
+        """
+        # 1. 从来源时间推导新鲜度，连接存活与估计有效性分别检查。
         evidence = _evidence(sample, self.config)
         previous = self.mode
         reasons: list[str] = list(evidence.reasons)
@@ -109,6 +122,7 @@ class ControlPolicy:
         if estimator_changed or setpoint_changed:
             self.discarded_command_count += 1
 
+        # 2. 终止优先且锁存；无效输入降级，只有严格新样本能推进恢复迟滞。
         independent = self._is_independent(evidence, reasons)
         terminal = bool(evidence.terminal_flags)
         if terminal:
@@ -141,6 +155,7 @@ class ControlPolicy:
             self._accept_valid_sample(evidence)
             self._advance_valid_state(evidence, reasons)
 
+        # 3. 保存转移和代次，输出意图与证据；实际飞控动作由调用方执行。
         if self.mode != previous:
             self.transitions += 1
         self.estimator_epoch = evidence.estimator_epoch
@@ -150,14 +165,20 @@ class ControlPolicy:
         return self._decision(evidence, previous, reasons)
 
     def _reset_for_estimator_epoch(self, epoch: str | int | None) -> None:
+        """@brief 切换估计器代次并清除上一代样本身份和恢复证据。
+        """
         self.estimator_epoch = epoch
         self._reset_sample_identity()
 
     def _reset_for_setpoint_epoch(self, epoch: str | int | None) -> None:
+        """@brief 切换指令代次并清除上一代样本身份和恢复证据。
+        """
         self.setpoint_epoch = epoch
         self._reset_sample_identity()
 
     def _reset_sample_identity(self) -> None:
+        """@brief 清空时间、序号及恢复计数，避免跨代次使用旧样本。
+        """
         self.recovery_samples = 0
         self.recovery_started_odom_time_s = None
         self.last_valid_odom_time_s = None
@@ -167,6 +188,11 @@ class ControlPolicy:
         self.frame_seq_seen = False
 
     def _is_independent(self, evidence: Evidence, reasons: list[str]) -> bool:
+        """@brief 要求 odom 时间严格递增；出现序号后也要求序号持续存在且严格递增。
+        @param evidence 当前样本证据。
+        @param reasons 追加拒绝原因的可变列表。
+        @return 是否可计为新的独立样本；重复只增加计数，不推进恢复。
+        """
         if evidence.odom_time_s is None:
             return False
         if self.last_odom_time_s is not None and evidence.odom_time_s <= self.last_odom_time_s:
@@ -188,6 +214,8 @@ class ControlPolicy:
         return True
 
     def _accept_valid_sample(self, evidence: Evidence) -> None:
+        """@brief 保存已准入样本的时间及可选序号，作为下次独立性检查基准。
+        """
         self.last_valid_odom_time_s = evidence.odom_time_s
         self.last_odom_time_s = evidence.odom_time_s
         if evidence.odom_frame_seq is not None:
@@ -195,6 +223,9 @@ class ControlPolicy:
             self.frame_seq_seen = True
 
     def _advance_valid_state(self, evidence: Evidence, reasons: list[str]) -> None:
+        """@brief 用独立有效样本推进状态；降级后先满足恢复窗口，再经额外一帧确认回到导航。
+        @note 初始 STANDBY 遇首个有效独立样本进入 NAVIGATE；恢复迟滞用于抑制有效性反复切换。
+        """
         if self.mode == Mode.STANDBY:
             self.mode = Mode.NAVIGATE
             reasons.append("initial_independent_valid_sample")
@@ -227,6 +258,8 @@ class ControlPolicy:
             reasons.append("post_recovery_confirmation_sample")
 
     def _decision(self, evidence: Evidence, previous: Mode, reasons: list[str]) -> dict[str, Any]:
+        """@brief 将模式转换为决策、请求动作和证据字典，追加高度缺失等相关原因。
+        """
         if self.mode == Mode.TERMINATED:
             decision = TERMINATE_DECISION
             requested_action = FAILSAFE_REQUEST
@@ -271,7 +304,11 @@ class ControlPolicy:
 
 
 def run_control(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Run deterministic offline evaluation over explicit-time samples."""
+    """@brief 依次评估显式时间序列并汇总状态机指标。
+    @param config 策略覆盖字典，可附 samples 样本序列；缺省使用确定性故障演示。
+    @return summary、decisions、metrics 和 assumptions。
+    @note 本函数不等待真实时间，也不发送 MAVLink；默认案例包含过期、重复、代次变化及终止。
+    """
 
     if config is not None and not isinstance(config, Mapping):
         raise TypeError("config must be a mapping or None")
@@ -322,7 +359,8 @@ def run_control(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
 
 
 def _default_fault_samples() -> list[dict[str, Any]]:
-    """Provide a deterministic GUI demonstration of safety transitions."""
+    """@brief 构造确定性样本，演示过期降级、独立帧恢复、代次变化及终止锁存。
+    """
     def valid(time_s: float, odom_time_s: float, *, epoch: int = 1, **extra: Any) -> dict[str, Any]:
         item: dict[str, Any] = {
             "time_s": time_s,
@@ -357,6 +395,9 @@ def _default_fault_samples() -> list[dict[str, Any]]:
 
 
 def _validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """@brief 合并并校验必需轴、置信门槛、超时、恢复窗口和初始模式。
+    @return 规范化配置；超时和恢复窗口为 s，recovery_samples 为正整数。
+    """
     if not isinstance(config, Mapping):
         raise TypeError("config must be a mapping")
     merged = dict(DEFAULT_CONFIG)
@@ -389,6 +430,9 @@ def _validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _evidence(sample: Mapping[str, Any], config: Mapping[str, Any]) -> Evidence:
+    """@brief 从原始样本提取严格类型的证据，以时间年龄推导新鲜度并汇总准入原因。
+    @note 同时要求连接、同代次、必需轴、位置/速度/偏航、时钟置信与新鲜度合格。
+    """
     if not isinstance(sample, Mapping):
         raise TypeError("each control sample must be a mapping")
     time_s = _finite_number(sample.get("time_s"), "time_s")
@@ -474,18 +518,24 @@ def _evidence(sample: Mapping[str, Any], config: Mapping[str, Any]) -> Evidence:
 
 
 def _finite_number(value: Any, name: str) -> float:
+    """@brief 接受有限 int/float 并转换为 float，拒绝 bool。
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(float(value)):
         raise ValueError(f"{name} must be a finite number")
     return float(value)
 
 
 def _optional_finite_number(value: Any, name: str) -> float | None:
+    """@brief 缺失值保留 None，其余使用有限数值校验。
+    """
     if value is None:
         return None
     return _finite_number(value, name)
 
 
 def _bounded_number(value: Any, name: str, lower: float, upper: float) -> float:
+    """@brief 校验有限数值在闭区间 [lower,upper] 内。
+    """
     number = _finite_number(value, name)
     if number < lower or number > upper:
         raise ValueError(f"{name} must be in [{lower}, {upper}]")
@@ -493,6 +543,8 @@ def _bounded_number(value: Any, name: str, lower: float, upper: float) -> float:
 
 
 def _positive_number(value: Any, name: str) -> float:
+    """@brief 校验严格大于零的有限数值。
+    """
     number = _finite_number(value, name)
     if number <= 0.0:
         raise ValueError(f"{name} must be greater than zero")
@@ -500,12 +552,16 @@ def _positive_number(value: Any, name: str) -> float:
 
 
 def _strict_bool(value: Any, name: str) -> bool:
+    """@brief 只接受 bool，避免字符串或数字被隐式当作健康标志。
+    """
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be a boolean")
     return value
 
 
 def _epoch(value: Any, name: str) -> str | int | None:
+    """@brief 接受整数或非空字符串代次，允许 None 表示缺失，拒绝 bool。
+    """
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (str, int)):
@@ -516,6 +572,8 @@ def _epoch(value: Any, name: str) -> str | int | None:
 
 
 def _optional_nonnegative_int(value: Any, name: str) -> int | None:
+    """@brief 校验可选非负帧序号；None 表示未提供。
+    """
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -524,6 +582,8 @@ def _optional_nonnegative_int(value: Any, name: str) -> int | None:
 
 
 def _axes(value: Any) -> tuple[str, ...]:
+    """@brief 将轴列表或布尔映射转换为轴名元组，拒绝空名称。
+    """
     if isinstance(value, Mapping):
         return tuple(str(key) for key, enabled in value.items() if _strict_bool(enabled, "observable_axes flag"))
     if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
@@ -535,10 +595,14 @@ def _axes(value: Any) -> tuple[str, ...]:
 
 
 def _fresh_from_time(now_s: float, source_s: float | None, timeout_s: float) -> bool:
+    """@brief 按同一基准的秒时间检查 0≤当前时间−来源时间≤期限；未来时间不合格。
+    """
     return source_s is not None and 0.0 <= now_s - source_s <= timeout_s
 
 
 def _terminal_flags(value: Any) -> tuple[str, ...]:
+    """@brief 提取终止标志名；映射形式只保留显式为 True 的标志。
+    """
     if isinstance(value, Mapping):
         flags = []
         for key, active in value.items():
@@ -556,4 +620,6 @@ def _terminal_flags(value: Any) -> tuple[str, ...]:
 
 
 def _unique(values: Iterable[str]) -> list[str]:
+    """@brief 按首次出现顺序去重原因，保持判定顺序可读。
+    """
     return list(dict.fromkeys(values))

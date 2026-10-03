@@ -1,4 +1,7 @@
-"""Build the RISC-V collector using the installed WSL distribution."""
+"""@file build_nano.py
+@brief 在 Ubuntu-22.04 WSL 中交叉编译 Nano 的 RISC-V 静态采集器。
+@note 读取 config/toolchain.json，生成或更新 build/nano-riscv64；不上传到设备。
+"""
 
 import pathlib
 import subprocess
@@ -15,6 +18,10 @@ DISTRO = "Ubuntu-22.04"
 
 
 def run(*args):
+    """@brief 启动参数列表指定的进程，输出 UTF-8 日志并检查退出码。
+    @param args 进程及参数，不经过 Shell 拼接。
+    @note 非零退出抛 CalledProcessError。
+    """
     print(" ".join(map(str, args)), flush=True)
     process = subprocess.Popen(
         list(map(str, args)),
@@ -31,6 +38,8 @@ def run(*args):
 
 
 def main():
+    """@brief 用 wslpath 转换项目路径，读取编译器路径后配置、构建并检查产物类型。
+    """
     result = subprocess.run(
         ["wsl", "-d", DISTRO, "--exec", "wslpath", "-a", str(ROOT)],
         check=True,

@@ -1,4 +1,7 @@
-"""Reproduce the PC pre-research bundle; no hardware or network access."""
+"""@file run_research.py
+@brief 运行预设离线研究案例，保存完整参数、指标、源码 SHA256 和 UTC 时间。
+@note 默认覆盖 research/results/baseline.json 和支持模型的 PNG；模型输入是配置假设。
+"""
 
 import argparse
 import hashlib
@@ -16,6 +19,9 @@ if sys.stdout is not None:
 
 
 def main():
+    """@brief 动态导入预设模型、逐例计算并绘图，最后保存结果包。
+    @note 输出目录会创建，已有结果可覆盖；完整源码摘要用于后续检测来源过期。
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output", type=Path, default=ROOT / "research" / "results" / "baseline.json"

@@ -1,3 +1,6 @@
+# @file localization_metrics.py
+# @brief 对齐估计与真值日志，统计定位误差、新鲜度、机间距离误差和落点偏移。
+
 """Read-only localization evaluation. Never imported by flight/control code.
 
 Statistics cover the observed tail since attaching, not the full mission.
@@ -15,7 +18,10 @@ from collections import deque
 from pathlib import Path
 
 
+# 按字节预算增量读取 JSONL 文件，保存未完成行；文件替换或截短时通过 reset 通知上层重置统计。
 class JsonlTail:
+    # @param path JSONL 日志路径，文件尚不存在时也可构造读取器。
+    # @param budget 单次最大读取字节数，同时限制未完成行的缓冲大小。
     def __init__(self, path, budget=262144):
         self.path = Path(path)
         self.budget = budget
@@ -27,6 +33,8 @@ class JsonlTail:
         self.backlog = False
         self.full = False
 
+    # 每次最多读取 budget 字节，返回完整且可解析的 JSON 对象列表。
+    # 首次默认从文件尾预算窗口接入，full=True 从头接入；半行跨调用保留，损坏记录跳过。
     def read(self):
         self.reset = False
         try:
@@ -55,7 +63,7 @@ class JsonlTail:
             self.pending = lines.pop()
             if discard and lines:
                 lines.pop(0)
-            # A malformed huge unterminated record cannot grow memory indefinitely.
+            # 超长且无换行的损坏记录超过预算时丢弃，防止 pending 无限增长。
             if len(self.pending) > self.budget:
                 self.pending = b""
             result = []
@@ -72,6 +80,7 @@ class JsonlTail:
             return []
 
 
+# 校验车辆编号、非负微秒时间戳和有限 XY 米制坐标；成功返回三元组，非法记录返回 None。
 def pose(row, vehicle_count=4):
     try:
         vehicle = row["vehicle"]
@@ -89,6 +98,7 @@ def pose(row, vehicle_count=4):
     return None
 
 
+# 优先返回有效的显式边界，否则从墙端点求边界；结果为 (xmin,xmax,ymin,ymax)，无法推导返回 None。
 def map_bounds(config):
     try:
         bounds = config["bounds"]
@@ -118,6 +128,8 @@ def map_bounds(config):
     return None
 
 
+# @param path JSON 状态文件。
+# @param budget 最多接受的字节数，超限、读取失败或顶层非对象均返回空字典。
 def read_status(path, budget=65536):
     """Read one bounded JSON status snapshot."""
     try:
@@ -131,6 +143,7 @@ def read_status(path, budget=65536):
         return {}
 
 
+# 从出生点提取非负整数编号及有限 xyz 米制坐标；跳过无效条目，返回编号到坐标的映射。
 def home_positions(spawns):
     homes = {}
     if not isinstance(spawns, (list, tuple)):
@@ -146,10 +159,18 @@ def home_positions(spawns):
     return homes
 
 
+# 维护每机定位统计和有界匹配历史；估计与真值按仿真微秒对齐，新鲜度使用本机时间。
+# 误差直接在世界 XY 坐标相减；有限且可匹配的无效估计也计入误差，有效率另行统计。
 class LocalizationMetrics:
     tolerance_us = 100000
     stale_seconds = 3.0
 
+    # @param folder 真值和每机伴随日志所在的运行目录。
+    # @param full True 从头接入日志，False 只接入有界尾部；完整报告由 read_full 归并生成。
+    # @param manager 运行管理元数据，用于出生点、数量与进程状态。
+    # @param homes 可选出生点列表，覆盖 manager 中的出生点。
+    # @param team_status_path 本目录任务状态缺失时使用的后备路径。
+    # @param vehicle_count 正整数机队数量；未指定时从出生点或 manager 推导。
     def __init__(
         self,
         folder,
@@ -195,6 +216,7 @@ class LocalizationMetrics:
                 tail.full = True
         self.clear()
 
+    # 清空匹配队列、轨迹、累计误差和落点缓存；文件读取游标由 JsonlTail 单独管理。
     def clear(self):
         self.truth = [deque(maxlen=2048) for _ in range(self.vehicle_count)]
         self.estimates = [deque(maxlen=2048) for _ in range(self.vehicle_count)]
@@ -242,12 +264,15 @@ class LocalizationMetrics:
         self.landings = [None] * self.vehicle_count
         self.started = time.time()
 
+    # 更新出生点参考；坐标变化时清除已缓存落点，避免沿用旧参考下的误差。
     def set_homes(self, spawns):
         homes = home_positions(spawns)
         if homes != self.homes:
             self.homes = homes
             self.landings = [None] * self.vehicle_count
 
+    # 读取各文件的一批增量并匹配，返回快照；任一文件发生重置时清空统计。
+    # @param now 本机 monotonic 秒数，可由调用方注入；不能传入仿真时间。
     def poll(self, now=None, include_trails=True):
         now = time.monotonic() if now is None else now
         batches = [tail.read() for tail in self.tails]
@@ -257,6 +282,7 @@ class LocalizationMetrics:
         self._match()
         return self.snapshot(now, include_trails=include_trails)
 
+    # 校验文件对应的车辆与记录来源，按严格递增仿真时间入队并累计质量、融合和轨迹统计。
     def _consume(self, batches, now):
         for index, rows in enumerate(batches):
             for row in rows:
@@ -347,6 +373,8 @@ class LocalizationMetrics:
                         counts["localization_mode"] = row["localization_mode"]
                 trail.append(xy)
 
+    # 按仿真时间归并真值与所有车辆日志；每个输入流以开始迭代时取得的大小为读取终点。
+    # @return 完整读取范围的统计，轨迹和匹配历史仍有容量上限。
     def read_full(self, include_trails=False):
         """Merge five finite log snapshots in timestamp order with bounded memory."""
         self.full = True
@@ -362,6 +390,9 @@ class LocalizationMetrics:
         self._match(final=True)
         return self.snapshot(include_trails=include_trails)
 
+    # 对每条待匹配估计选择容差 100 ms 内最近真值，不插值、不拟合坐标系。
+    # 真值与估计分别按日志到达顺序入队，只有真值时间覆盖估计后才消费，避免过早匹配旧帧。
+    # @param final True 时处理末尾尚未被真值时间覆盖的估计；正常轮询保留它们等待评估日志追上。
     def _match(self, final=False):
         for i in range(self.vehicle_count):
             truths = self.truth[i]
@@ -395,6 +426,8 @@ class LocalizationMetrics:
                 stats["sum_sq"] += error * error
                 stats["maximum"] = max(stats["maximum"], error)
 
+    # 计算当前状态及报告；机间距离误差和共同平移要求参与记录的时间跨度不超过匹配容差。
+    # @param include_trails 是否附上有界 XY 轨迹；返回字典中的误差为米、age 为秒。
     def snapshot(self, now=None, include_trails=True):
         now = time.monotonic() if now is None else now
         team = read_status(self.folder / "team_status.json")
@@ -554,6 +587,7 @@ class LocalizationMetrics:
             }
         return report
 
+    # 计算相对出生点的实时 XY 偏移，并在落地事件附近寻找容差内真值与估计，缓存落点结果。
     def _home_error(self, i, team):
         home = self.homes.get(i)
         if home is None:
@@ -637,6 +671,7 @@ class LocalizationMetrics:
             }
         return result
 
+    # 返回日志修改距当前墙钟的秒数；文件不存在时返回 None，未来时间截为零。
     def _file_age(self, vehicle_index, now):
         path = self.tails[vehicle_index].path
         try:
@@ -645,6 +680,7 @@ class LocalizationMetrics:
             return None
 
 
+# 在 Windows 将 /mnt/<盘符>/ 路径转换为盘符路径，其他输入直接构造 Path。
 def _windows_path(value):
     value = str(value)
     if os.name == "nt" and value.startswith("/mnt/") and len(value) > 6:
@@ -652,6 +688,8 @@ def _windows_path(value):
     return Path(value)
 
 
+# 以 256 KiB 分块产生（微秒时间、流编号、序号、记录），读取范围固定到开始时的文件大小。
+# 归并排序键对倒退时间取前值，原始记录时间保持不变，随后仍由消费逻辑校验。
 def _stream_rows(path, index):
     """At most one 256 KiB chunk and one record ahead per input file."""
     tail = JsonlTail(path)
@@ -678,6 +716,8 @@ def _stream_rows(path, index):
             break
 
 
+# 读取指定运行对应的管理状态并检查 Linux 进程身份；Windows 通过 WSL 执行一次 /proc 查询。
+# 不属于当前目录的状态返回空字典，进程检查不可用时保留元数据并标记检查不可用。
 def manager_context(root, folder, manager_path=None):
     """Only use manager metadata for the requested run; Linux PIDs are never Windows PIDs."""
     try:
@@ -724,6 +764,7 @@ print(json.dumps(result))
     return value
 
 
+# 优先解析显式运行目录，否则从 manager.json 读取 run_dir；文件或格式错误向调用方传播。
 def resolve_run_dir(root, run_dir=None, manager=None):
     if run_dir:
         return _windows_path(run_dir)
@@ -732,6 +773,7 @@ def resolve_run_dir(root, run_dir=None, manager=None):
     return _windows_path(value["run_dir"])
 
 
+# 把统计快照格式化为命令行文本，缺少样本时显示占位符，保留错误指标和有效率的区别。
 def report_text(report):
     lines = [
         f"run: {report['folder']}",
@@ -772,6 +814,7 @@ def report_text(report):
     return "\n".join(lines)
 
 
+# 解析已有运行目录和输出选项，选择有界尾部轮询或全量流式统计，输出文本或 JSON。
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Read-only report for an existing Gazebo/PX4 run"

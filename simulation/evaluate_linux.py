@@ -1,3 +1,6 @@
+# @file evaluate_linux.py
+# @brief 订阅 Gazebo 位姿和物理接触，按仿真时间写入独立评估日志。
+
 """Independent evaluator; the companion never imports or reads this truth file."""
 
 import argparse
@@ -13,6 +16,7 @@ from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
 
 
+# 创建独占的新日志并订阅异步消息；主线程等待退出信号，取消订阅后关闭文件。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--world", required=True)
@@ -51,6 +55,8 @@ def main():
     stop = threading.Event()
     last = -1
 
+    # 处理世界位姿消息，以微秒时间戳按至少 20 ms 间隔记录；四元数转换得到偏航角（rad）。
+    # 落地标志需要曾离地超过 0.15 m，并处于最近地面接触的有效时间内。
     def callback(message):
         nonlocal last
         stamp = message.header.stamp.sec * 1000000 + message.header.stamp.nsec // 1000
@@ -88,6 +94,8 @@ def main():
                 output.write(json.dumps(row) + chr(10))
                 output.flush()
 
+    # 结合最近位姿、接触法向和接触点高度判断地面接触。
+    # 地面接触保持 100 ms，事件日志按每机至少 200 ms 限频；目标接触标签使用距目标小于 0.4 m 的几何条件。
     def contacts(vehicle, message):
         if not message.contact:
             return

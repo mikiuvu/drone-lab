@@ -1,3 +1,7 @@
+/**
+ * @file terrain.cpp
+ * @brief 三角网格校验、AABB 索引构建和最近射线交点计算。
+ */
 #include "companion/terrain.hpp"
 #include <Eigen/Geometry>
 #include <algorithm>
@@ -14,6 +18,8 @@ constexpr size_t kMaxTriangles = 1000000;
 bool boxHit(const Eigen::Vector3f& low, const Eigen::Vector3f& high,
             const Eigen::Vector3d& origin, const Eigen::Vector3d& ray,
             double far, double& near) {
+  // Slab 方法：分别计算射线在三个轴向区间的进入/离开参数，取交集 [near,far]。
+  // 与某轴平行时不能除以近零方向分量，只检查起点是否位于该轴区间内。
   near = 0;
   for (int a=0; a<3; ++a) {
     if (std::abs(ray(a)) < 1e-12) {
@@ -32,7 +38,7 @@ bool boxHit(const Eigen::Vector3f& low, const Eigen::Vector3f& high,
 TerrainMap::TerrainMap(std::vector<Triangle> triangles) {
   if(triangles.empty() || triangles.size()>kMaxTriangles)
     throw std::invalid_argument("terrain triangle count must be 1..1000000");
-  // Reject nonfinite input; discard zero-area faces without inventing a plane.
+  // 拒绝非有限顶点；退化三角形直接丢弃，不能凭空为其构造法向或平面。
   for(const auto& t:triangles) {
     for(const auto& p:t)if(!p.allFinite() || p.cwiseAbs().maxCoeff()>100000)
       throw std::invalid_argument("terrain vertex invalid");
@@ -42,6 +48,7 @@ TerrainMap::TerrainMap(std::vector<Triangle> triangles) {
   if(triangles_.empty())throw std::invalid_argument("terrain has no nondegenerate faces");
   order_.resize(triangles_.size());std::iota(order_.begin(),order_.end(),0);
   nodes_.reserve(triangles_.size()/16+32);build(0,order_.size());
+  // 建树后按索引重排三角形，叶子可直接连续访问，临时顺序表随即释放。
   std::vector<Triangle> reordered;reordered.reserve(triangles_.size());
   for(const auto index:order_)reordered.push_back(triangles_[index]);
   triangles_.swap(reordered);std::vector<uint32_t>().swap(order_);
@@ -55,6 +62,7 @@ std::shared_ptr<const TerrainMap> TerrainMap::load(const std::filesystem::path& 
   if(bytes<=0 || bytes%36!=0 || bytes/36>static_cast<std::streamoff>(kMaxTriangles))
     throw std::runtime_error("terrain must be raw little-endian float32 Nx3x3, 1..1000000 faces");
   file.seekg(0);std::vector<Triangle> triangles(static_cast<size_t>(bytes/36));
+  // 文件无头，每面 9 个 float32；显式拼小端字节，再复制位模式，避免宿主字节序影响。
   for(auto& t:triangles)for(auto& p:t)for(int a=0;a<3;++a) {
     unsigned char b[4];if(!file.read(reinterpret_cast<char*>(b),4))throw std::runtime_error("terrain truncated");
     uint32_t word=uint32_t(b[0])|(uint32_t(b[1])<<8)|(uint32_t(b[2])<<16)|(uint32_t(b[3])<<24);
@@ -70,6 +78,7 @@ uint32_t TerrainMap::build(uint32_t begin,uint32_t end) {
     node.low=node.low.cwiseMin(p);node.high=node.high.cwiseMax(p);
   }
   const uint32_t id=nodes_.size();nodes_.push_back(node);
+  // 包围盒最长轴按三角形重心中位数二分；每叶最多 32 面，使查找跳过大块无关几何。
   if(end-begin>32) {
     Eigen::Index axis; (node.high-node.low).maxCoeff(&axis);
     const auto mid=begin+(end-begin)/2;
@@ -88,7 +97,7 @@ bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ra
   std::array<uint32_t,64> stack{};size_t pending=1;stack[0]=0;
   int visits=0;bool found=false;double best=max_depth;
   while(pending) {
-    // Fail closed: an incomplete traversal cannot certify the first visible surface.
+    // 超过资源上限时保守失败，未遍历完的结果不能证明是最近可见表面。
     if(++visits>1024)return false;
     const auto& n=nodes_[stack[--pending]];double near;
     if(!boxHit(n.low,n.high,origin,ray,best,near))continue;
@@ -96,6 +105,7 @@ bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ra
       double a,b;const auto& l=nodes_[n.left];const auto& r=nodes_[n.right];
       const bool hl=boxHit(l.low,l.high,origin,ray,best,a),hr=boxHit(r.low,r.high,origin,ray,best,b);
       if(pending+2>stack.size())return false;
+      // 栈后进先出，较近子树最后压入、最先处理；best 随命中缩短，可提前剪枝远处节点。
       if(hl&&hr){stack[pending++]=a<b?n.right:n.left;stack[pending++]=a<b?n.left:n.right;}
       else if(hl)stack[pending++]=n.left;else if(hr)stack[pending++]=n.right;
       continue;
@@ -103,6 +113,8 @@ bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ra
     for(uint32_t i=n.begin;i<n.begin+n.count;++i) {
       const auto& t=triangles_[i];const Eigen::Vector3d v=t[0].cast<double>();
       const Eigen::Vector3d e1=t[1].cast<double>()-v,e2=t[2].cast<double>()-v;
+      // Möller–Trumbore 求解 origin+d*ray=v+u*e1+w*e2；u,w 是重心坐标，d 是射线参数。
+      // det 接近零表示射线与面近乎平行；u≥0、w≥0、u+w≤1 才落在三角形内。
       const Eigen::Vector3d p=ray.cross(e2);const double det=e1.dot(p);
       if(std::abs(det)<1e-10*e1.norm()*e2.norm()*ray.norm())continue;
       const Eigen::Vector3d s=origin-v,q=s.cross(e1);

@@ -1,4 +1,7 @@
-"""Native WSL collector fault injection; no board, packages, or device writes."""
+"""@file check_collector.py
+@brief 在 WSL 中编译原生替身并注入采集器故障，检查退出、清理、JSONL 与 UART 接收契约。
+@note 使用测试替身、管道和伪终端，不采集实板数据；生成 build/native 下的测试二进制。
+"""
 import json
 import os
 from pathlib import Path
@@ -11,6 +14,9 @@ WSL = ["wsl", "-d", "Ubuntu-22.04", "--exec"]
 
 
 def run(args, **kwargs):
+    """@brief 在指定 WSL 中执行参数列表，捕获输出并限制到 60 s。
+    @return 成功时的 stdout 字节；非零退出抛 RuntimeError。
+    """
     result = subprocess.run(WSL + args, capture_output=True, timeout=60, **kwargs)
     if result.returncode:
         raise RuntimeError(f"{args}: {result.returncode}\n{result.stdout.decode('utf-8', 'replace')}\n{result.stderr.decode('utf-8', 'replace')}")
@@ -19,6 +25,10 @@ def run(args, **kwargs):
 
 def linux_tests(root):
     # Executed by existing WSL Python, with argv preserving workspace spaces.
+    """@brief 在 Linux 测试替身中验证参数、设备失败、管道背压及伪终端 MAVLink。
+    @param root WSL 项目绝对路径，允许空格。
+    @note 临时管道和 PTY 会创建并关闭，串口测试只检查替身未发送字节。
+    """
     import fcntl
     import pty
     import select
@@ -29,6 +39,9 @@ def linux_tests(root):
     sensor = ["--sensor", "/dev/i2c-0:0x29"]
 
     def case(mode, args=None, code=0, init=None, stop=None):
+        """@brief 运行一个故障模式并核对退出码及可选初始化/停止次数。
+        @return 完成的子进程结果；断言失败中止检查。
+        """
         proc = subprocess.run([binary, mode] + (sensor if args is None else args), capture_output=True, timeout=8)
         assert proc.returncode == code, (mode, proc.returncode, proc.stderr)
         if init is not None:
@@ -86,6 +99,8 @@ def linux_tests(root):
     assert proc.returncode == 6 and b"stop=1" in error, error
 
     def receive_line(proc):
+        """@brief 等待替身输出一条 JSON 记录，超时或进程退出视为检查失败。
+        """
         assert select.select([proc.stdout], [], [], 3)[0], "UART JSON timed out"
         return json.loads(proc.stdout.readline())
 
@@ -140,6 +155,8 @@ def linux_tests(root):
 
 
 def main():
+    """@brief 创建原生构建目录，用未定义行为检查器编译替身并运行 Linux 检查分支。
+    """
     root = run(["wslpath", "-a", str(ROOT)]).decode("utf-8").strip()
     run(["mkdir", "-p", root + "/build/native"])
     includes = ["-I" + root + "/nano", "-I" + root + "/vendor/stm32-vl53l5cx/modules",

@@ -1,4 +1,6 @@
-"""Lower-bound bus budget and link queue model, with explicit protocol overhead."""
+"""@file bandwidth.py
+@brief 估算共享 I²C 读取及全双工 UART 的理想带宽预算；输入是配置假设，输出为占用率和耗时下限。
+"""
 
 import math
 
@@ -15,6 +17,12 @@ DEFAULT_CONFIG = {
 
 
 def i2c_read_bits(payload, chunk):
+    """@brief 估算分块组合读的总位数。
+    @param payload 单帧载荷字节数，正整数。
+    @param chunk 每块最大载荷字节数，正整数。
+    @return 载荷与每块四个地址/寄存器字节所需的位数，每字节按 8 位加 ACK/NACK。
+    @note 不计 START/STOP 时长、时钟拉伸和 Linux 调度。
+    """
     if (
         not isinstance(payload, int)
         or not isinstance(chunk, int)
@@ -29,6 +37,11 @@ def i2c_read_bits(payload, chunk):
 
 
 def run_bandwidth(config=None):
+    """@brief 按配置计算共享 I²C 和两个 UART 方向的独立预算。
+    @param config 默认参数的覆盖字典；i2c_khz 为 kHz，频率为 Hz，载荷/分块为字节，uart_baud 为 bit/s。
+    @return 含 config、metrics、summary、assumptions 的字典；占用率是无量纲比例，可超过 1。
+    @note 默认帧载荷是示例假设，硬件实测应使用采集器的累计载荷计数；此函数不访问设备。
+    """
     cfg = DEFAULT_CONFIG | (config or {})
     if set(cfg) != set(DEFAULT_CONFIG):
         raise ValueError("Unknown bandwidth parameter")

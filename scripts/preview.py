@@ -1,3 +1,7 @@
+"""@file preview.py
+@brief 启动 Qt 演示数据并截取实验台各页，覆盖 docs/preview*.png。
+@note 导入即运行窗口和事件处理；演示数据是合成输入，退出前停止数据源。
+"""
 import sys
 from pathlib import Path
 

@@ -1,4 +1,7 @@
-"""I/O workers keep network and serial operations off the GUI thread."""
+"""@file workers.py
+@brief 串口和 SSH 后台采集线程。
+阻塞 I/O 在 run 中执行，记录、状态和错误经信号送到界面；停止使用事件协作退出，资源在 finally 中释放。
+"""
 
 import base64
 import hashlib
@@ -14,24 +17,39 @@ from .data import validate_record
 
 
 class Worker(QThread):
-    record = Signal(dict)
-    message = Signal(str)
-    failure = Signal(str)
+    """@brief 采集线程公共接口。record/message/failure 分别传递记录、状态和错误。
+    @note QThread 对象在创建它的线程中，只有 run 在工作线程执行；不要在 run 中直接操作控件。
+    """
+    record = Signal(dict)  # schema=1 记录；界面槽负责显示及录制。
+    message = Signal(str)  # 连接进度或设备诊断，不作为数据帧解析。
+    failure = Signal(str)  # 操作失败原因；线程退出另由 QThread.finished 通知。
 
     def __init__(self):
+        """@brief 建立跨线程可见的停止事件，供 I/O 循环检查。
+        """
         super().__init__()
         self.stop_event = threading.Event()
 
     def stop(self):
+        """@brief 请求协作停止；返回时线程可能仍在等待 I/O，完成以 finished 信号为准。
+        """
         self.stop_event.set()
 
 
 class FCWorker(Worker):
+    """@brief 从 MAVLink 串口接收姿态和心跳，转换为统一记录。
+    """
     def __init__(self, device, baud):
+        """@param device 串口设备名。
+        @param baud 串口波特率。
+        """
         super().__init__()
         self.device, self.baud = device, baud
 
     def run(self):
+        """@brief 接收 MAVLink 并发出数据；连接错误转为 failure 信号。
+        @note ATTITUDE 的毫秒启动时间转为微秒，欧拉角弧度转为度，角速度保留 MAVLink 的 rad/s。
+        """
         from pymavlink import mavutil
 
         connection = None
@@ -44,6 +62,7 @@ class FCWorker(Worker):
             )
             last = time.monotonic()
             while not self.stop_event.is_set():
+                # 有限等待让循环能定期检查停止事件，即使串口没有新数据也能退出。
                 packet = connection.recv_match(
                     type=["HEARTBEAT", "ATTITUDE"], blocking=True, timeout=0.3
                 )
@@ -62,6 +81,8 @@ class FCWorker(Worker):
                     component_id=packet.get_srcComponent(),
                     host_rx_monotonic_us=int(last * 1e6),
                 )
+                # 电脑接收时刻和飞控启动时刻属于两个时钟；保留 time_basis，
+                # 使后续消费者能辨认时间来源，而不会把两者直接相减。
                 if packet.get_type() == "ATTITUDE":
                     import math
 
@@ -91,6 +112,11 @@ class FCWorker(Worker):
 
 
 def sensor_arguments(config):
+    """@brief 校验 Nano 设备配置并生成采集程序参数列表。
+    @param config sensors 含总线和 7 位地址；hz 为帧率，tty 非空时添加飞控串口参数。
+    @return 尚未进行 shell 引号拼接的字符串列表。
+    @note 同总线地址不可重复，8×8 频率限定 1–15 Hz；输入不合要求抛出 ValueError。
+    """
     sensors = config.get("sensors", [])
     if not 1 <= len(sensors) <= 2:
         raise ValueError("请选择 1 或 2 颗传感器")
@@ -124,16 +150,28 @@ def sensor_arguments(config):
 
 
 class InteractiveHostKey(paramiko.MissingHostKeyPolicy):
+    """@brief 将 Paramiko 首次主机密钥确认转交界面。
+    @note 工作线程等待事件，界面通过 NanoWorker.answer_key 回答；等待期间仍响应停止请求。
+    """
     def __init__(self, owner):
+        """@param owner 持有 host_key 信号、确认事件和 known_hosts 路径的 NanoWorker。
+        """
         self.owner = owner
 
     def missing_host_key(self, client, hostname, key):
+        """@brief 计算 SHA256 指纹，经确认后保存到项目 known_hosts。
+        @param client 当前 SSH 客户端。
+        @param hostname 待确认的主机名称。
+        @param key 服务器提供的主机公钥。
+        @note 拒绝或取消会抛出异常，使连接终止。
+        """
         fingerprint = (
             base64.b64encode(hashlib.sha256(key.asbytes()).digest())
             .decode()
             .rstrip("=")
         )
         self.owner.key_decision = None
+        # 先清除上一次回答再发信号；事件只承担唤醒，信任决定单独保存。
         self.owner.key_event.clear()
         self.owner.host_key.emit(hostname, "SHA256:" + fingerprint)
         while not self.owner.key_event.wait(0.2):
@@ -146,10 +184,19 @@ class InteractiveHostKey(paramiko.MissingHostKeyPolicy):
 
 
 class NanoWorker(Worker):
+    """@brief 执行 Nano 检查、部署或持续采集的 SSH 工作线程。
+    @note host_key 请求界面确认；inspected 提供架构和设备列表；记录沿用 Worker.record。
+    """
     host_key = Signal(str, str)
     inspected = Signal(dict)
 
     def __init__(self, root, settings, password, action, config=None):
+        """@param root 项目目录，提供本地二进制和主机密钥文件。
+        @param settings host、port、user 连接配置。
+        @param password 本次连接密码，连接后及退出时清空线程持有的引用。
+        @param action inspect 检查，deploy 上传，stream 上传并采集。
+        @param config 传感器和可选飞控串口配置。
+        """
         super().__init__()
         self.root = Path(root)
         self.settings, self.password, self.action = settings, password, action
@@ -159,10 +206,16 @@ class NanoWorker(Worker):
         self.key_decision = None
 
     def answer_key(self, decision):
+        """@brief 写入界面的信任决定，再唤醒等待密钥确认的工作线程。
+        @param decision 是否信任此主机公钥。
+        """
         self.key_decision = decision
         self.key_event.set()
 
     def run(self):
+        """@brief 连接、检查平台、上传校验并按行接收采集输出。
+        @note stdout 为 PID 标记和 JSONL，stderr 为诊断文本；退出时尝试终止本次远程进程并关闭 SSH。
+        """
         client = paramiko.SSHClient()
         channel, pid = None, None
         try:
@@ -209,6 +262,7 @@ class NanoWorker(Worker):
             if not binary.exists():
                 raise RuntimeError("缺少 Nano 可执行文件，请在工具页面重新编译")
             remote = "/tmp/drone-lab/drone-nano"
+            # 1. 先上传到 .new，上传过程中不覆盖可执行文件；完整上传后再改名。
             _, stdout, stderr = client.exec_command(
                 "mkdir -p /tmp/drone-lab", timeout=8
             )
@@ -223,6 +277,7 @@ class NanoWorker(Worker):
                 timeout=8,
             )
             checksum = stdout.read().decode().split()
+            # 2. 比较远端和本地文件摘要，确认传输内容一致后才允许开始采集。
             expected = hashlib.sha256(binary.read_bytes()).hexdigest()
             if not checksum or checksum[0] != expected:
                 raise RuntimeError("上传后 SHA256 校验失败")
@@ -234,10 +289,14 @@ class NanoWorker(Worker):
             if self.stop_event.is_set():
                 return
             args = sensor_arguments(self.config)
+            # 3. shell 先报告自身 PID，exec 用采集程序替换 shell，保持 PID 不变；
+            #    退出清理便能终止本次进程。shlex.join 为各参数添加远端 shell 引号。
             cmd = "echo DRONELAB_PID:$$; exec " + shlex.join([remote] + args)
             channel = client.get_transport().open_session(timeout=8)
             channel.exec_command(cmd)
             pending, errors = b"", b""
+            # SSH 一次 recv 可能包含半行或多行。两个字节缓冲分别累积 stdout/stderr，
+            # 只有完整换行记录才解析，跨 recv 的半行留到下一轮，避免拆坏 UTF-8 或 JSON。
             newline = bytes([10])
             last_received = time.monotonic()
             while not self.stop_event.is_set():
@@ -262,6 +321,7 @@ class NanoWorker(Worker):
                         line, errors = errors.split(newline, 1)
                         self.message.emit(line.decode("utf-8", "replace"))
                 if (
+                    # 先排空两个输出通道再读取退出码，保留进程结束前最后的诊断。
                     channel.exit_status_ready()
                     and not channel.recv_ready()
                     and not channel.recv_stderr_ready()
@@ -283,6 +343,7 @@ class NanoWorker(Worker):
             self.failure.emit(f"Nano 操作失败：{exc}")
         finally:
             self.password = ""
+            # 即使解析失败也执行清理；远程终止失败不妨碍关闭本地通道和 SSH 客户端。
             if channel is not None:
                 if pid is not None and not channel.exit_status_ready():
                     try:

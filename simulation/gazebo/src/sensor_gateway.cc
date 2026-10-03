@@ -1,3 +1,7 @@
+/**
+ * @file sensor_gateway.cc
+ * @brief 将 Gazebo 深度图转为 ToF UDP 观测，将彩色图发布为带时间戳的最新 PPM 文件。
+ */
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -31,6 +35,13 @@ namespace
 constexpr double kDefaultTofMinM = 0.02;
 constexpr double kDefaultTofMaxM = 4.0;
 
+/**
+ * @brief 展开话题模板中的车辆和传感器占位符。
+ * @param _value 待替换的字符串副本。
+ * @param _needle 非空的匹配文本。
+ * @param _replacement 替换文本；新插入部分不会再次参与匹配。
+ * @return 替换全部匹配后的字符串。
+ */
 std::string ReplaceAll(std::string _value, const std::string &_needle,
                        const std::string &_replacement)
 {
@@ -43,6 +54,11 @@ std::string ReplaceAll(std::string _value, const std::string &_needle,
   return _value;
 }
 
+/**
+ * @brief 提取图像采集时的仿真时间，纳秒部分截断到微秒。
+ * @param _msg Gazebo 图像消息。
+ * @return 仿真时间，单位 us；消息缺少时间戳时返回 0。
+ */
 int64_t SimTimeUs(const gz::msgs::Image &_msg)
 {
   if (!_msg.has_header() || !_msg.header().has_stamp())
@@ -51,11 +67,16 @@ int64_t SimTimeUs(const gz::msgs::Image &_msg)
   return static_cast<int64_t>(stamp.sec()) * 1000000LL + stamp.nsec() / 1000LL;
 }
 
+// 同时排除 NaN/无穷和量程外深度，端点属于有效量程。
 bool FiniteInRange(double _value, double _min, double _max)
 {
   return std::isfinite(_value) && _value >= _min && _value <= _max;
 }
 
+/**
+ * @brief 持有图像订阅、UDP 套接字和各机相机发布状态。
+ * @note 图像处理在 transport 回调中进行；同一车辆的相机写入由互斥锁串行化。
+ */
 class SensorGateway final
 {
   public: SensorGateway() = default;
@@ -65,6 +86,13 @@ class SensorGateway final
       ::close(socketFd_);
   }
 
+  /**
+   * @brief 解析参数、建立 UDP 套接字并订阅每机三个深度话题和一个彩色话题。
+   * @param _argc 参数数量，包含程序名。
+   * @param _argv 参数数组；话题模板中的 {i}/{s} 分别为车辆/传感器编号。
+   * @return 初始化完成返回 true；帮助请求、参数检查或资源创建失败返回 false。
+   * @note 数值转换异常向调用方传播；每机 UDP 目标端口为 base + vehicle。
+   */
   public: bool Configure(int _argc, char **_argv)
   {
     for (int i = 1; i < _argc; ++i)
@@ -240,6 +268,12 @@ class SensorGateway final
         << "  --seed N                default 0x544f465f53494d\n";
   }
 
+  /**
+   * @brief 将一条 JSON 观测作为一个 UDP 数据报发送到指定车辆。
+   * @param _vehicle 已配置的车辆编号。
+   * @param _json 完整报文文本。
+   * @return sendto 接受全部字节时为 true；不表示接收方已处理。
+   */
   private: bool Send(int _vehicle, const std::string &_json)
   {
     if (socketFd_ < 0)
@@ -254,6 +288,14 @@ class SensorGateway final
     return result == static_cast<ssize_t>(_json.size());
   }
 
+  /**
+   * @brief 按图像行跨度读取并校验一个轴向深度像素。
+   * @param _msg R_FLOAT32 米制或 L_INT16 毫米制图像。
+   * @param _x 列号，从 0 开始。
+   * @param _y 行号，从 0 开始。
+   * @param _depthM 输出深度，单位 m；仅返回 true 时可作为有效测量使用。
+   * @return 格式、字节范围和有限量程检查全部通过时为 true。
+   */
   private: bool ReadDepth(const gz::msgs::Image &_msg, uint32_t _x, uint32_t _y,
                           double &_depthM) const
   {
@@ -287,11 +329,19 @@ class SensorGateway final
     return FiniteInRange(_depthM, tofMinM_, tofMaxM_);
   }
 
+  /**
+   * @brief 将 8×8 深度图加入测量噪声和失效模型，再发送行优先 ToF 报文。
+   * @param _vehicle 车辆编号。
+   * @param _sensor 三向 ToF 编号 0..2。
+   * @param _msg transport 提供的原始深度图；非 8×8 图像直接忽略。
+   * @note distance_m 为轴向深度；无效像素输出 0，消费者须同时检查 valid 掩码。
+   */
   private: void OnDepth(int _vehicle, int _sensor, const gz::msgs::Image &_msg)
   {
     if (_msg.width() != 8 || _msg.height() != 8)
       return;
 
+    // 1. 先保存原始深度和有效性，边缘判定始终使用未加噪的邻域。
     const auto simUs = SimTimeUs(_msg);
     std::array<double, 64> depth{};
     std::array<bool, 64> sourceValid{};
@@ -304,6 +354,7 @@ class SensorGateway final
       }
     }
 
+    // 2. 用车辆、传感器及帧时间派生局部随机源，使回调先后顺序不影响同帧结果。
     std::mt19937_64 random(seed_ + static_cast<uint64_t>(_vehicle) * 1009ULL +
         static_cast<uint64_t>(_sensor) * 9176ULL + static_cast<uint64_t>(simUs) * 104729ULL);
     std::bernoulli_distribution invalid(tofInvalidProbability_);
@@ -319,6 +370,7 @@ class SensorGateway final
     std::array<double, 64> output{};
     for (int index = 0; index < 64; ++index)
     {
+      // 3. 四邻域深度突变标记混合像素候选；随机失效后仅对有效深度加高斯噪声并限幅。
       bool edgeMixed = false;
       const int x = index % 8;
       const int y = index / 8;
@@ -354,6 +406,12 @@ class SensorGateway final
     Send(_vehicle, json.str());
   }
 
+  /**
+   * @brief 去除行填充和 alpha，并把 RGB/BGR 图像统一为连续 RGB 字节。
+   * @param _msg RGB、BGR、RGBA 或 BGRA 的 8 位图像。
+   * @param _rgb 输出 width×height×3 字节，不包含 PPM 文件头。
+   * @return 尺寸、格式和缓冲区完整性检查通过时为 true。
+   */
   private: bool ConvertToPpm(const gz::msgs::Image &_msg,
                              std::vector<uint8_t> &_rgb) const
   {
@@ -392,6 +450,13 @@ class SensorGateway final
     return true;
   }
 
+  /**
+   * @brief 完整写入同目录临时文件，再重命名替换文本目标。
+   * @param _target 输出文件；调用方须串行化对同一目标的写入。
+   * @param _data 完整文件内容。
+   * @param _mode 流打开模式，内部追加 trunc。
+   * @return 写入、刷新和重命名均成功时为 true。
+   */
   private: bool AtomicWrite(const std::filesystem::path &_target,
                             const std::string &_data, std::ios::openmode _mode)
   {
@@ -414,6 +479,12 @@ class SensorGateway final
     return true;
   }
 
+  /**
+   * @brief 以二进制模式写临时文件并重命名替换目标，避免读到半帧。
+   * @param _target 输出文件；调用方须串行化对同一目标的写入。
+   * @param _data 完整二进制内容。
+   * @return 写入、刷新和重命名均成功时为 true。
+   */
   private: bool AtomicWrite(const std::filesystem::path &_target,
                             const std::vector<uint8_t> &_data)
   {
@@ -437,6 +508,13 @@ class SensorGateway final
     return true;
   }
 
+  /**
+   * @brief 串行发布该车辆的最新 PPM 图像，随后更新配套 JSON 元数据。
+   * @param _vehicle 车辆编号，索引对应的互斥锁和帧序号。
+   * @param _msg transport 彩色图像消息。
+   * @note 图像头和 JSON 均携带 frame_seq 与 sim_time_us；两个文件分别替换，
+   *       消费者应核对帧标识，不能把两次替换视为一个文件事务。
+   */
   private: void OnCamera(int _vehicle, const gz::msgs::Image &_msg)
   {
     std::lock_guard<std::mutex> lock(cameraMutex_[_vehicle]);
@@ -485,12 +563,13 @@ class SensorGateway final
   private: std::string udpHost_{"127.0.0.1"};
   private: int vehicleCount_{4};
   private: int udpBasePort_{16000};
+  // ToF 有效深度下限/上限与噪声标准差使用 m；失效概率无单位。
   private: double tofMinM_{kDefaultTofMinM};
   private: double tofMaxM_{kDefaultTofMaxM};
   private: double tofNoiseStdM_{0.003};
   private: double tofInvalidProbability_{0.03};
   private: double tofMixedPixelProbability_{0.05};
-  private: double tofMixedPixelThresholdM_{0.10};
+  private: double tofMixedPixelThresholdM_{0.10}; // 四邻域边缘深度差门限，单位 m。
   private: uint64_t seed_{0x544f465f53494dULL};
   private: std::unique_ptr<std::mutex[]> cameraMutex_;
   private: std::unique_ptr<std::atomic<uint64_t>[]> cameraSequence_;
@@ -498,6 +577,12 @@ class SensorGateway final
 
 }  // namespace
 
+/**
+ * @brief 配置图像网关并保持进程存活，消息处理由 transport 回调驱动。
+ * @param argc 命令行参数数量。
+ * @param argv 命令行参数数组。
+ * @return 配置失败返回 2；成功后持续等待外部进程管理器结束进程。
+ */
 int main(int argc, char **argv)
 {
   SensorGateway gateway;

@@ -1,3 +1,7 @@
+/**
+ * @file vision.cpp
+ * @brief PPM 帧读取、灯条连通域配对和视觉/航点控制意图生成。
+ */
 #include "companion/vision.hpp"
 
 #include <algorithm>
@@ -10,6 +14,12 @@
 namespace companion {
 namespace {
 
+/**
+ * @brief 读取 PPM 头部的一个非空白字段，跳过字段前的 # 注释行。
+ * @param stream 当前输入流，读取后位置推进。
+ * @param token 非空输出指针，原内容被覆盖。
+ * @return 是否读取到非空字段。
+ */
 bool readToken(std::istream& stream, std::string* token) {
   *token = {};
   char ch = 0;
@@ -30,6 +40,7 @@ bool readToken(std::istream& stream, std::string* token) {
   return !token->empty();
 }
 
+// 红/蓝通道突出或近白高亮像素可作为灯条候选；这里只做颜色筛选，形状和配对在后续判断。
 bool brightPixel(const PpmImage& image, int x, int y) {
   const size_t index = static_cast<size_t>((y * image.width + x) * 3);
   const int r = image.rgb[index];
@@ -60,8 +71,7 @@ std::optional<PpmImage> readPpm(const std::string& path) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream) return std::nullopt;
   PpmImage image;
-  // The gateway atomically replaces image then metadata. Bind their identity
-  // using the PPM comment so an adjacent frame is never silently mislabeled.
+  // 网关先后替换图像和元数据；从 PPM 注释读取帧身份，避免相邻帧被静默错配。
   std::string first_line,comment;
   std::getline(stream,first_line);
   if(first_line!="P6")return std::nullopt;
@@ -102,6 +112,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
       image.rgb.size() != static_cast<size_t>(image.width) * image.height * 3) {
     return result;
   }
+  // 1. 用四邻域广度搜索合并亮像素，得到面积、中心及包围盒；尺寸门限剔除散点和横条。
   std::vector<uint8_t> visited(static_cast<size_t>(image.width) * image.height, 0);
   std::vector<BrightStrip> components;
   const int min_area = std::max(4, image.width * image.height / 40000);
@@ -151,6 +162,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
   }
   if (components.size() < 2) return result;
 
+  // 2. 比较灯条高度比例、纵向对齐及间距/高度比，选择面积较大且形状一致的配对。
   double best_score = -1.0;
   BrightStrip best_left;
   BrightStrip best_right;
@@ -181,6 +193,8 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
   }
   if (best_score <= 0.0) return result;
 
+  // 3. 针孔模型给出水平/竖直角误差与距离 Z≈fx*真实间距/像素间距。
+  //    图像右/下为正，而机体左/上为正，角误差取负号；侧视目标会改变表观间距，影响测距。
   result.left = best_left;
   result.right = best_right;
   result.centroid_x_px = 0.5 * (best_left.center_x_px + best_right.center_x_px);
@@ -217,6 +231,7 @@ ControlIntention makeControlIntention(uint64_t now_us,
   result.source = "ESTIMATE";
   result.safe_to_arm = estimate.initialized && estimate.xy_valid && estimate.z_valid &&
                        !estimate.stale_input;
+  // 1. 目标引导优先：航向误差比例控制，距离约束前进速度；偏离视轴时减小接近速度。
   if (armor_enabled && target.valid && estimate.xy_valid) {
     result.mode = "GUIDANCE";
     result.target_valid = true;
@@ -228,6 +243,7 @@ ControlIntention makeControlIntention(uint64_t now_us,
       result.velocity_flu_mps.x() = std::max(0.0, result.velocity_flu_mps.x());
       result.velocity_flu_mps.x() *= std::max(0.0,std::cos(target.angular_error_rad));
     }
+  // 2. 无有效引导目标时沿航点移动，把 ENU 位置差旋转到机体水平面，到达后推进索引。
   } else if (estimate.xy_valid && !safe_waypoints.empty() && waypoint_index != nullptr) {
     int index = std::clamp(*waypoint_index, 0, static_cast<int>(safe_waypoints.size()) - 1);
     const Pose2& waypoint = safe_waypoints[index];
@@ -257,6 +273,7 @@ ControlIntention makeControlIntention(uint64_t now_us,
     }
   }
 
+  // 3. 对 1.25 m 内的新鲜队友叠加水平排斥，最后逐轴限幅；该规则未查询地形障碍。
   const Eigen::Matrix2d world_to_body =
       rotation2(-estimate.pose.yaw_rad);
   for (const PeerEstimate& peer : peers) {

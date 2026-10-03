@@ -1,3 +1,6 @@
+# @file launch_linux.py
+# @brief 管理 Linux/WSL 中的 Gazebo、PX4 和伴随进程，生成运行配置并回收进程组。
+
 """Launch real Gazebo/PX4 processes in WSL; no scripted trajectories or truth odometry.
 
 This manager's pose knowledge is confined to one-time spawning and evaluation.
@@ -24,6 +27,10 @@ SENSORS = Path("/home/devcontainers/drone-sim/build-sensors")
 ACTIVE = ROOT / "runtime" / "manager.json"
 
 
+# @brief 为同一次运行的所有进程提供一致的 Gazebo 通信与资源搜索环境。
+# @param dynamics micro 或 x500，决定模型资源目录。
+# @param horizontal 是否使用水平 ToF 的 micro 模型。
+# @return 当前环境的副本，设置 Gazebo 分区、资源路径、插件路径和 Python 工具路径。
 def environment(dynamics="micro", horizontal=False):
     env = dict(os.environ)
     env["GZ_PARTITION"] = "drone-lab-four"
@@ -44,12 +51,18 @@ def environment(dynamics="micro", horizontal=False):
     return env
 
 
+# @brief 从地图世界模板生成含机队和观测插件的本次运行世界。
+# @param output 本次运行的世界 SDF 输出路径。
+# @param map_path 地图 JSON 路径，用于解析世界与地形的相对路径。
+# @param config 已解析机队配置；None 时从地图加载。
+# @return 世界名称和实际采用的配置；写入传感器插件、出生模型及可选起点标记。
 def prepare_world(output, map_path, config=None):
     config = (
         configure_fleet(json.loads(map_path.read_text(encoding="utf-8")))
         if config is None
         else config
     )
+    # 先加入接触检测和 50 Hz 观测插件，再写入每机模型，保证观测编号与出生点一致。
     tree = ET.parse(map_path.parent / config["world_file"])
     world = tree.getroot().find("world")
     ET.SubElement(
@@ -144,6 +157,14 @@ def prepare_world(output, map_path, config=None):
     return world.attrib["name"], config
 
 
+# @brief 创建独立 Linux 会话并记录进程身份，供停止与状态查询使用。
+# @param name 日志名称和状态记录中的进程名称。
+# @param args 子进程参数序列；路径在启动前转为字符串。
+# @param env 子进程环境。
+# @param run_dir 日志目录。
+# @param cwd 子进程工作目录，None 继承当前目录。
+# @return pid、命令、日志路径和 /proc 启动 tick，供之后确认进程身份。
+# @note 新会话使 PID 同时成为进程组 ID；返回后子进程独立运行，stdout/stderr 共用日志。
 def start_one(name, args, env, run_dir, cwd=None):
     path = run_dir / (name + ".log")
     with path.open("w", encoding="utf-8") as log:
@@ -168,6 +189,7 @@ def start_one(name, args, env, run_dir, cwd=None):
     }
 
 
+# 校验 PID 对应进程非僵尸且启动 tick 与记录一致，避免 PID 重用后误认进程；无法读取返回 False。
 def alive(item):
     try:
         stat = Path(f"/proc/{item['pid']}/stat").read_text().rsplit(")", 1)[1].split()
@@ -176,6 +198,7 @@ def alive(item):
         return False
 
 
+# 将已启动进程及地图配置写入临时 JSON，再替换 manager.json，使读取方获得完整快照。
 def write_status(items, run_dir, config):
     ACTIVE.parent.mkdir(parents=True, exist_ok=True)
     tmp = ACTIVE.with_suffix(".tmp")
@@ -196,6 +219,8 @@ def write_status(items, run_dir, config):
     tmp.replace(ACTIVE)
 
 
+# 逆启动顺序向仍匹配身份的进程组发送 SIGTERM，最多等待 8 秒，再以 SIGKILL 终止残留组。
+# 状态保留在 manager.json 并标记 stopped，便于后续读取运行记录。
 def stop():
     if not ACTIVE.exists():
         return
@@ -219,6 +244,8 @@ def stop():
     ACTIVE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# 解析 start/stop/status/gui 命令；启动时准备配置、等待世界时钟、启动传感器和各 PX4 实例。
+# 每次启动后保存进程清单；异常路径先保存已启动项，再调用 stop 回收。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["start", "stop", "status", "gui"])
@@ -306,6 +333,7 @@ def main():
         if args.dynamics == "micro"
         else "generated"
     )
+    # 从模型契约同步传感器安装外参，保证模拟深度与伴随端投影使用同一几何。
     contract = json.loads(
         (ROOT / "models" / model_folder / "sensor_contract.json").read_text(
             encoding="utf-8"
@@ -337,7 +365,7 @@ def main():
     )
     if args.mission == "hover":
         config["vehicle_waypoints"] = {str(i): [] for i in range(count)}
-    # Keep relative terrain paths valid when making a per-run map snapshot.
+    # 运行地图移到新目录后，用绝对路径维持地形先验引用。
     if "terrain_triangles_file" in config:
         config["terrain_triangles_file"] = str(
             (args.map.resolve().parent / config["terrain_triangles_file"]).resolve()
@@ -372,6 +400,7 @@ def main():
             )
         )
         write_status(items, run_dir, config)
+        # 等待世界时钟话题出现再启动观测网关，超时使用本机单调时钟。
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
             if not alive(items[0]):
@@ -412,7 +441,7 @@ def main():
             directory.mkdir(parents=True)
             hooks = directory / "hooks"
             hooks.mkdir()
-            # Official rcS explicitly resolves user px4-rc.params from PATH.
+            # rcS 从 PATH 查找每机参数钩子；这里关闭 GPS 并选择外部里程计融合项。
             params = "\n".join(
                 [
                     "param set EKF2_GPS_CTRL 0",
@@ -449,6 +478,7 @@ def main():
                     raise ValueError("Invalid PX4 parameter override")
                 params += f"\nparam set {name} {value}\n"
             (hooks / "px4-rc.params").write_text(params, encoding="utf-8")
+            # 大机队为每机分配独立端口，避免默认脚本复用远端端口。
             if count > 10:
                 mavlink_script = PX4 / "ROMFS/px4fmu_common/init.d-posix/px4-rc.mavlink"
                 lines = mavlink_script.read_text(encoding="utf-8").splitlines()

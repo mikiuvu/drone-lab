@@ -1,3 +1,7 @@
+/**
+ * @file protocol.cpp
+ * @brief schema=1 JSON 数据报的字段校验、解码与序列化。
+ */
 #include "companion/protocol.hpp"
 
 #include <cmath>
@@ -28,6 +32,13 @@ bool finiteArray64(const json& value, const char* key) {
   return true;
 }
 
+/**
+ * @brief 读取可选整数路径；缺省时保留空路径，不在此处检查环路和重复节点。
+ * @param value JSON 对象。
+ * @param key 路径字段名。
+ * @param output 追加解析出的车辆编号；失败时可能含部分内容，由调用方丢弃整份样本。
+ * @return 字段缺省或全部元素为整数时为 true。
+ */
 bool finiteOptionalArray(const json& value, const char* key, std::vector<int>& output) {
   if (!value.contains(key)) return true;
   if (!value[key].is_array()) return false;
@@ -49,6 +60,7 @@ std::optional<TofFrame> parseTofDatagram(const std::string& payload, int expecte
         !finiteArray64(value, "distance_m")) {
       return std::nullopt;
     }
+    // 数组必须为 64 个有限深度；未提供 valid 时默认全有效，量程和时效由融合器检查。
     TofFrame result;
     result.sim_time_us = value["sim_time_us"].get<uint64_t>();
     result.sensor_index = value["sensor"].get<int>();
@@ -161,6 +173,7 @@ std::optional<PeerEstimate> parsePeerEstimateDatagram(const std::string& payload
         !finiteNumber(value, "yaw_rad")) {
       return std::nullopt;
     }
+    // 保留源观测身份和传播路径；报文到达并不刷新 reference_time_us。
     PeerEstimate result;
     result.sim_time_us = value["sim_time_us"].get<uint64_t>();
     result.vehicle_id = value["vehicle"].get<int>();
@@ -180,6 +193,8 @@ std::optional<PeerEstimate> parsePeerEstimateDatagram(const std::string& payload
     result.reference_hops = value.value("reference_hops", 0);
     if (!finiteOptionalArray(value, "reference_path", result.reference_path)) return std::nullopt;
     result.source = "ESTIMATE";
+    // 位置协方差按行还原 3×3；缺省或形状不符时保留结构默认的单位矩阵。
+    // 数值有限性由 fuseUwb 检查，解析成功还不等同于接受融合。
     if (value.contains("pose_covariance") && value["pose_covariance"].is_array() &&
         value["pose_covariance"].size() == 9) {
       for (int row = 0; row < 3; ++row) {
@@ -226,6 +241,7 @@ std::string serializeEstimateDatagram(const Estimate& estimate) {
       {"reference_path", estimate.reference_path},
       {"pose_covariance", json::array()},
   };
+  // 仅发送 [x,y,z] 的位置协方差；yaw 与速度协方差留在本机七维滤波器内。
   for (int row = 0; row < 3; ++row) {
     for (int col = 0; col < 3; ++col) {
       value["pose_covariance"].push_back(estimate.covariance(row, col));

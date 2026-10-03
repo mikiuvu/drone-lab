@@ -1,3 +1,6 @@
+# @file build_linux.py
+# @brief 构建 Gazebo 插件、Linux 伴随程序及 RISC-V 可执行文件，组织构建检查与产物复制。
+
 """Rebuild the real Gazebo plugins and executable companion in existing WSL."""
 import json
 from pathlib import Path
@@ -8,9 +11,11 @@ ROOT=Path(__file__).resolve().parent
 BASE=Path('/home/devcontainers/drone-sim')
 
 
+# 执行外部命令并等待结束；非零退出码抛出异常，使后续构建步骤停止。
 def run(args):subprocess.run(list(map(str,args)),check=True)
 
 
+# 先构建 Linux 组件并运行伴随程序测试，再使用配置中的工具链交叉编译并复制 RISC-V 产物。
 def main():
     for source,dest in [('gazebo','build-sensors'),('companion','build-companion')]:
         run(['cmake','-S',ROOT/source,'-B',BASE/dest,'-DCMAKE_BUILD_TYPE=RelWithDebInfo'])

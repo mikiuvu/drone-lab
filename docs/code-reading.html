@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Drone Lab 源码阅读路线</title>
+<style>body{font:16px/1.85 "Microsoft YaHei",sans-serif;max-width:1150px;margin:30px auto;padding:0 22px;background:#f4f7fb;color:#173449}section{background:white;border:1px solid #d6e1eb;border-radius:10px;padding:22px;margin:18px 0}table{width:100%;border-collapse:collapse}td,th{border:1px solid #d4dee7;padding:9px;text-align:left}code,pre{background:#edf2f7}pre{padding:15px;white-space:pre-wrap}a{color:#126594}h1,h2{line-height:1.4}</style>
+<h1>Drone Lab 源码阅读路线</h1>
+<p>先理解“谁产生数据、谁做决策、谁执行动作”，再读数学公式。文件头解释模块职责，函数前解释契约，函数内部解释关键步骤。C/C++ 的 @brief 是摘要，@param 是参数，@return 是返回值，@note 是调用条件。</p>
+<section><h2>1. 三条链路分别读</h2><table><tr><th>链路</th><th>数据流</th><th>源码</th></tr>
+<tr><td>实物采集</td><td>飞控串口、Nano 上两颗 ToF → JSON → 热力图和录制文件</td><td><a href="../app/main.py">app/main.py</a> → <a href="../app/workers.py">workers.py</a> → <a href="../nano/main.c">nano/main.c</a> → <a href="../nano/platform.c">platform.c</a></td></tr>
+<tr><td>离线预研</td><td>输入数学参数 → 一次模型计算 → 图表和结果文件</td><td><a href="../app/research_panel.py">research_panel.py</a> → <a href="../research/runner.py">research/runner.py</a> → 各研究模型</td></tr>
+<tr><td>物理飞行</td><td>物理世界生成观测 → 定位 → 飞控 → 新的物理状态</td><td><a href="../simulation/launch_linux.py">launch_linux.py</a> → <a href="../simulation/companion/src/runner.cpp">runner.cpp</a> → <a href="../simulation/companion/src/estimator.cpp">estimator.cpp</a></td></tr></table>
+<p>采集链管理 I²C 和串口；仿真链生成三颗 ToF、光流速度、UWB 等观测。两者即使都输出 JSON，也需要按字段和时间基准适配。板端采集程序不是整套自主飞行程序。</p></section>
+<section><h2>2. 点击启动后发生什么</h2><pre>app/main.py：创建实验台窗口
+  └─ app/simulation_panel.py：响应“启动多机环境”按钮
+       └─ simulation/launch_linux.py：通过 WSL 准备地图并启动进程
+            ├─ Gazebo：物理模型、碰撞和传感器
+            ├─ PX4 × N：速度/姿态闭环、电机输出
+            ├─ drone_companion_runner × N：每机独立定位和控制参考
+            ├─ team_coordinator：全队阶段与目标点
+            └─ evaluate_linux.py：独立记录真实位置与物理接触</pre>
+<p>进程就是独立运行的程序。一架飞机对应一个 PX4 和一个伴随程序。Qt 的 QProcess 用于启动程序，QTimer 用于定时刷新界面，Signal/信号用于把后台结果通知主界面；槽函数是收到信号后执行的函数。</p>
+<p>地图 JSON 定义 spawns 起飞点、team_mission 任务和 uwb_anchors 基站；simulation/config.json 定义伴随参数。每次启动会复制配置到独立运行目录，分析某次结果要读那次快照。</p></section>
+<section><h2>3. 从传感器到控制的完整数据流</h2><pre>Gazebo 深度/相机 → sensor_gateway.cc → ToF JSON / 相机文件
+Gazebo peer_height_system.cc → 高度 / 光流速度 / UWB JSON
+                                 ↓
+runner.cpp → protocol.cpp 解码 → Estimator 融合
+                                 ↓
+             Estimate：位置、速度、协方差、有效性
+                ├─ 广播给邻机，支撑 UWB 协同定位
+                ├─ 上报 team_coordinator
+                └─ ODOMETRY 发给 PX4
+team_coordinator → TeamMission::step → 每机目标点
+runner：目标误差与速度阻尼 → 速度/姿态参考 → PX4 → 电机 → Gazebo</pre>
+<table><tr><th>通道</th><th>回环 UDP 端口</th><th>含义</th></tr><tr><td>传感器</td><td>16000 + 机号</td><td>观测值，不是完整的位置答案</td></tr><tr><td>邻机估计</td><td>17000 + 机号</td><td>位置、方差、参考来源和传播路径</td></tr><tr><td>任务命令</td><td>18000 + 机号</td><td>协调器发目标点和阶段</td></tr><tr><td>队伍状态</td><td>18100</td><td>各伴随程序汇总状态</td></tr></table>
+<p>UDP 逐包传输；MAVLink 是飞控消息协议，带消息类型、字段和校验，一包 UDP 可能含多个 MAVLink 消息，所以 runner 按字节送入解析器。JSONL 是“一行一个 JSON”，适合边写边读和回放。</p></section>
+<section><h2>4. 定位算法怎样读</h2><p>先读 <a href="../simulation/companion/include/companion/types.hpp">types.hpp</a> 和 <a href="../simulation/companion/include/companion/estimator.hpp">estimator.hpp</a>，再按下面顺序阅读实现。</p>
+<table><tr><th>步骤</th><th>函数</th><th>直观含义</th></tr><tr><td>初始化</td><td>reset</td><td>用已知起点建立共同坐标系。七维状态顺序为 x、y、z、yaw、vx、vy、vz。</td></tr><tr><td>运动预测</td><td>advanceTo / predict</td><td>根据经过时间、速度和可用加速度推算新状态；不确定度随预测累积。</td></tr><tr><td>光流</td><td>fuseOpticalFlow</td><td>接收成品模块给出的机体系水平速度，结合姿态与世界系速度比较。</td></tr><tr><td>ToF</td><td>fuseTof</td><td>把深度与静态地图匹配，利用可信结构修正漂移；平坦地面不能提供完整 XY 约束。</td></tr><tr><td>机间 UWB</td><td>fuseUwb</td><td>距离、方位与邻机估计共同约束本机；参考序号和路径防止重复利用同一依据。</td></tr><tr><td>基站</td><td>fuseAnchorRange</td><td>已知基站坐标约束测距方向；完整 XY 参考还需近期有效测距的方向足够独立。</td></tr><tr><td>统一更新</td><td>update</td><td>比较预测与实际观测，按不确定度分配修正量。</td></tr></table>
+<p><b>协方差 P</b>表示状态有多不确定，以及不同误差是否相关。对角线是方差，非对角线描述相关性。<b>残差</b>是观测与预测的差，<b>雅可比 H</b>表示状态变化对观测的影响，<b>卡尔曼增益 K</b>决定修正多少，随状态方差和测量噪声变化。</p>
+<p><b>可观测性</b>回答“测量能否区分某种移动”：沿无限长墙平移，墙距可能不变，因此沿墙方向缺少定位依据。ToF 信息矩阵的特征值用来找有信息的方向；不能把缺少观测当作误差已消失。</p></section>
+<section><h2>5. 坐标系与时钟</h2><table><tr><th>名称</th><th>含义</th><th>用途</th></tr><tr><td>世界 ENU</td><td>X 东、Y 北、Z 上；场地采用共同世界坐标</td><td>地图、估计位置、任务目标</td></tr><tr><td>机体 FLU</td><td>前、左、上</td><td>光流速度、安装关系、内部参考</td></tr><tr><td>机体 FRD</td><td>前、右、下；FLU 转换时 Y/Z 反号</td><td>飞控接口</td></tr><tr><td>姿态角</td><td>源码主要用 rad，界面可转 °；yaw 偏航、roll 横滚、pitch 俯仰</td><td>坐标旋转和控制</td></tr><tr><td>sim_time_us</td><td>共同仿真时刻，μs</td><td>预测、测量年龄、阶段计时</td></tr><tr><td>现实单调时间</td><td>不随系统日期调整倒退</td><td>收包超时、刷新、播放节拍</td></tr></table>
+<p>两种时钟不能直接相减。计算机算得慢会使现实等待更长，不能因此改变物理时间戳。高度 0.75 m 是世界高度，平台 z=0.5 m 时只高出平台 0.25 m。</p></section>
+<section><h2>6. 谁决定下一架起飞或撞击</h2><p>读 <a href="../simulation/companion/include/companion/team_mission.hpp">team_mission.hpp</a> 类型，再读 <a href="../simulation/companion/src/team_mission.cpp">TeamMission::step</a>。</p><pre>WAIT_READY 就绪 → TAKEOFF 起飞 → TRANSIT 航路 → ASSEMBLE 集结
+→ [APPROACH 接近 → CONTACT 接触 → RETREAT 退出] 按 order 循环
+→ RETURN_ALL 返航 → LAND_ALL 降落 → COMPLETE 完成</pre>
+<p>phase_ 是全队阶段，turn_ 是顺序表下标，order[turn_] 才是机号。barrier 是同步条件，要求条件持续成立，防止掠过目标被当作停稳。degraded 是单机当前不可用，skipped_ 保存未完成轮次的记录；恢复通信不等于补做历史轮次。</p>
+<p>runner 使用 <code>v_ref = Kp × 位置误差 − Kd × 当前速度</code>：前项拉向目标，后项抑制过冲。PX4 再把速度误差变成姿态和电机指令，所以伴随位置控制与飞控闭环是两层控制。接触冲击由传感器判断，物理接触日志由评估器另行核验。</p></section>
+<section><h2>7. 从现象找到源码</h2><table><tr><th>现象</th><th>先看记录</th><th>再看代码</th></tr><tr><td>不进下一阶段</td><td>team_status.json 的 phase、degraded_reason、skipped</td><td>validForBarrier、step</td></tr><tr><td>定位误差变大</td><td>estimate、fusion.reason、参考路径</td><td>fuseTof、fuseUwb、estimate</td></tr><tr><td>图表时间不一致</td><td>估计和真实位置的 sim_time_us</td><td>flight_data.py、localization_metrics.py</td></tr><tr><td>过冲或撞后不退出</td><td>任务参数、control_intention、IMU 冲击</td><td>runner 的控制生成与姿态恢复</td></tr><tr><td>Nano 无距离</td><td>连接状态、I²C 配置、采集消息</td><td>nano/platform.c、nano/main.c、workers.py</td></tr></table>
+<p>ESTIMATE 是算法估计，真实位置只用于评估。flight_data.py 在短间隔内插值对齐图表，localization_metrics.py 使用自己的匹配统计口径，比较时要检查时间容差与取样方式。</p></section>
+<section><h2>8. 建议的第一次阅读</h2><ol><li>先运行任务并打开曲线，看阶段与轨迹怎样对应。</li><li>读 main.py 创建窗口，再读 simulation_panel.py 的 command，找到按钮怎样启动 WSL。</li><li>读 launch_linux.py 的进程、端口和配置快照，再沿 runner 的编号主循环阅读。</li><li>读 types.hpp 与 estimator.hpp 的输入输出，逐个进入融合函数。</li><li>读 team_mission.hpp/cpp，跟踪单机接近、接触、退出和全队返航。</li><li>最后读 Gazebo 插件、地图射线、板端采集和研究模型，理解数据如何产生。</li></ol>
+<p>修改速度看地图 team_mission；修改定位噪声看 EstimatorConfig 及实际配置加载路径；改显示看 app；改真实驱动看 nano。test_flow_cooperation.cpp 演示共享参考，test_variable_team.cpp 演示可变机群，tests/test_flight_data.py 演示时间对齐。</p>
+<p>生成模型应改 generate_sensor_models.py，场地应改地图配置。vendor、生成目录、构建缓存和历史日志不是手工修改入口。JSON 不支持注释，参数说明见源码和<a href="../simulation/docs/sensor-interfaces.html">接口说明</a>。</p></section></html>

@@ -3,6 +3,7 @@
 Run on the Nano alongside the actual workload. Not a CPU/NPU benchmark.
 """
 
+# 实板工具读取 /proc 与 /sys，应与实际负载同时运行；模块文档同时用作 CLI 帮助。
 import argparse
 import json
 import platform
@@ -11,6 +12,9 @@ from pathlib import Path
 
 
 def text(path):
+    """@brief 读取 Linux 状态文件并剔除首尾空白；不可读时返回 None。
+    @param path /proc 或 /sys 文件路径。
+    """
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
@@ -18,6 +22,11 @@ def text(path):
 
 
 def collect(pid=None):
+    """@brief 采集一次系统与可选进程资源快照，保留内核原始文本。
+    @param pid 可选进程 ID；省略时不读取进程状态。
+    @return 带单调/UTC ns 时间戳、meminfo、CPU 累计计数及温度/频率原值的字典。
+    @note CPU 使用率须从相邻快照差分计算；此快照不提供 NPU 利用率或图像帧龄。
+    """
     thermal = {
         str(p): text(p) for p in Path("/sys/class/thermal").glob("thermal_zone*/temp")
     }
@@ -45,6 +54,9 @@ def collect(pid=None):
 
 
 def main():
+    """@brief 校验 Linux 平台和采样参数，按 interval 秒间隔写出 JSONL。
+    @note output 使用独占创建，拒绝覆盖已有文件；每帧 flush，实际周期还包含读取和写入耗时。
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pid", type=int)
     parser.add_argument("--seconds", type=float, default=60)

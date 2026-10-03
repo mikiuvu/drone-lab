@@ -1,4 +1,9 @@
-"""Execute each model from a fresh interpreter for reproducible source attribution."""
+"""离线研究统一入口：执行指定模型，保存输入、输出和源码摘要。
+
+界面通过独立解释器启动本模块；execute 读取模型源码字节并计算 SHA256，
+随后执行同一份字节，确保结果文件记录的摘要对应实际运行代码。
+源码修改后摘要会改变，即使只修改注释；历史结果仍保留其原始摘要。
+"""
 
 import argparse
 import hashlib
@@ -18,6 +23,12 @@ FUNCTIONS = {
 
 
 def execute(model, config, output, plot=True):
+    """执行一个研究模型并写入结果 JSON。
+
+    model 为 FUNCTIONS 中的名称；config 是模型输入参数字典；output 是结果路径。
+    plot 决定是否附带 PNG。绘图失败保存在 plot_error，数值结果仍可写出。
+    返回保存的结果字典；模型运行错误或执行期间源码变化会向调用者抛异常。
+    """
     if model not in FUNCTIONS:
         raise ValueError("Unknown research model")
     source = Path(__file__).resolve().parent / (model + ".py")
@@ -60,6 +71,7 @@ def execute(model, config, output, plot=True):
 
 
 def main():
+    """解析命令行模型名、JSON 配置与输出路径，交给 execute 执行。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", choices=FUNCTIONS, required=True)
     parser.add_argument("--config-json", default="{}")

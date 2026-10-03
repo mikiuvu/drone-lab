@@ -1,3 +1,6 @@
+# @file trial_report.py
+# @brief 汇总 SITL 运行的阶段、实际飞行时间、接触证据和末帧返航偏移。
+
 """Summarize flight time, physical contacts and home offsets from a SITL run."""
 
 import argparse
@@ -6,7 +9,13 @@ import math
 from pathlib import Path
 
 
+# 逐行解析 UTF-8 JSONL 并跳过 JSON 语法损坏行；文件读取异常继续向调用方传播。
 def rows(path):
+    """@brief 按行读取 UTF-8 JSONL，并跳过语法损坏的记录。
+
+    @param path JSONL 文件路径。
+    @return 解码后的 JSON 对象迭代器。
+    """
     with path.open(encoding="utf-8") as stream:
         for line in stream:
             try:
@@ -15,7 +24,16 @@ def rows(path):
                 continue
 
 
+# @param folder 包含地图、任务、真值、接触和每机伴随日志的运行目录。
+# @return 阶段时间、各机起落/撞击、接触确认和末帧 XY 返航偏移组成的字典。
+# @note 起飞取 TAKEOFF 后超过离地阈值的首帧，落地取 LAND_ALL 后 landed 首帧；时间单位秒。
+# 每次估计撞击须在 0.3 s 内找到目标物理接触，全部匹配且存在撞击才确认；所有飞机落地后才计算总飞行时长。
 def summarize(folder):
+    """@brief 从一组运行日志生成飞行阶段、接触和返航误差报告。
+
+    @param folder 运行目录，包含 map.json 和各类 JSONL 日志。
+    @return 报告字典；时间单位 s，位置和误差单位 m。
+    """
     config = json.loads((folder / "map.json").read_text(encoding="utf-8"))
     mission = config["team_mission"]
     phases = []

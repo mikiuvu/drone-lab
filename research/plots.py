@@ -1,10 +1,19 @@
-"""Standalone plots of model results. Does not alter or recompute the model."""
+"""@file plots.py
+@brief 将已计算的研究结果绘成独立 PNG，采用 Agg 画布供无窗口环境使用。
+"""
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 
 def save_plot(model, result, path):
+    """@brief 绘制调度、几何或时间错配结果，保存到指定路径。
+    @param model compute、geometry 或 integration。
+    @param result 对应模型的结果字典，直接读取既有指标。
+    @param path PNG 输出路径，父目录须已存在；已有文件会被覆盖。
+    @return 已保存路径字符串；不支持的模型返回 None。
+    @note 不重新计算模型；帧龄图使用对数轴，极小柱高仅用于显示，标注保留实际数值。
+    """
     fig = Figure(figsize=(11, 5.5), layout="constrained")
     FigureCanvasAgg(fig)
     if model == "compute":

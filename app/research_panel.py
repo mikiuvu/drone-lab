@@ -1,4 +1,7 @@
-"""Offline research GUI, isolated from live-device actions."""
+"""@file research_panel.py
+@brief 离线预研模型的参数表单、后台计算和结果展示。
+模型由独立 Python 进程运行并保存 JSON，Qt 主线程接收结果信号后生成 HTML 报告。
+"""
 
 import html
 import json
@@ -21,6 +24,8 @@ from PySide6.QtWidgets import (
     QLabel,
 )
 
+# 每个模型描述为 (runner 模型名, 参数列表)；参数依次是键、含单位的标签、
+# 默认值、下限、上限。同一描述同时决定控件范围与提交给 runner 的配置键。
 MODELS = {
     "失效与恢复状态机": ("control_policy", []),
     "I²C 与串口带宽预算": (
@@ -71,16 +76,23 @@ MODELS = {
 
 
 def result_html(result):
+    """@brief 将模型结果转换为 QTextBrowser 可显示的 HTML。
+    @param result 模型结果字典，可含指标、假设、场景、决策和本地图路径。
+    @return 完整 HTML 字符串。
+    @note 普通动态文本进行 HTML 转义，避免参数中的尖括号被当作标签。
+    """
     summary = html.escape(str(result.get("summary", "")))
     assumptions = "".join(
         "<li>" + html.escape(str(x)) + "</li>" for x in result.get("assumptions", [])
     )
     metrics = result.get("metrics", {})
-    # Present a short Chinese comparison before the full machine-readable fields.
+    # 先比较 FIFO 与保留最新帧的完成量、延迟和内存，再递归展开完整指标。
     overview = ""
     if "fifo" in metrics and "latest" in metrics:
 
         def number(value):
+            """@brief 格式化可缺失的统计量；None 表示没有完成样本。
+            """
             return "无完成样本" if value is None else f"{value:.2f}"
 
         overview = '<h3>策略对比</h3><table border="1" cellpadding="6"><tr><th>策略</th><th>完成帧数</th><th>主动丢弃</th><th>完成帧龄 p95 / ms</th><th>完成但过期</th><th>峰值持有图像帧</th></tr>'
@@ -90,6 +102,10 @@ def result_html(result):
         overview += "</table><p>帧龄只对完成的样本统计；丢弃、期末积压和过期必须同时查看。图像帧内存不包括 SDK/VB/模型/内核。</p>"
 
     def table(value):
+        """@brief 递归展开字典和短列表，叶子值转义后作为文本显示。
+        @param value 指标树中的任意节点；长列表整体转为文本以限制嵌套。
+        @return HTML 片段。
+        """
         if isinstance(value, dict):
             return (
                 '<table border="1" cellpadding="6">'
@@ -127,6 +143,11 @@ def result_html(result):
         }
 
         def decision_row(i, row):
+            """@brief 把一次状态机决策整理为事件表行。
+            @param i 零起始事件下标；显示序号从 1 开始。
+            @param row 含时间、模式、请求动作和原因的决策字典。
+            @return 已转义动态文本的 HTML 表行。
+            """
             mode = mode_labels.get(row.get("mode"), row.get("mode", "—"))
             action = (
                 "交由已配置飞控失效保护决定"
@@ -172,10 +193,16 @@ def result_html(result):
 
 
 class SimulationWorker(QThread):
+    """@brief 在工作线程内等待独立模型进程，完成后传递结果和文件路径。
+    """
     result = Signal(dict, str)
     failure = Signal(str)
 
     def __init__(self, root, module_name, config):
+        """@param root 结果保存目录所属的项目根。
+        @param module_name research.runner 识别的模型名。
+        @param config 表单生成的输入参数字典。
+        """
         super().__init__()
         self.root, self.module_name, self.config = (
             root,
@@ -184,6 +211,9 @@ class SimulationWorker(QThread):
         )
 
     def run(self):
+        """@brief 启动模型进程、读取保存的 JSON 并发送结果信号。
+        @note 独立进程避免复用旧模块缓存，执行超时为 60 s；标准错误末尾用于报告进程失败。
+        """
         try:
             folder = self.root / "research" / "results"
             folder.mkdir(parents=True, exist_ok=True)
@@ -193,7 +223,7 @@ class SimulationWorker(QThread):
                 + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 + ".json"
             )
-            # A fresh process prevents cached modules being attributed to edited source.
+            # 1. 使用新进程加载当前源码，避免 Python 导入缓存复用之前的模型。
             code_root = Path(__file__).resolve().parents[1]
             interpreter = code_root / ".venv" / "Scripts" / "python.exe"
             process = subprocess.run(
@@ -215,6 +245,8 @@ class SimulationWorker(QThread):
             )
             if process.returncode:
                 raise RuntimeError(process.stderr.decode("utf-8", "replace")[-2000:])
+            # 2. 子进程正常退出后读取其保存结果；绘图错误与数值结果分别处理，
+            #    JSON 路径随信号送回界面，供用户定位原始输出。
             payload = json.loads(path.read_text(encoding="utf-8"))
             data = payload["result"]
             if payload.get("plot_path"):
@@ -229,7 +261,12 @@ class SimulationWorker(QThread):
 
 
 class ResearchPanel(QWidget):
+    """@brief 根据模型参数描述生成表单，并展示后台模型的结果。
+    @note worker 非空表示任务尚未退出；运行时禁用模型选择和启动按钮，防止重复提交。
+    """
     def __init__(self, root):
+        """@param root 项目根，用于结果与预研说明路径。
+        """
         super().__init__()
         self.root = Path(root)
         self.worker = None
@@ -269,6 +306,8 @@ class ResearchPanel(QWidget):
         self.populate()
 
     def populate(self):
+        """@brief 根据 MODELS 重建参数表单；spins 将配置键映射到数值控件。
+        """
         while self.form.rowCount():
             self.form.removeRow(0)
         self.spins = {}
@@ -283,10 +322,14 @@ class ResearchPanel(QWidget):
             self.spins[key] = value
 
     def start(self):
+        """@brief 捕获当前参数为字典，连接结果、失败和结束信号后启动线程。
+        """
         if self.worker:
             return
         module, _ = MODELS[self.choice.currentText()]
         config = {k: v.value() for k, v in self.spins.items()}
+        # 线程持有本次表单快照；完成结果显示由 result 槽负责，解锁控件由 finished
+        # 槽负责，因此成功和失败两条路径都会恢复操作入口。
         self.worker = SimulationWorker(self.root, module, config)
         self.worker.result.connect(self.show_result)
         self.worker.failure.connect(self.failed)
@@ -297,20 +340,30 @@ class ResearchPanel(QWidget):
         self.worker.start()
 
     def show_result(self, result, path):
+        """@brief 在主线程渲染结果 HTML 并显示保存文件名。
+        @param result 模型结果字典。
+        @param path 后台已保存的 JSON 路径。
+        """
         self.view.setHtml(result_html(result))
         self.status.setText("结果已保存：" + Path(path).name)
 
     def failed(self, error):
+        """@brief 将后台错误以纯文本显示，避免将错误内容解释成 HTML。
+        """
         self.status.setText(error)
         self.view.setPlainText(error)
 
     def finished(self):
+        """@brief 线程退出后延迟销毁对象，并恢复参数选择与运行入口。
+        """
         self.worker.deleteLater()
         self.worker = None
         self.run_button.setEnabled(True)
         self.choice.setEnabled(True)
 
     def report(self):
+        """@brief 在结果浏览器中打开本地预研总览。
+        """
         path = self.root / "docs" / "research" / "index.html"
         if path.exists():
             self.view.setSource(QUrl.fromLocalFile(str(path)))
@@ -318,6 +371,8 @@ class ResearchPanel(QWidget):
             self.view.setPlainText("预研总览文件不存在。")
 
     def open_folder(self):
+        """@brief 确保结果目录存在，并交给系统文件管理器打开。
+        """
         folder = self.root / "research" / "results"
         folder.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))

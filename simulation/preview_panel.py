@@ -1,3 +1,6 @@
+# @file preview_panel.py
+# @brief 启动 Qt 实验窗口并截取仿真面板预览图，随后关闭窗口。
+
 import sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]

@@ -1,3 +1,6 @@
+# @file flight_data.py
+# @brief 增量读取飞行历史，为图表与 CSV 提供有界缓存、时间对齐和水平误差。
+
 """Incremental flight history and timestamp-aligned evaluation samples."""
 
 import csv
@@ -21,10 +24,12 @@ FIELDS = (
     "flow_valid",
     "xy_valid",
 )
+# 对齐容差和估计降采样间隔，单位 s；数据使用本次运行的仿真时间轴。
 ALIGNMENT_S = 0.1
 SAMPLE_PERIOD_S = 0.05
 
 
+# 读取有限数值并转成 float；字段缺失或不是有限数值时返回 NaN，供绘图保留数据空缺。
 def number(row, key):
     value = row.get(key)
     return (
@@ -34,11 +39,17 @@ def number(row, key):
     )
 
 
+# @brief 将估计采样时刻映射到真值时间轴，供轨迹比较和 CSV 导出使用。
+# @param estimates 按时间排列的估计元组，首项为秒，后续位置分量为米。
+# @param truths 按时间升序排列的真值元组。
+# @return 逐条产生（估计、对齐真值或 None、水平误差米）。
+# @note 两侧均不超过 100 ms 时插值 xyz，否则选容差内最近真值；不跨大间隔外推。
 def aligned_samples(estimates, truths):
     """Interpolate bracketed truth within 100 ms on either side; gaps stay NaN."""
     times = [row[0] for row in truths]
     for estimate in estimates:
         stamp = estimate[0]
+        # 二分定位左右真值；先保留容差内最近帧作为无法插值时的后备。
         index = bisect_left(times, stamp)
         choices = [i for i in (index - 1, index) if 0 <= i < len(times)]
         nearest = min(choices, key=lambda i: abs(times[i] - stamp)) if choices else None
@@ -47,6 +58,7 @@ def aligned_samples(estimates, truths):
             if nearest is not None and abs(times[nearest] - stamp) <= ALIGNMENT_S
             else None
         )
+        # 两侧都足够近时按时间比例插值 xyz；大间隔不外推。
         if 0 < index < len(times):
             before, after = truths[index - 1], truths[index]
             if stamp - before[0] <= ALIGNMENT_S and after[0] - stamp <= ALIGNMENT_S:
@@ -55,6 +67,7 @@ def aligned_samples(estimates, truths):
                     stamp,
                     *(before[j] + weight * (after[j] - before[j]) for j in range(1, 4)),
                 )
+        # 水平误差只比较世界 XY；缺少对齐真值用 NaN 表达，导出时留空。
         error = (
             math.hypot(estimate[1] - truth[1], estimate[2] - truth[2])
             if truth is not None
@@ -63,7 +76,11 @@ def aligned_samples(estimates, truths):
         yield estimate, truth, error
 
 
+# 保存每架飞机的有界时序和任务事件；由调用方串行 poll 后取快照供界面使用。
+# 估计元组字段顺序遵循 FIELDS；真值为时间秒、xyz 米和偏航弧度。
 class FlightHistory:
+    # @param folder 已存在且包含飞行日志的运行目录。
+    # @param max_points 每机每类位置历史的容量；满时丢弃最旧点并累计 dropped。
     def __init__(self, folder, max_points=100000):
         self.folder = Path(folder)
         if not self.folder.is_dir():
@@ -85,6 +102,7 @@ class FlightHistory:
         if not self.tails:
             raise ValueError("目录内没有飞行日志")
 
+    # 发现运行过程中新增的日志文件，保留已有文件游标；新文件从头读取。
     def discover(self):
         files = [
             ("truth", self.folder / "truth_evaluation_only.jsonl"),
@@ -100,6 +118,8 @@ class FlightHistory:
                 tail.full = True
                 self.tails[key] = tail
 
+    # 拒绝重复或倒序时间戳，估计轨迹按 50 ms 最小间隔降采样；真值不做该降采样。
+    # @return 是否真正追加数据点；last_seen 同时记录被降采样跳过的最新时间。
     def _append(self, kind, vehicle, sample):
         key = (kind, vehicle)
         if sample[0] <= self.last_seen.get(key, -1):
@@ -118,6 +138,8 @@ class FlightHistory:
         history.append(sample)
         return True
 
+    # 按来源和车辆编号校验一批日志，将仿真微秒转成秒，分类累计位置、阶段、融合和停止事件。
+    # @return 是否发生位置或事件更新；仅融合计数变化不设置该返回标志。
     def consume(self, key, rows):
         changed = False
         for row in rows:
@@ -187,6 +209,8 @@ class FlightHistory:
                 changed = True
         return changed
 
+    # @param rounds 一次调用最多读取的轮数，用于限制界面刷新时的工作量。
+    # @return 是否更新历史；文件替换或截短时重建缓存并增加 revision，避免混入旧运行。
     def poll(self, rounds=4):
         self.discover()
         changed = False
@@ -206,10 +230,12 @@ class FlightHistory:
             self.revision += 1
         return changed
 
+    # 是否仍有任一日志的已观测字节尚未读完。
     @property
     def backlog(self):
         return any(tail.backlog for tail in self.tails.values())
 
+    # 返回图表使用的数据副本及 revision；估计和真值仍分开保存，匹配在消费快照时进行。
     def snapshot(self):
         ids = sorted(set(self.estimates) | set(self.truths))
         return {
@@ -229,6 +255,11 @@ class FlightHistory:
         }
 
 
+# @brief 将缓存中的估计、对齐真值和水平误差导出为逐估计采样的 CSV。
+# @param snapshot FlightHistory.snapshot 返回的数据，导出范围受历史缓存容量限制。
+# @param path CSV 输出路径，以带 BOM 的 UTF-8 覆盖写入。
+# @param vehicles 要导出的车辆编号；None 选择快照中的全部车辆。
+# @note 每条估计对应一行；无法匹配的真值和非有限数值留空，水平误差单位为米。
 def export_csv(snapshot, path, vehicles=None):
     selected = snapshot["ids"] if vehicles is None else vehicles
     with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:

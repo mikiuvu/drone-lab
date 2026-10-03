@@ -1,6 +1,6 @@
-"""Executable interface checks for a future localization -> flight-controller link.
-
-All functions are offline. No serial transport, arming, or setpoint publishing.
+"""@file integration.py
+@brief 离线验证定位到飞控接口的坐标转换、时间错配敏感性与估计准入。
+@note 输入为位姿、协方差和合成时间样本；输出转换结果或判断，不打开串口。
 """
 
 from dataclasses import dataclass
@@ -12,7 +12,11 @@ FLU_TO_FRD = np.diag([1.0, -1.0, -1.0])
 
 
 def convert_pose_enu_flu(position, body_to_world):
-    """Return NED position and FRD-to-NED rotation, with explicit frames."""
+    """@brief 将 ENU 世界系、FLU 机体系位姿转换成 NED 世界系、FRD 机体系。
+    @param position ENU 三维位置，单位沿用输入，通常 m。
+    @param body_to_world 3×3 FLU 到 ENU 的正交旋转矩阵，行列式须为 1。
+    @return NED 位置和 FRD 到 NED 的旋转矩阵；形状或有效性错误抛 ValueError。
+    """
     p = np.asarray(position, dtype=float)
     rotation = np.asarray(body_to_world, dtype=float)
     if p.shape != (3,) or rotation.shape != (3, 3):
@@ -27,7 +31,11 @@ def convert_pose_enu_flu(position, body_to_world):
 
 
 def convert_position_covariance(covariance):
-    """3x3 position covariance only; attitude-error conventions require their own Jacobian."""
+    """@brief 用 R·P·Rᵀ 将三维位置协方差从 ENU 转到 NED。
+    @param covariance 有限、对称、半正定 3×3 位置协方差，位置为 m 时单位 m²。
+    @return NED 协方差。
+    @note 只转换位置；姿态误差须根据自身参数化另建雅可比。
+    """
     p = np.asarray(covariance, dtype=float)
     if p.shape != (3, 3) or not np.all(np.isfinite(p)) or not np.allclose(p, p.T):
         raise ValueError("Covariance must be finite, symmetric and 3x3")
@@ -38,22 +46,34 @@ def convert_position_covariance(covariance):
 
 @dataclass(frozen=True)
 class ClockSample:
-    local_send_ns: int
-    remote_reply_ns: int
-    local_receive_ns: int
+    """@brief 一次配对时钟往返样本，三个时间戳均为各自时钟的 ns。
+    """
+    local_send_ns: int  # 本地发送，ns。
+    remote_reply_ns: int  # 远端响应，ns，属于远端时钟。
+    local_receive_ns: int  # 本地接收，ns。
 
     @property
     def roundtrip_ns(self):
+        """@brief 本地接收减发送得到往返时长，ns。
+        """
         return self.local_receive_ns - self.local_send_ns
 
     @property
     def offset_ns(self):
         # remote clock = local clock + offset; response processing is part of RTT.
+        """@brief 按往返对称假设返回远端相对本地时钟的偏移，ns。
+        @note 远端=本地+offset；响应处理时间包含在 RTT 中。
+        """
         return self.remote_reply_ns - (self.local_send_ns + self.local_receive_ns) / 2
 
 
 def clock_offset(samples, maximum_rtt_ms=20):
-    """Estimate clock offset from minimum RTT assuming symmetric path delays."""
+    """@brief 在 RTT 合格的样本中取最小 RTT，估算时钟偏移与半 RTT 预算。
+    @param samples ClockSample 序列。
+    @param maximum_rtt_ms 最大接收 RTT，ms。
+    @return offset_ns、rtt_ns、uncertainty_bound_ns 和 accepted；无合格样本抛 ValueError。
+    @note 依赖近似对称传输；半 RTT 是误差预算，不能直接当高斯标准差。
+    """
     accepted = [s for s in samples if 0 <= s.roundtrip_ns <= maximum_rtt_ms * 1e6]
     if not accepted:
         raise ValueError("No valid clock sample within RTT limit")
@@ -77,7 +97,17 @@ def admit_estimate(
     clock_uncertainty_us,
     maximum_age_us=150000,
 ):
-    """Check timestamp, epoch, covariance and geometry before admitting an estimate."""
+    """@brief 检查时间、重置代次、协方差与几何可观测性后决定准入。
+    @param now_us 当前共同时间基准，µs。
+    @param capture_us 映射至同一基准的采样时间，µs。
+    @param epoch 当前时钟或估计器代次。
+    @param expected_epoch 预期代次。
+    @param covariance 三维位置协方差。
+    @param observable 外部几何可观测性判断。
+    @param clock_uncertainty_us 时钟不确定度预算，µs，允许 0～5000。
+    @param maximum_age_us 最大数据年龄，µs。
+    @return (是否准入,原因字符串)；拒绝未来时间、过期或零方差声明。
+    """
     values = [now_us, capture_us, clock_uncertainty_us, maximum_age_us]
     if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
         return False, "nonfinite_time"
@@ -109,12 +139,18 @@ DEFAULT_CONFIG = {
 
 
 def run_integration(config=None):
+    """@brief 计算匀速平移与恒角速度造成的时间错配，并演示准入案例。
+    @param config speed_mps、yaw_rate_deg_s、range_m、delay_ms 的非负有限参数覆盖。
+    @return metrics、config、admission_cases、summary 和 assumptions。
+    @note 平移误差为 v·Δt，旋转点位误差为 2r·|sin(ωΔt/2)|；两种机制不直接相加。对时样本是合成数据。
+    """
     cfg = DEFAULT_CONFIG | (config or {})
     if any(
         not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
         for v in cfg.values()
     ):
         raise ValueError("Parameters must be nonnegative finite numbers")
+    # ms 与 °/s 换算为 s 和 rad/s，再分别求平移距离与旋转弦长。
     delay = cfg["delay_ms"] / 1000
     angle = math.radians(cfg["yaw_rate_deg_s"]) * delay
     angular_position_error = 2 * cfg["range_m"] * abs(math.sin(angle / 2))

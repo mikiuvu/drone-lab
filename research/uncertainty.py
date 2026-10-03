@@ -1,4 +1,6 @@
-"""Clock-mapping and uncertainty-propagation contracts for offline analysis."""
+"""@file uncertainty.py
+@brief 离线传播随机时间抖动、融合未知相关的位置估计，并拟合带预算的时钟映射。
+"""
 
 from dataclasses import dataclass
 import math
@@ -7,10 +9,13 @@ from .integration import ClockSample, convert_position_covariance
 
 
 def timing_position_covariance(velocity, angular_rate, lever_arm, sigma_seconds):
-    """First-order time sensitivity: dp/dt = v + omega cross r.
-
-    All vectors in one world frame; sigma_seconds is random jitter standard
-    deviation, NOT RTT/2 or an uncalibrated systematic delay bound.
+    """@brief 将随机时间抖动的一阶敏感性传播成位置协方差。
+    @param velocity 世界系线速度，m/s，三元素。
+    @param angular_rate 同一世界系角速度，rad/s，三元素。
+    @param lever_arm 同一世界系杠杆臂，m，三元素。
+    @param sigma_seconds 随机时间抖动标准差，s，非负。
+    @return (v+ω×r)(v+ω×r)ᵀ·σ²，3×3 协方差，m²。
+    @note RTT/2 或未标定固定延迟界不是随机标准差，不能直接代入。
     """
     vectors = [np.asarray(v, dtype=float) for v in (velocity, angular_rate, lever_arm)]
     if any(v.shape != (3,) or not np.all(np.isfinite(v)) for v in vectors):
@@ -22,10 +27,14 @@ def timing_position_covariance(velocity, angular_rate, lever_arm, sigma_seconds)
 
 
 def covariance_intersection(mean_a, covariance_a, mean_b, covariance_b, weight=0.5):
-    """Conservative Gaussian fusion reference for unknown cross-correlation.
-
-    Inputs must be individually consistent; CI does not fix unmodeled common bias.
-    This 3D position-only function intentionally has no attitude or epoch handling.
+    """@brief 用协方差交集在未知互相关时融合两个三维位置高斯估计。
+    @param mean_a 第一组位置均值，m。
+    @param covariance_a 第一组正定位置协方差，m²。
+    @param mean_b 第二组位置均值，m。
+    @param covariance_b 第二组正定位置协方差，m²。
+    @param weight 信息矩阵权重，范围 [0,1]。
+    @return 融合均值与协方差。
+    @note 输入估计各自须一致；该方法不修复未建模的共同偏差，也不处理姿态或 epoch。
     """
     a, b = np.asarray(mean_a, dtype=float), np.asarray(mean_b, dtype=float)
     if (
@@ -53,19 +62,28 @@ def covariance_intersection(mean_a, covariance_a, mean_b, covariance_b, weight=0
 
 @dataclass(frozen=True)
 class ClockMapping:
-    """Affine offline fit; the caller owns response pairing and reset detection."""
+    """@brief 带有效期、代次和确定性误差预算的仿射映射：remote=remote_ref+rate·(local-local_ref)。
+    @note 调用者负责往返配对及重置检测，rate 是无量纲时钟速率比。
+    """
 
-    local_reference_ns: float
-    remote_reference_ns: float
-    rate: float
-    epoch: str
-    valid_from_ns: int
-    valid_until_ns: int
-    observed_residual_bound_ns: float
-    transport_bound_ns: float
-    drift_bound_ppm: float
+    local_reference_ns: float  # 本地拟合参考时间，ns。
+    remote_reference_ns: float  # 远端拟合参考时间，ns。
+    rate: float  # 远端/本地时钟速率比，无量纲。
+    epoch: str  # 重置代次，拒绝跨代次映射。
+    valid_from_ns: int  # 本地有效期起点，ns。
+    valid_until_ns: int  # 本地有效期终点，ns。
+    observed_residual_bound_ns: float  # 最大观测残差，ns。
+    transport_bound_ns: float  # 半 RTT 传输预算，ns。
+    drift_bound_ppm: float  # 外推漂移预算，ppm。
 
     def remote_to_local(self, remote_ns, *, now_local_ns, epoch):
+        """@brief 将远端 ns 时间映射到本地，并检查代次、有效期及未来时间。
+        @param remote_ns 远端时间，ns。
+        @param now_local_ns 当前本地时间，ns。
+        @param epoch 当前代次，须匹配拟合代次。
+        @return local_ns、uncertainty_bound_ns、epoch 和预算类型；不合法输入抛 ValueError。
+        @note 预算为观测残差界+传输界+有效期起点后的漂移增长，不是置信区间。
+        """
         if epoch != self.epoch:
             raise ValueError("Clock epoch changed")
         if not all(
@@ -97,10 +115,14 @@ class ClockMapping:
 def fit_clock_mapping(
     samples, *, epoch, valid_for_s=2.0, max_rtt_ms=20.0, drift_bound_ppm=100.0
 ):
-    """Fit paired clock samples, with explicit transport and extrapolation budgets.
-
-    RTT asymmetry can bias offset and slope. Bounds are assumptions, not inferred
-    confidence intervals. Clock frequency changes require refitting/invalidation.
+    """@brief 筛选配对样本、以秒尺度最小二乘拟合时钟速率和偏移。
+    @param samples 至少三个严格递增的 ClockSample，覆盖至少 0.1 s。
+    @param epoch 非空代次标识。
+    @param valid_for_s 最后一次接收后的有效时长，s。
+    @param max_rtt_ms 最大允许 RTT，ms。
+    @param drift_bound_ppm 漂移预算，ppm，同时限制拟合速率偏差。
+    @return ClockMapping，包含最大拟合残差与最大半 RTT 的误差预算。
+    @note 时延不对称可偏置斜率和偏移；频率变化或重置后应失效并重拟合。
     """
     if not isinstance(epoch, str) or not epoch:
         raise ValueError("Nonempty epoch required")
@@ -124,6 +146,7 @@ def fit_clock_mapping(
     remote = np.array([s.remote_reply_ns for s in selected], dtype=float)
     if np.any(np.diff(mid) <= 0) or np.any(np.diff(remote) <= 0):
         raise ValueError("Clock samples must advance; reset invalidates fit")
+    # 减参考点后转换为秒，降低大纳秒时间戳对最小二乘数值精度的影响。
     origin = mid[0]
     remote_origin = remote[0]
     x = (mid - origin) / 1e9

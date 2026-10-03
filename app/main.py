@@ -1,4 +1,7 @@
-"""Desktop entry point: python -m app.main (or the supplied Windows shortcut)."""
+"""@file main.py
+@brief Drone Lab 桌面入口与实时采集、录制、回放的界面调度。
+通过 python -m app.main 启动。LabWindow 管理数据源状态，后台线程负责 I/O，Qt 主线程负责控件更新。
+"""
 
 import csv
 import json
@@ -52,6 +55,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def button(text, fn):
+    """@brief 创建统一尺寸按钮并连接 clicked 信号。
+    @param text 按钮文字。
+    @param fn 点击回调，由 Qt 调度执行。
+    @return 已连接信号的 QPushButton。
+    """
     result = QPushButton(text)
     result.clicked.connect(fn)
     result.setMinimumHeight(34)
@@ -59,17 +67,23 @@ def button(text, fn):
 
 
 class LabWindow(QMainWindow):
+    """@brief 管理采集状态、显示面板与日志生命周期的主窗口。
+    @note mode 为 idle/live/demo/replay；workers 保持线程引用直到 finished，避免运行中的线程被回收。
+    """
     def __init__(self):
+        """@brief 初始化面板和状态，并启动 100 ms 界面定时器。
+        @note replay_time 是日志相对秒数，replay_index 指向下一条未播放记录；previous_tick 用于测量真实刷新间隔。
+        """
         super().__init__()
         self.setWindowTitle("Drone Lab · DM-FC01 / LicheeRV Nano / 双 VL53L5CX")
         self.resize(1250, 900)
-        self.workers = {}
+        self.workers = {}  # 数据源名到线程对象；stop 后仍保留，直到 finished 回调清理。
         self.recorder = None
         self.mode = "idle"
         self.demo_sequence = 0
         self.replay = []
-        self.replay_index = 0
-        self.replay_time = 0.0
+        self.replay_index = 0  # 下一条未分发的回放记录下标。
+        self.replay_time = 0.0  # 相对首帧的播放时间，单位 s。
         self.replay_playing = False
         self.previous_tick = time.monotonic()
         self.attitude_time = None
@@ -95,6 +109,8 @@ class LabWindow(QMainWindow):
         )
 
     def make_live(self):
+        """@brief 建立实时页，将数据源操作、测距热图、姿态和趋势控件连接起来。
+        """
         page = QWidget()
         outer = QVBoxLayout(page)
         row = QHBoxLayout()
@@ -168,6 +184,8 @@ class LabWindow(QMainWindow):
         self.tabs.addTab(page, "① 实时数据")
 
     def make_nano(self):
+        """@brief 建立 SSH 与传感器配置表单；按钮将操作类型传给 start_nano。
+        """
         page = QWidget()
         outer = QVBoxLayout(page)
         intro = QLabel(
@@ -253,6 +271,8 @@ class LabWindow(QMainWindow):
         self.tabs.addTab(page, "② Nano 连接与部署")
 
     def make_replay(self):
+        """@brief 建立日志选择、播放倍率和进度条；拖动释放后才执行 seek。
+        """
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.addWidget(
@@ -294,6 +314,8 @@ class LabWindow(QMainWindow):
         self.tabs.addTab(page, "③ 日志回放")
 
     def make_tools(self):
+        """@brief 建立外部工具入口和异步编译输出区域。
+        """
         page = QWidget()
         outer = QVBoxLayout(page)
         tools = QGridLayout()
@@ -328,6 +350,8 @@ class LabWindow(QMainWindow):
         self.tabs.addTab(page, "④ 软件工具")
 
     def make_help(self):
+        """@brief 使用本地 quickstart.html 填充帮助页。
+        """
         self.help = QTextBrowser()
         self.help.setOpenExternalLinks(True)
         guide = ROOT / "docs" / "quickstart.html"
@@ -336,16 +360,23 @@ class LabWindow(QMainWindow):
         self.tabs.addTab(self.help, "⑤ 从这里开始")
 
     def log(self, text):
+        """@brief 将带本地时间的消息送到两个日志框，并短暂显示在状态栏。
+        @param text 待显示的状态文本。
+        """
         line = f"[{datetime.now():%H:%M:%S}] {text}"
         self.events.appendPlainText(line)
         self.nano_events.appendPlainText(line)
         self.statusBar().showMessage(str(text).splitlines()[0], 8000)
 
     def error(self, text):
+        """@brief 记录错误并在主线程显示警告对话框。
+        """
         self.log(text)
         QMessageBox.warning(self, "操作未完成", text)
 
     def refresh_ports(self):
+        """@brief 枚举电脑串口；显示说明文字，设备名保存在选项数据中。
+        """
         value = self.fc_port.currentData() or self.fc_port.currentText()
         self.fc_port.clear()
         for port in list_ports.comports():
@@ -354,6 +385,8 @@ class LabWindow(QMainWindow):
             self.fc_port.setCurrentText(value)
 
     def reset_views(self):
+        """@brief 清除上个数据源的统计、姿态和趋势，防止切换后混用历史。
+        """
         for card in self.cards:
             card.reset()
         self.attitude.angles = None
@@ -367,12 +400,16 @@ class LabWindow(QMainWindow):
         self.trend.update()
 
     def update_map_options(self):
+        """@brief 将旋转选项和毫米色标上限传给两幅热图，并请求重绘。
+        """
         for card in self.cards:
             card.map.flip = self.flip.isChecked()
             card.map.maximum = self.maximum.value()
             card.map.update()
 
     def start_demo(self):
+        """@brief 在设备线程全部退出后进入演示，重置录制和显示时间轴。
+        """
         if self.workers:
             self.error("请先停止真实设备连接，再开始演示。")
             return
@@ -386,6 +423,8 @@ class LabWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
 
     def start_fc(self):
+        """@brief 创建电脑直连飞控线程，并检查与 Nano 姿态来源的互斥条件。
+        """
         if "fc" in self.workers:
             return
         if "nano" in self.workers and self.nano_tty.currentText().strip():
@@ -404,6 +443,8 @@ class LabWindow(QMainWindow):
         self.attach_worker("fc", FCWorker(device, int(self.fc_baud.currentText())))
 
     def settings(self):
+        """@return SSH 地址、端口和用户名组成的字典，不包含密码。
+        """
         return dict(
             host=self.nano_host.text(),
             port=self.nano_port.value(),
@@ -411,6 +452,8 @@ class LabWindow(QMainWindow):
         )
 
     def sensor_config(self):
+        """@return 已启用传感器、Hz 帧率和可选飞控串口配置；后续由 sensor_arguments 校验。
+        """
         sensors = [
             dict(
                 bus=self.bus[i].currentText().strip(),
@@ -427,6 +470,10 @@ class LabWindow(QMainWindow):
         )
 
     def start_nano(self, action):
+        """@brief 校验连接设置并启动指定 Nano 操作。
+        @param action inspect、deploy 或 stream；只有 stream 切换到实时数据模式。
+        @note 首次密钥确认在界面弹窗中完成，再通过事件通知后台线程继续。
+        """
         if "nano" in self.workers:
             return
         if not self.nano_host.text().strip():
@@ -466,6 +513,9 @@ class LabWindow(QMainWindow):
         self.save_settings(silent=True)
 
     def nano_inspected(self, info):
+        """@brief 用 Nano 实际设备列表更新下拉框，同时保留当前输入。
+        @param info 后台 inspected 信号提供的架构和设备字典。
+        """
         for combo in self.bus:
             previous = combo.currentText()
             combo.clear()
@@ -478,25 +528,37 @@ class LabWindow(QMainWindow):
         self.nano_tty.setCurrentText(previous)
 
     def attach_worker(self, key, worker):
+        """@brief 持有线程、连接数据与结束信号，然后启动。
+        @param key 数据源键，如 fc 或 nano。
+        @param worker 尚未启动的 Worker 实例。
+        """
         self.workers[key] = worker
         worker.record.connect(self.receive)
         worker.message.connect(self.log)
         worker.failure.connect(self.error)
+        # 闭包固定这次的 key 和 worker，结束时能确认删除的仍是同一个实例。
         worker.finished.connect(lambda: self.worker_finished(key, worker))
         worker.start()
 
     def worker_finished(self, key, worker):
+        """@brief 仅移除仍对应此实例的数据源，再延迟销毁 Qt 对象。
+        @note 实例比较避免旧线程的结束回调误删后来创建的同名线程。
+        """
         if self.workers.get(key) is worker:
             self.workers.pop(key, None)
         self.log(f"{key} 操作已结束")
         worker.deleteLater()
 
     def stop_worker(self, key):
+        """@brief 请求指定数据源停止，保留引用等待 finished 清理。
+        """
         if key in self.workers:
             self.workers[key].stop()
             self.log(f"正在停止 {key}…")
 
     def stop_sources(self):
+        """@brief 进入空闲状态、请求设备退出并结束录制，保留最后画面。
+        """
         self.mode = "idle"
         self.replay_playing = False
         for worker in self.workers.values():
@@ -505,8 +567,14 @@ class LabWindow(QMainWindow):
         self.mode_label.setText("已停止 · 面板保留最后数据")
 
     def receive(self, item):
+        """@brief 实时、演示与回放共用的记录入口。
+        @param item schema=1 数据字典。
+        @note 先校验并按需录制，再按类型分发；空闲状态忽略已排队到达的记录。录制失败会停止该次数据更新。
+        """
         if self.mode == "idle":
             return
+        # 1. 显示与录制共用一次入口校验；先记录原始区域，再做显示统计，
+        #    保证无效区域和完整状态码也能用于离线检查。
         try:
             validate_record(item)
             if self.recorder:
@@ -515,6 +583,7 @@ class LabWindow(QMainWindow):
             self.stop_record()
             self.log(f"数据/录制错误：{exc}")
             return
+        # 2. 按类型分发到界面缓存。update 只请求重绘，不在此处同步执行绘图。
         if item["type"] == "tof":
             self.cards[item["sensor"]].receive(item)
             values = valid_distances(item)
@@ -536,6 +605,8 @@ class LabWindow(QMainWindow):
             )
 
     def toggle_record(self):
+        """@brief 仅在实时或演示模式创建新日志；再次点击则关闭录制。
+        """
         if self.recorder:
             self.stop_record()
             return
@@ -553,6 +624,8 @@ class LabWindow(QMainWindow):
         self.log(f"正在录制：{path.name}")
 
     def stop_record(self):
+        """@brief 先解除窗口的录制引用再关闭文件，后续记录不再写入。
+        """
         if self.recorder:
             recorder = self.recorder
             self.recorder = None
@@ -561,6 +634,8 @@ class LabWindow(QMainWindow):
         self.record_button.setText("● 开始录制")
 
     def choose_replay(self):
+        """@brief 从文件对话框取得 JSONL 路径并交给 open_replay。
+        """
         path, _ = QFileDialog.getOpenFileName(
             self, "选择日志", str(ROOT / "logs"), "JSONL (*.jsonl)"
         )
@@ -568,6 +643,10 @@ class LabWindow(QMainWindow):
             self.open_replay(path)
 
     def open_replay(self, path):
+        """@brief 完整校验日志后切换为回放，加载失败保留原状态。
+        @param path JSONL 日志路径。
+        @note 回放保留文件顺序，以电脑录制时间确定间隔；不直接对齐不同设备的启动时钟。
+        """
         if self.workers:
             self.error("请先停止设备连接，再打开回放。")
             return
@@ -592,6 +671,8 @@ class LabWindow(QMainWindow):
         self.log("日志已加载，点击播放。")
 
     def play_pause(self):
+        """@brief 切换回放播放状态；到末尾后再次播放会从头重置。
+        """
         if not self.replay or self.mode != "replay":
             return
         if self.replay_index >= len(self.replay):
@@ -601,6 +682,9 @@ class LabWindow(QMainWindow):
         self.replay_playing = not self.replay_playing
 
     def seek(self):
+        """@brief 将 0–1000 进度映射到日志秒数，并恢复目标时刻之前各类型的最新帧。
+        @note 按 (type, sensor) 保留最后一条；重建瞬时画面而不补画全部趋势历史。
+        """
         if not self.replay or self.mode != "replay":
             return
         target = self.slider.value() / 1000 * self.replay[-1][0]
@@ -608,6 +692,7 @@ class LabWindow(QMainWindow):
         self.replay_index = 0
         latest = {}
         self.reset_views()
+        # 1. 从头扫描到目标秒数，按类型和传感器覆盖缓存，留下各路最近的一帧。
         while (
             self.replay_index < len(self.replay)
             and self.replay[self.replay_index][0] <= target
@@ -615,10 +700,14 @@ class LabWindow(QMainWindow):
             item = self.replay[self.replay_index][1]
             latest[(item["type"], item.get("sensor"))] = item
             self.replay_index += 1
+        # 2. 通过统一入口恢复画面；索引已指向目标后的首条，继续播放不重复分发。
         for item in latest.values():
             self.receive(item)
 
     def export_csv(self):
+        """@brief 将已加载日志的每个 ToF 区域展开为 CSV 一行。
+        @note 时间采用归零后的回放秒数；UTF-8 BOM 便于表格软件识别中文，原始无效距离也保留。
+        """
         if not self.replay:
             self.error("请先打开一个日志。")
             return
@@ -662,6 +751,9 @@ class LabWindow(QMainWindow):
             self.error(str(exc))
 
     def tick(self):
+        """@brief 推进演示或回放，并检查实时数据是否过期。
+        @note 使用实际单调时钟间隔乘播放倍率；一次补发所有到期记录，避免界面调度延迟造成漏帧。
+        """
         now = time.monotonic()
         dt = now - self.previous_tick
         self.previous_tick = now
@@ -670,13 +762,16 @@ class LabWindow(QMainWindow):
                 self.receive(item)
             self.demo_sequence += 1
         elif self.mode == "replay" and self.replay_playing:
+            # 1. Qt 定时器会受界面忙碌影响，所以用两次回调的实际秒差推进时间。
             self.replay_time += dt * self.speed.value()
+            # 2. 用 while 补齐本次时间窗中的所有帧，倍率加快也不会只显示一条。
             while (
                 self.replay_index < len(self.replay)
                 and self.replay[self.replay_index][0] <= self.replay_time
             ):
                 self.receive(self.replay[self.replay_index][1])
                 self.replay_index += 1
+            # 3. 显示进度限制在末尾；全部帧发完后暂停，保留最后画面。
             end = self.replay[-1][0]
             self.slider.setValue(
                 int(min(1, self.replay_time / end) * 1000) if end else 1000
@@ -693,6 +788,10 @@ class LabWindow(QMainWindow):
                 self.attitude_status.setText("姿态数据已过期")
 
     def save_settings(self, checked=False, silent=False):
+        """@brief 将连接和采集表单保存为 config/local.json。
+        @param checked 接收按钮 clicked 的布尔参数，本方法不使用。
+        @param silent 为真时省略成功日志。
+        """
         value = {
             "ssh": self.settings(),
             "sensors": [
@@ -718,6 +817,8 @@ class LabWindow(QMainWindow):
             self.log("配置已保存（不含密码）")
 
     def load_settings(self):
+        """@brief 从本地配置恢复表单；缺失或解析失败时保留控件当前值。
+        """
         path = ROOT / "config" / "local.json"
         if not path.exists():
             return
@@ -739,15 +840,21 @@ class LabWindow(QMainWindow):
             pass
 
     def open_path(self, path):
+        """@brief 检查路径存在后交给系统关联程序打开。
+        """
         if not Path(path).exists():
             self.error(f"文件不存在：{path}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def launch_qgc(self):
+        """@brief 打开项目附带的 QGroundControl。
+        """
         self.open_path(ROOT / "tools" / "QGroundControl" / "bin" / "QGroundControl.exe")
 
     def launch_moba(self):
+        """@brief 查找并打开项目工具目录中的 MobaXterm。
+        """
         paths = list((ROOT / "tools" / "MobaXterm").glob("MobaXterm*.exe"))
         if paths:
             self.open_path(paths[0])
@@ -755,6 +862,8 @@ class LabWindow(QMainWindow):
             self.error("MobaXterm 可执行文件缺失")
 
     def launch_rufus(self):
+        """@brief 经界面确认后打开写卡工具，后续磁盘选择由该工具处理。
+        """
         answer = QMessageBox.information(
             self,
             "写卡工具",
@@ -765,6 +874,8 @@ class LabWindow(QMainWindow):
             self.open_path(ROOT / "tools" / "rufus-4.15p.exe")
 
     def launch_code(self):
+        """@brief 使用本机 VS Code 打开项目；程序缺失时打开项目目录。
+        """
         exe = (
             Path(os.environ["LOCALAPPDATA"])
             / "Programs"
@@ -777,6 +888,9 @@ class LabWindow(QMainWindow):
             self.open_path(ROOT)
 
     def build_nano(self):
+        """@brief 通过 QProcess 异步编译 Nano，并将合并输出送到工具日志。
+        @note process 引用同时作为并发编译门控；结束或启动错误回调释放该引用。
+        """
         if self.build_process is not None:
             return
         self.build_process = QProcess(self)
@@ -793,11 +907,18 @@ class LabWindow(QMainWindow):
         )
 
         def done(code, status):
+            """@brief 编译进程退出后显示退出码，解除并发编译门控。
+            @param code 子进程退出码。
+            @param status Qt 退出状态，由信号提供，此处不使用。
+            """
             self.tool_log.appendPlainText(f"编译结束，退出码 {code}")
             self.build_process.deleteLater()
             self.build_process = None
 
         def failed(error):
+            """@brief 接收 QProcess 错误并释放编译进程引用。
+            @param error Qt 进程错误枚举。
+            """
             self.tool_log.appendPlainText(f"无法启动编译：{error}")
             self.build_process.deleteLater()
             self.build_process = None
@@ -810,6 +931,9 @@ class LabWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
+        """@brief 在后台任务结束后关闭窗口、日志和飞行曲线对话框。
+        @param event Qt 关闭事件；仍有计算、连接或编译时忽略本次关闭。
+        """
         if self.research_panel.worker is not None:
             self.log("离线仿真仍在计算，请待结果保存后关闭。")
             event.ignore()
@@ -831,6 +955,9 @@ class LabWindow(QMainWindow):
 
 
 def main():
+    """@brief 创建 QApplication、配置外观并进入 Qt 事件循环。
+    @note --gazebo 仅选择启动时显示的页签。
+    """
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))

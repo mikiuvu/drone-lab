@@ -1,3 +1,8 @@
+/**
+ * @file main.c
+ * @brief Nano 实板采集入口：轮询最多两颗 VL53L5CX，接收 MAVLink，并输出逐行 JSON。
+ * @note stdout 只输出 JSONL，诊断写 stderr；传感器配置和测距会改变硬件状态，串口只接收。
+ */
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif
@@ -21,13 +26,18 @@
 #include <termios.h>
 #include <unistd.h>
 
+// 运行期故障分别表示传感器、串口和输出错误；初始化失败还可返回 1。
 enum { EXIT_SENSOR=4, EXIT_SERIAL=5, EXIT_OUTPUT=6 };
+// 信号处理函数只改变 sig_atomic_t 标志，资源清理由主循环统一执行。
 static volatile sig_atomic_t running=1;
 static void interrupted(int number) {(void)number;running=0;}
-/* One complete JSON line per write. A full pipe is a visible collector failure. */
+/* 先组装完整 JSON 行再一次写出；消费者过慢时报告失败，避免丢帧或写出半行后继续。 */
 static char record[4096];
 static size_t record_size,record_limit=sizeof(record);
 static bool record_valid;
+/** @brief 将格式化片段追加到当前记录；容量不足后锁存无效状态，后续追加不再写入。
+ * @param format printf 格式及随后对应的可变参数，文本属于同一条记录。
+ */
 static void append_record(const char *format,...) {
     if(!record_valid)return;
     va_list args;va_start(args,format);
@@ -36,10 +46,17 @@ static void append_record(const char *format,...) {
     if(size<0 || (size_t)size>=sizeof(record)-record_size){record_valid=false;return;}
     record_size+=(size_t)size;
 }
+/** @brief 开始一条 schema=1、source=NANO 的记录，重置长度与有效标志。
+ * @param kind 内部固定的记录类型字符串，须适合直接放入 JSON 字符串。
+ */
 static void begin_record(const char *kind) {
     record_size=0;record_valid=true;
     append_record("{\"schema\":1,\"type\":\"%s\",\"source\":\"NANO\",",kind);
 }
+/** @brief 一次写出已组装记录；由调用方追加 JSON 结束符及换行。
+ * @return 0 完整写出，-1 容量超限、短写或系统调用失败，errno 标明原因。
+ * @note 不重试短写；管道中小于等于 PIPE_BUF 的非阻塞写避免记录交错。
+ */
 static int finish_record(void) {
     if(!record_valid || record_size>record_limit){errno=EMSGSIZE;return -1;}
     ssize_t size;
@@ -48,6 +65,10 @@ static int finish_record(void) {
     if((size_t)size!=record_size){errno=EIO;return -1;}
     return 0;
 }
+/** @brief 保存 stdout 标志，按管道原子写上限限制记录大小，并启用非阻塞输出。
+ * @param original_flags 输出原有标志，供退出时恢复。
+ * @return 0 成功，-1 检查或配置失败。
+ */
 static int prepare_output(int *original_flags) {
     struct stat info;
     *original_flags=fcntl(STDOUT_FILENO,F_GETFL);
@@ -59,13 +80,21 @@ static int prepare_output(int *original_flags) {
     }
     return fcntl(STDOUT_FILENO,F_SETFL,*original_flags|O_NONBLOCK);
 }
+/** @brief 单颗传感器的 ULD 状态和采集时序，设备之间不共享帧缓存。 */
 typedef struct {
-    VL53L5CX_Configuration device;
-    VL53L5CX_ResultsData result;
-    char bus[128];unsigned address;
-    uint64_t sequence,last_frame,poll_start,read_start,read_end;
-    bool started;
+    VL53L5CX_Configuration device; // ULD 配置，内嵌 Linux 平台句柄。
+    VL53L5CX_ResultsData result; // 最近一次成功读取的 64 区结果。
+    char bus[128];unsigned address; // 设备路径与 CLI 的 7 位 I²C 地址。
+    uint64_t sequence,last_frame,poll_start,read_start,read_end; // sequence 为输出帧序号，其余为 Nano 单调微秒。
+    bool started; // 已尝试启动测距，退出时应尝试停止，即使启动调用报错。
 } Sensor;
+/** @brief 将 ULD 的 64 区结果及采集诊断编码成一条 tof JSONL。
+ * @param s 已读取有效结果的设备状态，成功输出后 sequence 加一。
+ * @param number 传感器索引，从 0 开始。
+ * @param ready_time 发现数据就绪后的 Nano 单调微秒，不是曝光时间。
+ * @return 0 完整输出，-1 输出失败。
+ * @note 数组保留原区序；距离和 sigma 单位 mm，温度 °C，信号和环境光 kcps/SPAD。
+ */
 static int emit_tof(Sensor *s,int number,uint64_t ready_time) {
     VL53L5CX_ResultsData *r=&s->result;begin_record("tof");
     append_record("\"sensor\":%d,\"sequence\":%llu,\"sensor_streamcount\":%u,"
@@ -88,15 +117,26 @@ static int emit_tof(Sensor *s,int number,uint64_t ready_time) {
     if(finish_record())return -1;
     s->sequence++;return 0;
 }
+/** @brief 严格解析无符号整数，拒绝前导符号、空白、尾部字符与溢出。
+ * @param text 输入字符串。
+ * @param base 十进制或十六进制基数；地址允许 0x 前缀。
+ * @param value 成功时接收结果。
+ * @return true 解析成功，false 格式或范围错误。
+ */
 static bool parse_unsigned(const char *text,int base,unsigned *value) {
     if(!text || !*text)return false;
-    /* strtoul accepts signs and whitespace; the CLI accepts only unsigned digits. */
+    /* strtoul 本身接受符号和空白，CLI 先检查首字符以约束输入。 */
     if(!((*text>='0'&&*text<='9') || (base==16 &&
         ((*text>='a'&&*text<='f')||(*text>='A'&&*text<='F')))))return false;
     char *end;errno=0;unsigned long parsed=strtoul(text,&end,base);
     if(errno || *end || parsed>UINT_MAX)return false;
     *value=(unsigned)parsed;return true;
 }
+/** @brief 解析 /dev/i2c-N:十六进制地址，限制地址为 0x08～0x77。
+ * @param text 总线与地址字符串。
+ * @param s 成功时写入 bus 与 address，不打开设备。
+ * @return true 语法有效，false 路径、长度或地址不合法。
+ */
 static bool parse_sensor(const char *text,Sensor *s) {
     const char *colon=strchr(text,':');
     if(!colon || (size_t)(colon-text)>=sizeof(s->bus) || strncmp(text,"/dev/i2c-",9) || colon<=text+9)return false;
@@ -104,6 +144,9 @@ static bool parse_sensor(const char *text,Sensor *s) {
     if(!parse_unsigned(colon+1,16,&s->address) || s->address<8 || s->address>0x77)return false;
     memcpy(s->bus,text,(size_t)(colon-text));s->bus[colon-text]=0;return true;
 }
+/** @brief 将支持的波特率映射到 termios 常量；baud 单位 bit/s，speed 接收常量。
+ * @return true 支持该波特率，false 未支持。
+ */
 static bool serial_speed(unsigned baud,speed_t *speed) {
     switch(baud) {
         case 57600:*speed=B57600;break;case 115200:*speed=B115200;break;case 230400:*speed=B230400;break;
@@ -112,6 +155,11 @@ static bool serial_speed(unsigned baud,speed_t *speed) {
     }
     return true;
 }
+/** @brief 以只读、非阻塞方式打开 UART，配置原始数据模式并关闭硬件流控。
+ * @param path 串口设备路径。
+ * @param baud 支持的波特率，单位 bit/s。
+ * @return 非负文件描述符，由调用方关闭；-1 打开或配置失败。
+ */
 static int open_serial(const char *path,unsigned baud) {
     speed_t speed;if(!serial_speed(baud,&speed)){errno=EINVAL;return -1;}
     int fd=open(path,O_RDONLY|O_NOCTTY|O_NONBLOCK|O_CLOEXEC);if(fd<0){perror(path);return -1;}
@@ -124,7 +172,11 @@ static int open_serial(const char *path,unsigned baud) {
     return fd;
 }
 static uint64_t uart_bytes_total;
-/* Bounded drain: continuous traffic must also leave time for the two ToF sensors. */
+/** @brief 有界地接收串口并逐字节解析 MAVLink，输出姿态与心跳记录。
+ * @param fd 已配置的只读 UART 文件描述符。
+ * @return 0 本次接收正常或暂无数据，EXIT_SERIAL 串口故障，EXIT_OUTPUT 输出故障。
+ * @note 每次最多四批、每批 2048 字节，给 ToF 轮询留出执行机会；解析状态跨调用保留。
+ */
 static int poll_mavlink(int fd) {
     uint8_t bytes[2048];
     static mavlink_message_t message;static mavlink_status_t status;
@@ -147,6 +199,8 @@ static int poll_mavlink(int fd) {
             if(message.msgid==MAVLINK_MSG_ID_ATTITUDE) {
                 mavlink_attitude_t a;mavlink_msg_attitude_decode(&message,&a);
                 if(!isfinite(a.roll)||!isfinite(a.pitch)||!isfinite(a.yaw))continue;
+                // 飞控启动毫秒转为 source_time_us；Nano 接收时间单独保存，两个时钟不能直接相减。
+                // 姿态从 MAVLink 弧度换成度；不做坐标变换或生成控制指令。
                 begin_record("attitude");
                 append_record("\"system_id\":%u,\"component_id\":%u,\"source_time_us\":%llu,"
                        "\"nano_rx_monotonic_us\":%llu,\"time_basis\":\"fc_boot\","
@@ -172,6 +226,12 @@ static void usage(void) {
     puts("drone-nano --sensor /dev/i2c-N:0x29 [--sensor /dev/i2c-M:0x29] [--hz 10] [--mavlink /dev/ttyS1 --baud 115200]");
     puts("Addresses are 7-bit. Same bus/address pairs are rejected. Default 8x8 / 10 Hz. No flight commands are sent.");
 }
+/** @brief 解析参数、锁定单实例、初始化设备，并轮询采集直到停止或故障。
+ * @param argc 参数数量。
+ * @param argv 参数数组；至少指定一个 --sensor，可选第二颗与接收串口。
+ * @return 0 正常结束；1 初始化失败，2 参数错误，3 锁失败，4/5/6 设备/串口/输出故障。
+ * @note 默认 8×8、10 Hz；两颗传感器的总线和地址组合须不同，本入口不分配新 I²C 地址。
+ */
 int main(int argc,char **argv) {
     Sensor sensors[2]={0};int count=0,result=1,serial_fd=-1,output_flags=-1;
     unsigned hz=10,baud=115200;const char *serial_path=NULL;speed_t speed;
@@ -195,10 +255,12 @@ int main(int argc,char **argv) {
     }
     struct sigaction action={0};action.sa_handler=interrupted;sigemptyset(&action.sa_mask);
     if(sigaction(SIGINT,&action,NULL)||sigaction(SIGTERM,&action,NULL)||sigaction(SIGPIPE,&action,NULL))return 1;
+    // 1. 单实例锁避免两个进程同时初始化传感器；输出背压作为故障处理。
     int lock=open("/tmp/drone-nano.lock",O_CREAT|O_RDWR|O_CLOEXEC,0600);
     if(lock<0||flock(lock,LOCK_EX|LOCK_NB)){fprintf(stderr,"Another collector is running (or lock unavailable)\n");if(lock>=0)close(lock);return 3;}
     if(prepare_output(&output_flags)){perror("stdout configure");result=EXIT_OUTPUT;goto cleanup;}
     if(serial_path){serial_fd=open_serial(serial_path,baud);if(serial_fd<0){result=EXIT_SERIAL;goto cleanup;}}
+    // 2. 逐颗探测、下载 ST 固件、设置分辨率与频率，每颗初始化期限为 30 s。
     for(int n=0;n<count && running;n++) {
         Sensor *s=&sensors[n];VL53L5CX_Platform *p=&s->device.platform;
         p->running=&running;p->deadline_us=monotonic_us()+30000000ULL;
@@ -211,15 +273,17 @@ int main(int argc,char **argv) {
            !running||vl53l5cx_set_ranging_frequency_hz(&s->device,(uint8_t)hz)||!running) {
             fprintf(stderr,"Sensor %d initialization failed\n",n+1);goto cleanup;
         }
-        /* Start can reach hardware before reporting failure; cleanup must try stop. */
+        /* 启动命令可能已到达硬件后才报错，先标记以确保清理时尝试停止。 */
         s->started=true;
         if(vl53l5cx_start_ranging(&s->device)||!running){fprintf(stderr,"Sensor %d ranging start failed\n",n+1);goto cleanup;}
         p->deadline_us=0;
     }
     if(!running)goto cleanup;
-    /* Sensor 1 must not time out just because sensor 2 firmware loading took time. */
+    /* 两颗全部初始化后再启动失帧计时，避免第二颗固件下载导致第一颗误超时。 */
     for(int n=0;n<count;n++)sensors[n].last_frame=monotonic_us();
     fprintf(stderr,"Capture ready; polling timestamps are not exposure timestamps. UART is receive-only.\n");result=0;
+    // 3. 就绪轮询后读取整帧，记录轮询、读取起止时间；连续 5 s 无新帧即退出。
+    // 两颗顺序读取，不假定同步曝光；2 ms 等待只是轮询间隔，不是测距周期。
     while(running) {
         if(serial_fd>=0 && (result=poll_mavlink(serial_fd)))goto stream_failure;
         for(int n=0;n<count && running;n++) {
@@ -242,10 +306,11 @@ int main(int argc,char **argv) {
 stream_failure:
     perror(result==EXIT_SERIAL?"UART receive failed":"JSON output failed (slow/disconnected consumer or partial write)");
 cleanup:
+    // 4. 无论正常停止还是故障，都停止已尝试启动的设备并关闭句柄。
     for(int n=0;n<count;n++) {
         VL53L5CX_Platform *p=&sensors[n].device.platform;
         if(sensors[n].started) {
-            /* Cleanup has its own budget and ignores the acquisition stop flag. */
+            /* 清理使用独立 250 ms 期限，解除采集取消标志与旧错误以便发出停止命令。 */
             p->running=NULL;p->io_errno=0;p->deadline_us=monotonic_us()+250000ULL;
             if(vl53l5cx_stop_ranging(&sensors[n].device)||p->io_errno) {
                 fprintf(stderr,"Sensor %d stop failed; hardware state unconfirmed\n",n+1);
