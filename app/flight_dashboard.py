@@ -41,7 +41,7 @@ PANELS = [
     ("速度", "m/s"),
     ("水平定位误差", "m"),
     ("航向", "°"),
-    ("定位置信度", "0–1"),
+    ("XY 协方差评分", "exp(-0.5·trace P)"),
 ]
 
 
@@ -452,7 +452,7 @@ class FlightDashboard(QDialog):
 
     def _draw(self):
         """@brief 从快照重建六幅曲线、有效性泳道、任务阶段条和游标标记。
-        @note 估计列依次为时间 s、XYZ m、VXYZ m/s、航向 rad、置信度及两个有效标志。真值列为时间、XYZ、航向。
+        @note 估计列依次为时间 s、XYZ m、VXYZ m/s、航向 rad、XY 协方差评分及两个有效标志。真值列为时间、XYZ、航向。
         @note 使用 constrained layout 自动排布；机号颜色由全局图例统一说明，各子图不再各画一份，
         否则六份图例会互相挤压并遮住曲线。
         """

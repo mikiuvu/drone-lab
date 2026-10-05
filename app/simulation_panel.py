@@ -548,7 +548,7 @@ class GazeboPanel(QWidget):
         self.team_line.setProperty("role", "sectionTitle")
         self.team_line.setWordWrap(True)
         metrics_layout.addWidget(self.team_line)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         # 列宽按内容自适应而不是等分：等分会在窗口变窄时把表头截断成「均方根 /」这样的残句。
         self.table.setHorizontalHeaderLabels(
             [
@@ -556,14 +556,15 @@ class GazeboPanel(QWidget):
                 "状态",
                 "XY 均方根 / m",
                 "最大误差 / m",
-                "有效",
-                "光流",
-                "置信度",
-                "定位模式",
+                "XY 有效",
+                "光流有效",
+                "协方差评分",
+                "XY 不确定度 / m",
+                "定位来源",
             ]
         )
         self.table.setToolTip(
-            "XY 均方根与最大误差单位为 m；有效、光流为有效样本比例；置信度取 0–1。"
+            "XY 均方根与最大误差单位为 m；XY 有效、光流有效、协方差评分和定位来源取最新记录；协方差评分为 exp(-0.5·(Pxx+Pyy))，不是概率；XY 无效时不显示评分和不确定度。"
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -572,7 +573,7 @@ class GazeboPanel(QWidget):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         # 最后一列吸收剩余宽度，表格右侧不会留下一条突兀的空白。
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         metrics_layout.addWidget(self.table, 1)
         self.cards = QPlainTextEdit()
         self.cards.setReadOnly(True)
@@ -921,26 +922,31 @@ class GazeboPanel(QWidget):
         self.table.setRowCount(len(vehicles))
         t = theme.tokens(self.dark)
 
-        def pct(value):
-            """@brief 把有效比例转成百分数；None 表示无样本。"""
-            return "—" if value is None else f"{value * 100:.0f}%"
-
         def number(value, digits=2):
             """@brief 格式化可缺失的浮点数。"""
             return "—" if value is None else f"{value:.{digits}f}"
 
         for row, vehicle in enumerate(vehicles):
-            validity = vehicle["validity"]
+            latest = vehicle.get("latest", {})
             label, tone = STATUS_LABELS.get(vehicle["status"], (vehicle["status"], ""))
+
+            def latest_flag(value):
+                """@brief 显示最新有效位；缺少记录使用占位符。"""
+                return "有效" if value is True else "无效" if value is False else "—"
+
+            xy_valid = latest.get("xy_valid")
+            score = latest.get("position_confidence") if xy_valid is True else None
+            uncertainty = latest.get("xy_uncertainty_m") if xy_valid is True else None
             cells = [
                 f"机 {vehicle['vehicle']}",
                 label,
                 number(vehicle["rmse_m"]),
                 number(vehicle["max_error_m"]),
-                pct(validity["valid"]),
-                pct(vehicle["flow_validity"]),
-                number(vehicle["position_confidence"]),
-                vehicle["localization_mode"] or "—",
+                latest_flag(xy_valid),
+                latest_flag(latest.get("flow_valid")),
+                number(score),
+                number(uncertainty),
+                latest.get("localization_mode") or "—",
             ]
             for column, text in enumerate(cells):
                 item = QTableWidgetItem(text)
