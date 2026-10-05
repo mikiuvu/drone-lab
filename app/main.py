@@ -121,6 +121,10 @@ class LabWindow(QMainWindow):
         self.previous_tick = time.monotonic()
         self.attitude_time = None
         self.build_process = None
+        self._close_pending = False
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self.close)
         self.dark = self._system_dark()
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -542,19 +546,20 @@ class LabWindow(QMainWindow):
             self.help.setSource(QUrl.fromLocalFile(str(guide)))
         self.tabs.addTab(self.help, "⑤ 从这里开始")
 
-    def log(self, text):
-        """@brief 将带本地时间的消息送到两个日志框，并短暂显示在状态栏。
+    def log(self, text, source="live"):
+        """@brief 按来源写入日志框，并短暂显示在状态栏。
         @param text 待显示的状态文本。
+        @param source nano 写 Nano 操作日志；其他来源写实时事件日志。
         """
         line = f"[{datetime.now():%H:%M:%S}] {text}"
-        self.events.appendPlainText(line)
-        self.nano_events.appendPlainText(line)
-        self.statusBar().showMessage(str(text).splitlines()[0], 8000)
+        target = self.nano_events if source == "nano" else self.events
+        target.appendPlainText(line)
+        self.statusBar().showMessage(str(text).partition("\n")[0], 8000)
 
-    def error(self, text):
+    def error(self, text, source="live"):
         """@brief 记录错误并在主线程显示警告对话框。
         """
-        self.log(text)
+        self.log(text, source)
         QMessageBox.warning(self, "操作未完成", text)
 
     def refresh_ports(self):
@@ -665,17 +670,17 @@ class LabWindow(QMainWindow):
         if "nano" in self.workers:
             return
         if not self.nano_host.text().strip():
-            self.error("请填写 Nano 的实际 IP 地址。")
+            self.error("请填写 Nano 的实际 IP 地址。", "nano")
             return
         config = self.sensor_config()
         if action == "stream":
             try:
                 sensor_arguments(config)
             except (ValueError, KeyError) as exc:
-                self.error(str(exc))
+                self.error(str(exc), "nano")
                 return
             if config["tty"] and "fc" in self.workers:
-                self.error("请先停止电脑直连飞控，避免混合两条姿态来源。")
+                self.error("请先停止电脑直连飞控，避免混合两条姿态来源。", "nano")
                 return
             if self.mode != "live":
                 self.stop_record()
@@ -722,8 +727,8 @@ class LabWindow(QMainWindow):
         """
         self.workers[key] = worker
         worker.record.connect(self.receive)
-        worker.message.connect(self.log)
-        worker.failure.connect(self.error)
+        worker.message.connect(lambda text, k=key: self.log(text, k))
+        worker.failure.connect(lambda text, k=key: self.error(text, k))
         # 闭包固定这次的 key 和 worker，结束时能确认删除的仍是同一个实例。
         worker.finished.connect(lambda: self.worker_finished(key, worker))
         worker.start()
@@ -734,7 +739,7 @@ class LabWindow(QMainWindow):
         """
         if self.workers.get(key) is worker:
             self.workers.pop(key, None)
-        self.log(f"{key} 操作已结束")
+        self.log(f"{key} 操作已结束", key)
         worker.deleteLater()
 
     def stop_worker(self, key):
@@ -742,7 +747,7 @@ class LabWindow(QMainWindow):
         """
         if key in self.workers:
             self.workers[key].stop()
-            self.log(f"正在停止 {key}…")
+            self.log(f"正在停止 {key}…", key)
 
     def stop_sources(self):
         """@brief 进入空闲状态、请求设备退出并结束录制，保留最后画面。
@@ -773,7 +778,7 @@ class LabWindow(QMainWindow):
             return
         # 2. 按类型分发到界面缓存。update 只请求重绘，不在此处同步执行绘图。
         if item["type"] == "tof":
-            self.cards[item["sensor"]].receive(item)
+            self.cards[item["sensor"]].receive(item, historical=self.mode in ("demo", "replay"))
             values = valid_distances(item)
             if values:
                 self.trend.values[item["sensor"]].append(statistics.median(values))
@@ -1022,7 +1027,7 @@ class LabWindow(QMainWindow):
             self.error(str(exc))
             return
         if not silent:
-            self.log("配置已保存（不含密码）")
+            self.log("配置已保存（不含密码）", "nano")
 
     def load_settings(self):
         """@brief 从本地配置恢复表单和外观；缺失或解析失败时保留控件当前值。
@@ -1148,18 +1153,24 @@ class LabWindow(QMainWindow):
             self.log("离线仿真仍在计算，请待结果保存后关闭。")
             event.ignore()
             return
-        if self.workers:
-            for worker in self.workers.values():
-                worker.stop()
-            self.log("正在关闭连接，操作结束后请再次关闭窗口。")
-            event.ignore()
-            return
         if self.build_process is not None:
             self.error("编译仍在运行，请等待结束后关闭。")
             event.ignore()
             return
+        if not self._close_pending:
+            self._close_pending = True
+            self.tabs.setEnabled(False)
+            self.stop_sources()
+            self.timer.stop()
+        # 关闭请求保持 Qt 事件循环运转；完成回调仍可安全访问主窗口及子控件。
+        ready = self.gazebo_panel.shutdown()
+        if self.workers or not ready:
+            self.statusBar().showMessage("正在关闭连接与日志读取…")
+            self._close_timer.start(100)
+            event.ignore()
+            return
+        self._close_timer.stop()
         self.stop_record()
-        self.gazebo_panel.close_flight_dashboard()
         self.save_settings(silent=True)
         event.accept()
 

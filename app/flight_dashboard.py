@@ -12,7 +12,6 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-from matplotlib.text import Text
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import theme
+from app.flight_plot_data import LatestSnapshot, prepare_plot, smooth
 from simulation.flight_data import FlightHistory, aligned_samples, export_csv
 
 # 阶段中文名与配色由 app.theme 提供，通过同名常量供外部读取。
@@ -43,24 +43,6 @@ PANELS = [
     ("航向", "°"),
     ("定位置信度", "0–1"),
 ]
-
-
-def smooth(values, window):
-    """@brief 对含 NaN 的序列做滑动平均，NaN 不参与均值也不被填平。
-    @param values 一维浮点数组，允许含 NaN。
-    @param window 窗口长度，单位采样点；小于 2 时原样返回。
-    @return 与输入等长的新数组；窗口内全为 NaN 的位置保持 NaN。
-    @note 用「求和 ÷ 有效个数」而不是 np.nanmean：后者在整窗都是 NaN 时会发出
-    RuntimeWarning 并返回 NaN，在每帧重绘的路径上会刷满日志。
-    """
-    if window < 2 or len(values) == 0:
-        return values
-    padded = np.concatenate([np.full(window - 1, np.nan), values])
-    stacked = np.lib.stride_tricks.sliding_window_view(padded, window)
-    present = ~np.isnan(stacked)
-    count = present.sum(axis=1)
-    total = np.where(present, stacked, 0.0).sum(axis=1)
-    return np.where(count > 0, total / np.maximum(count, 1), np.nan)
 
 
 class ResponsiveCanvas(FigureCanvasQTAgg):
@@ -79,11 +61,15 @@ class ResponsiveCanvas(FigureCanvasQTAgg):
             dpi = self.figure.get_dpi()
             self.figure.set_size_inches(width / dpi, height / dpi, forward=False)
 
+    def draw(self):
+        """@brief 延迟绘制时重新应用主题，确保字体回退也使用中文字体配置。"""
+        with theme.mpl_context(getattr(self, "dark", False)):
+            super().draw()
+
 
 class FlightLoader(QThread):
-    """@brief 持续读取飞行日志的后台线程，向界面发送独立历史快照。
+    """@brief 持续读取日志并准备绘图数据，通过单槽缓存交给界面。
     """
-    loaded = Signal(object)
     failed = Signal(str)
 
     def __init__(self, folder, parent=None):
@@ -92,6 +78,7 @@ class FlightLoader(QThread):
         """
         super().__init__(parent)
         self.folder = folder
+        self.latest = LatestSnapshot()
 
     def run(self):
         """@brief 分批追赶历史并继续跟随文件追加。
@@ -100,14 +87,22 @@ class FlightLoader(QThread):
         try:
             history = FlightHistory(self.folder)
             last_emit = 0.0
+            pending = False
             while not self.isInterruptionRequested():
                 # 增量读取与快照发送分别节流：历史追赶保持吞吐，界面减少重绘次数；
                 # 快照与后续累积的数据分离，工作线程继续读取时不改界面正在使用的数据。
-                changed = history.poll(rounds=2)
+                pending = history.poll(rounds=2) or pending
                 now = time.monotonic()
-                if changed and (now - last_emit > 0.7 or not history.backlog):
-                    self.loaded.emit(history.snapshot())
-                    last_emit = now
+                if self.isInterruptionRequested():
+                    break
+                if pending and (now - last_emit > 0.7 or not history.backlog):
+                    snapshot = history.snapshot()
+                    prepared = prepare_plot(snapshot, self.isInterruptionRequested)
+                    if prepared is None or self.isInterruptionRequested():
+                        break
+                    self.latest.publish((snapshot, prepared))
+                    pending = False
+                    last_emit = time.monotonic()
                 self.msleep(5 if history.backlog else 350)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self.failed.emit(str(exc))
@@ -117,6 +112,8 @@ class FlightDashboard(QDialog):
     """@brief 用同一仿真时间游标关联轨迹、高度、速度、误差、有效性与任务阶段。
     @note snapshot 是后台数据快照；plot_data 是本次绘图缓存，cursor 为仿真秒数。控件与 Matplotlib 操作在界面线程执行。
     """
+    shutdown_complete = Signal()
+
     def __init__(self, folder=None, parent=None):
         """@param folder 可选运行目录，提供时立即开始读取。
         @param parent 所属窗口；对话框关闭后由 Qt 删除。
@@ -126,7 +123,14 @@ class FlightDashboard(QDialog):
         self.resize(1460, 980)
         self.setMinimumSize(1000, 720)
         self.snapshot = None
+        self.prepared = None
         self.worker = None
+        # 换目录时只保留最后一次选择；旧线程收到 finished 后才启动新读取器。
+        self._stopping_worker = None
+        self._pending_folder = None
+        self._closing = False
+        self._shutdown_notified = False
+        self._dialog_result = QDialog.DialogCode.Rejected
         self.cursor = 0.0
         self.plot_data = {}  # 机号 -> (估计数组, 真值数组, 对齐误差 m, 速度模 m/s)。
         self.cursor_lines = []
@@ -225,6 +229,11 @@ class FlightDashboard(QDialog):
         self.player = QTimer(self)
         self.player.setInterval(40)
         self.player.timeout.connect(self.advance_playback)
+        # 单次定时器在消费结束后重新计时，绘制较慢时也不会积压刷新请求。
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self._consume_latest)
+        self.refresh_timer.start(1000)
         self.canvas.mpl_connect("button_press_event", self.plot_clicked)
         self.canvas.mpl_connect("motion_notify_event", self.hover)
         self.start_time = 0.0
@@ -237,37 +246,102 @@ class FlightDashboard(QDialog):
         @param dark 为真表示深色主题。
         """
         self.dark = dark
+        self.canvas.dark = dark
         self.figure.set_facecolor(theme.tokens(dark)["surface"])
         self.redraw()
 
     def stop_worker(self):
-        """@brief 请求读取线程中断并等待退出后删除，供换目录和关闭窗口使用。
+        """@brief 请求读取器中断并立即返回，保留线程引用直到 finished。
+        @note 中断请求不能打断正在进行的文件读取；界面线程不等待该操作。
         """
-        if self.worker:
-            self.worker.requestInterruption()
-            self.worker.wait()
-            self.worker.deleteLater()
+        self._pending_folder = None
+        if self.worker is not None:
+            self._stopping_worker = self.worker
             self.worker = None
+            self._stopping_worker.requestInterruption()
+
+    def is_busy(self):
+        """@return 有读取器尚未完成 finished 收尾时为真，父窗口应延后销毁。"""
+        return self.worker is not None or self._stopping_worker is not None
+
+    def shutdown(self):
+        """@brief 取消待加载目录、停止播放并异步结束读取，供父窗口关闭时调用。
+        @note is_busy() 为真时应保留父窗口；shutdown_complete 发出后可关闭父窗口。
+        """
+        if self._closing:
+            return
+        self._closing = True
+        self.refresh_timer.stop()
+        self.player.stop()
+        self.stop_worker()
+        if not self.is_busy():
+            self._complete_shutdown()
+
+    def _complete_shutdown(self):
+        """@brief 读取线程全部退出后关闭对话框，并通知父窗口可以销毁。"""
+        if self._shutdown_notified:
+            return
+        self._shutdown_notified = True
+        QDialog.done(self, self._dialog_result)
+        self.shutdown_complete.emit()
+
+    def _worker_finished(self):
+        """@brief 在界面线程释放已结束的读取器，继续最新目录或完成关闭。"""
+        worker = self.sender()
+        was_current = worker is self.worker
+        if worker is self.worker:
+            self.worker = None
+        elif worker is self._stopping_worker:
+            self._stopping_worker = None
+        else:
+            return
+        if was_current and not self._closing:
+            value = worker.latest.take()
+            if value is not None and self._pending_folder is None:
+                self.accept_snapshot(*value)
+        worker.deleteLater()
+        if self._closing:
+            self._complete_shutdown()
+        elif self._pending_folder is not None:
+            folder = self._pending_folder
+            self._pending_folder = None
+            self._start_worker(folder)
+
+    def _start_worker(self, folder):
+        """@brief 在旧读取器退出后启动唯一的当前读取器。"""
+        self.worker = FlightLoader(folder, self)
+        self.worker.failed.connect(self.load_failed)
+        self.worker.finished.connect(
+            self._worker_finished, Qt.ConnectionType.QueuedConnection
+        )
+        self.worker.start()
 
     def load_folder(self, folder):
-        """@brief 停止旧读取器与播放，清空画布并启动新目录读取器。
+        """@brief 停止播放并清空画布，待旧读取器退出后读取最后选中的目录。
         @param folder 新运行目录。
         """
+        if self._closing:
+            return
         self.stop_worker()
         self.player.stop()
         self.play.setText("▶ 播放")
         self.snapshot = None
+        self.prepared = None
+        self.plot_data = {}
         self.figure.clear()
         self.canvas.draw_idle()
         self.summary.setText(f"读取飞行日志：{Path(folder).name}")
-        self.worker = FlightLoader(Path(folder), self)
-        self.worker.loaded.connect(self.accept_snapshot)
-        self.worker.failed.connect(self.load_failed)
-        self.worker.start()
+        if self.is_busy():
+            self._pending_folder = Path(folder)
+        else:
+            self._start_worker(Path(folder))
 
     def load_failed(self, error):
         """@brief 将读取线程报告的错误显示到摘要栏。
         """
+        sender = self.sender()
+        if self._closing or (sender is not None and sender is not self.worker):
+            return
         self.summary.setText("读取失败：" + error)
 
     def choose_folder(self):
@@ -278,17 +352,28 @@ class FlightDashboard(QDialog):
         if folder:
             self.load_folder(folder)
 
-    def accept_snapshot(self, snapshot):
+    def _consume_latest(self):
+        """@brief 从单槽缓存取得最新快照，不处理已被更新覆盖的历史通知。"""
+        if self._closing:
+            return
+        if self.worker is not None:
+            value = self.worker.latest.take()
+            if value is not None:
+                self.accept_snapshot(*value)
+        self.refresh_timer.start(400)
+
+    def accept_snapshot(self, snapshot, prepared=None):
         """@brief 接收历史快照，更新机号、时间范围和读取状态。
         @param snapshot FlightHistory.snapshot 返回的字典。
-        @note 忽略旧读取器迟到的信号；手动回看时仍接收快照，但已有曲线不会随每次追加重建。
+        @param prepared 后台计算的全量统计及有界曲线；直接传入快照时可省略。
+        @note 手动回看时仍接收快照，但已有曲线不会随每次追加重建。
         """
-        sender = self.sender()
-        # 旧线程停止前发出的信号可能仍在 Qt 队列中，换目录后必须识别发送者。
-        if isinstance(sender, FlightLoader) and sender is not self.worker:
+        if self._closing:
             return
         had_data = bool(self.plot_data)
         self.snapshot = snapshot
+        # 运行时由读取线程准备；直接注入快照的离线调用也可复用同一计算入口。
+        self.prepared = prepared if prepared is not None else prepare_plot(snapshot)
         ids = snapshot["ids"]
         previous_ids = [
             self.vehicle.itemData(i) for i in range(1, self.vehicle.count())
@@ -335,14 +420,18 @@ class FlightDashboard(QDialog):
             f"{self.start_time:.1f}–{self.end_time:.1f} s\n融合接收：{accepted}"
         )
         self.status.setText(
-            "估计采样间隔 ≥0.05 s · 误差时间对齐容差 0.10 s · 实线为估计，虚线为真实值"
+            "估计采样间隔 ≥0.05 s · 对齐容差 0.10 s · 实线估计，虚线真值 · 曲线抽样显示，统计与 CSV 使用全部缓存样本"
             + (
                 f" · 早期曲线已移出缓存 {snapshot['dropped']} 点"
                 if snapshot["dropped"]
                 else ""
             )
         )
-        if self.follow.isChecked() or not had_data:
+        # 追赶历史时只更新文字和游标；等待读取器追平后再完整重建一次图形，
+        # 避免大日志每个快照都触发 Figure.clear 和整套 Matplotlib 对象创建。
+        if (self.follow.isChecked() or not had_data) and (
+            not snapshot["backlog"] or not had_data
+        ):
             self.redraw()
 
     def selected_ids(self):
@@ -381,72 +470,36 @@ class FlightDashboard(QDialog):
         for axis, (title, ylabel) in zip(self.axes, PANELS):
             axis.set_title(title, loc="left", fontsize=11, pad=6)
             axis.set_ylabel(ylabel, fontsize=9)
-        self.validity.set_title("定位有效性", loc="left", fontsize=10, pad=4)
+        self.validity.set_title("定位有效性 · 时间桶内有效比例", loc="left", fontsize=10, pad=4)
         self.plot_data = {}
         self.position_markers = []
         vehicle_handles = []
         selected = self.selected_ids()
         window = self.smoothing.currentData() or 1
         for vehicle in selected:
-            # 1. 把每机历史转成数组，按时间匹配真值得到 XY 误差；未匹配处保留 NaN，
-            #    曲线出现缺口，避免把缺失真值绘成零误差。速度模包含 XYZ 三个分量。
-            estimate = np.asarray(
-                self.snapshot["estimates"].get(vehicle, []), dtype=float
-            )
-            truth = np.asarray(self.snapshot["truths"].get(vehicle, []), dtype=float)
-            if not len(estimate):
+            if vehicle not in self.prepared["full"]:
                 continue
             color = colors[vehicle % len(colors)]
-            label = f"机 {vehicle}"
-            times = estimate[:, 0]
-            errors = np.asarray([v[2] for v in aligned_samples(estimate, truth)])
-            speed = np.linalg.norm(estimate[:, 4:7], axis=1)
-            self.plot_data[vehicle] = (estimate, truth, errors, speed)
-            handle, = self.axes[0].plot(
-                estimate[:, 1], estimate[:, 2], color=color, lw=1.4, label=label
-            )
+            self.plot_data[vehicle] = self.prepared["full"][vehicle]
+            curves = self.prepared["curves"][vehicle]
+            xy = curves["xy"]
+            handle, = self.axes[0].plot(xy[:, 0], xy[:, 1], color=color, lw=1.4, label=f"机 {vehicle}")
             vehicle_handles.append(handle)
-            self.axes[1].plot(times, estimate[:, 3], color=color, lw=1.3)
-            # 单机视图里同一根轴还叠了 VX/VY/VZ 分量，模长要单独命名才不会被误读成其中一个分量。
-            self.axes[2].plot(
-                times,
-                smooth(speed, window),
-                color=color,
-                lw=1.3,
-                label="速度模" if len(selected) == 1 else label,
-            )
-            self.axes[3].plot(times, smooth(errors, window), color=color, lw=1.3)
-            yaw = np.rad2deg(estimate[:, 7]).copy()
-            # 2. 航向在角度边界跳变时用 NaN 断线，避免跨 ±180°画出虚假的长斜线。
-            yaw[np.r_[False, np.abs(np.diff(yaw)) > 180]] = np.nan
-            self.axes[4].plot(times, yaw, color=color, lw=1.3)
-            self.axes[5].plot(times, estimate[:, 8], color=color, lw=1.3)
+            self.axes[1].plot(*curves["height"], color=color, lw=1.3)
+            self.axes[2].plot(*curves[("speed", window)], color=color, lw=1.3,
+                              label="速度模" if len(selected) == 1 else f"机 {vehicle}")
+            self.axes[3].plot(*curves[("errors", window)], color=color, lw=1.3)
+            self.axes[4].plot(*curves["yaw"], color=color, lw=1.3)
+            self.axes[5].plot(*curves["confidence"], color=color, lw=1.3)
             if len(selected) == 1:
-                for index, name, component_color in [
-                    (4, "VX", colors[0]),
-                    (5, "VY", colors[1]),
-                    (6, "VZ", colors[2]),
-                ]:
-                    self.axes[2].plot(
-                        times,
-                        smooth(estimate[:, index], window),
-                        lw=1,
-                        alpha=0.75,
-                        color=component_color,
-                        label=name,
-                    )
-            if self.truth.isChecked() and len(truth):
-                self.axes[0].plot(
-                    truth[:, 1], truth[:, 2], color=color, lw=1, ls="--", alpha=0.65
-                )
-                self.axes[1].plot(
-                    truth[:, 0], truth[:, 3], color=color, lw=1, ls="--", alpha=0.65
-                )
-                true_yaw = np.rad2deg(truth[:, 4]).copy()
-                true_yaw[np.r_[False, np.abs(np.diff(true_yaw)) > 180]] = np.nan
-                self.axes[4].plot(
-                    truth[:, 0], true_yaw, color=color, lw=1, ls="--", alpha=0.65
-                )
+                for index, name, component_color in [(4, "VX", colors[0]), (5, "VY", colors[1]), (6, "VZ", colors[2])]:
+                    self.axes[2].plot(*curves[(index, window)], lw=1, alpha=0.75,
+                                      color=component_color, label=name)
+            if self.truth.isChecked() and "truth_xy" in curves:
+                xy = curves["truth_xy"]
+                self.axes[0].plot(xy[:, 0], xy[:, 1], color=color, lw=1, ls="--", alpha=0.65)
+                self.axes[1].plot(*curves["truth_height"], color=color, lw=1, ls="--", alpha=0.65)
+                self.axes[4].plot(*curves["truth_yaw"], color=color, lw=1, ls="--", alpha=0.65)
             (marker,) = self.axes[0].plot([], [], "o", color=color, ms=7, mec="white")
             self.position_markers.append((vehicle, marker))
 
@@ -476,15 +529,14 @@ class FlightDashboard(QDialog):
             self.validity.set_yticks([])
             for i, vehicle in enumerate(lanes):
                 y = len(lanes) - 1 - i
-                estimate = self.plot_data[vehicle][0]
-                times = estimate[:, 0]
+                times, proportions = self.prepared["curves"][vehicle]["validity"]
                 color = colors[vehicle % len(colors)]
                 self.validity.fill_between(
-                    times, y - 0.34, y + 0.34, where=estimate[:, 10] > 0.5,
+                    times, y - 0.34, y - 0.34 + 0.68 * proportions[:, 1],
                     step="post", color=color, alpha=0.9, linewidth=0,
                 )
                 self.validity.fill_between(
-                    times, y - 0.34, y + 0.34, where=estimate[:, 9] > 0.5,
+                    times, y - 0.34, y - 0.34 + 0.68 * proportions[:, 0],
                     step="post", color=color, alpha=0.35, linewidth=0,
                 )
                 self.validity.text(
@@ -538,9 +590,7 @@ class FlightDashboard(QDialog):
         self._annotate_errors(selected)
         # 4. 相邻阶段事件围成时间区间；末段延伸到最新采样，并裁剪到曲线时间范围。
         #    阶段名直接写在色块内，不再另画图例，避免与阶段条自身争位置。
-        phases = self.snapshot["phases"]
-        for index, (stamp, phase, active) in enumerate(phases):
-            end = phases[index + 1][0] if index + 1 < len(phases) else self.end_time
+        for stamp, phase, active, end in self.prepared["phases"]:
             start, end = max(stamp, self.start_time), min(end, self.end_time)
             if end <= start:
                 continue
@@ -561,7 +611,7 @@ class FlightDashboard(QDialog):
                         tuple(int(color[i : i + 2], 16) for i in (1, 3, 5))
                     ),
                 )
-        for stamp, vehicle in self.snapshot["impacts"]:
+        for stamp, vehicle in self.prepared["impacts"]:
             if vehicle in selected:
                 self.axes[3].axvline(
                     stamp,
@@ -577,8 +627,6 @@ class FlightDashboard(QDialog):
             axis.axvline(self.cursor, color=t["ink"], alpha=0.55, lw=0.9)
             for axis in [*self.axes[1:], self.validity, self.timeline]
         ]
-        for label in self.figure.findobj(Text):
-            label.set_fontfamily(["Microsoft YaHei", "DejaVu Sans"])
         self.update_cursor()
         self.canvas.draw_idle()
 
@@ -590,15 +638,13 @@ class FlightDashboard(QDialog):
         t = theme.tokens(self.dark)
         lines = []
         for vehicle in selected:
-            errors = self.plot_data[vehicle][2]
-            finite = errors[np.isfinite(errors)]
-            if not len(finite):
+            stats = self.prepared["stats"].get(vehicle)
+            if stats is None:
                 lines.append(f"机 {vehicle}：无有效真值匹配")
                 continue
             lines.append(
-                f"机 {vehicle}  均方根 {np.sqrt(np.mean(finite ** 2)):.3f}"
-                f" · p95 {np.percentile(finite, 95):.3f}"
-                f" · 最大 {finite.max():.3f} m"
+                f"机 {vehicle}  均方根 {stats[0]:.3f}"
+                f" · p95 {stats[1]:.3f} · 最大 {stats[2]:.3f} m"
             )
         if not lines:
             return
@@ -797,11 +843,24 @@ class FlightDashboard(QDialog):
                 QMessageBox.warning(self, "导出失败", str(exc))
 
     def closeEvent(self, event):
-        """@brief 关闭前停止播放定时器并等待日志线程退出。
+        """@brief 请求日志线程退出；finished 前忽略关闭，保持窗口与线程有效。
         """
-        self.player.stop()
-        self.stop_worker()
-        super().closeEvent(event)
+        self.shutdown()
+        if self.is_busy():
+            event.ignore()
+        else:
+            event.accept()
+
+    def done(self, result):
+        """@brief accept/reject/Esc 与关闭按钮共用异步退出路径。"""
+        self._dialog_result = result
+        self.shutdown()
+
+    def reject(self):
+        self.done(QDialog.DialogCode.Rejected)
+
+    def accept(self):
+        self.done(QDialog.DialogCode.Accepted)
 
 
 def main():

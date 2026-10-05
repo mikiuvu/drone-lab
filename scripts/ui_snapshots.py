@@ -18,6 +18,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
+from shiboken6 import isValid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -39,6 +40,17 @@ def snap(window, path):
         raise OSError(f"无法保存快照：{path}")
 
 
+def close_window(window):
+    """@brief 保持事件循环运行，直到窗口的异步线程收尾完成。"""
+    window.close()
+    deadline = time.monotonic() + 30
+    while isValid(window) and window.isVisible():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("窗口后台读取尚未退出")
+        QTest.qWait(20)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 def capture_lab(app, out, dark, size):
     """@brief 渲染主窗口的全部页签，实时页在演示数据下出图。
     @param app QApplication 实例。
@@ -53,15 +65,17 @@ def capture_lab(app, out, dark, size):
     window.show()
     suffix = "-dark" if dark else ""
     # 先喂入演示数据，让热图、趋势和姿态都有内容，否则截到的全是空状态。
-    window.start_demo()
-    QTest.qWait(3000)
-    snap(window, out / f"01-live{suffix}.png")
-    for index in range(window.tabs.count()):
-        window.tabs.setCurrentIndex(index)
-        QTest.qWait(100)
-        name = window.tabs.tabText(index).replace(" ", "_")
-        snap(window, out / f"{index:02d}-{name}{suffix}.png")
-    window.close()
+    try:
+        window.start_demo()
+        QTest.qWait(3000)
+        snap(window, out / f"01-live{suffix}.png")
+        for index in range(window.tabs.count()):
+            window.tabs.setCurrentIndex(index)
+            QTest.qWait(100)
+            name = window.tabs.tabText(index).replace(" ", "_")
+            snap(window, out / f"{index:02d}-{name}{suffix}.png")
+    finally:
+        close_window(window)
 
 
 def capture_flight(app, out, dark, size, folder):
@@ -92,7 +106,7 @@ def capture_flight(app, out, dark, size, folder):
             window.canvas.draw()
             snap(window, out / f"11-flight-single{suffix}.png")
     finally:
-        window.close()
+        close_window(window)
 
 
 def resolve_run_dir(explicit):

@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 
 from app.simulation_panel import GazeboPanel, LocalizationMap
 from simulation.localization_metrics import (
@@ -233,7 +235,24 @@ class TeamContactQtTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.panel = GazeboPanel(self.root)
         self.panel.timer.stop()
-        self.addCleanup(self.panel.close)
+        self.addCleanup(self.close_panel)
+
+    def close_panel(self):
+        # mock 管理命令不创建进程，不能等待它发出 finished。
+        if self.panel.process is not None:
+            self.panel.process = None
+        self.panel.close()
+        deadline = time.monotonic() + 3
+        while self.panel.refresh_worker is not None and time.monotonic() < deadline:
+            QTest.qWait(10)
+        self.assertIsNone(self.panel.refresh_worker)
+
+    def refresh_panel(self):
+        self.panel.refresh()
+        deadline = time.monotonic() + 3
+        while self.panel.refresh_worker is not None and time.monotonic() < deadline:
+            QTest.qWait(10)
+        self.assertIsNone(self.panel.refresh_worker)
 
     def test_default_mission_and_command_arguments(self):
         self.assertEqual(self.panel.mission_choice.currentData(), "team_contact")
@@ -297,7 +316,7 @@ class TeamContactQtTests(unittest.TestCase):
             json.dumps({"phase": "CONTACT", "active_vehicle": 2, "completed": [0, 1]}),
             encoding="utf-8",
         )
-        self.panel.refresh()
+        self.refresh_panel()
         text = self.panel.cards.toPlainText()
         phase_text = self.panel.team_line.text()
         self.assertIn("轮流撞击", phase_text)
@@ -323,7 +342,12 @@ class TeamContactQtTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.panel._update_map_context(CONFIG)
+        runtime = self.root / "simulation/runtime"
+        runtime.mkdir(parents=True)
+        (runtime / "manager.json").write_text(
+            json.dumps({"run_dir": str(self.root), "map": CONFIG}), encoding="utf-8"
+        )
+        self.refresh_panel()
         self.assertIn("机体碰撞尺寸 0.082 × 0.082 × 0.025 m", self.panel.map_note.text())
         self.assertIn("红框 0.3 m", self.panel.map_note.text())
         self.assertIn("起点高度 0.55 m", self.panel.map_note.text())
@@ -332,8 +356,8 @@ class TeamContactQtTests(unittest.TestCase):
         (self.root / "team_status.json").write_text(
             json.dumps({"phase": "COMPLETE"}), encoding="utf-8"
         )
-        self.panel.metrics = LocalizationMetrics(self.root, homes=HOMES)
-        text = self.panel._format(self.panel.metrics.poll())
+        self.refresh_panel()
+        text = self.panel.cards.toPlainText()
         self.assertEqual(text.count("完成时回家点误差"), 4)
         self.assertNotIn("落地误差", text)
 

@@ -5,6 +5,7 @@
 """
 
 from collections import deque
+import math
 import statistics
 import time
 
@@ -348,7 +349,7 @@ class Heatmap(QWidget):
 
 class SensorCard(QWidget):
     """@brief 汇总一颗 ToF 的标题、热图与四项运行指标。
-    @note arrivals 保存最多 30 个电脑到达时刻；missed 统计正向序号缺口，不推断回绕或重启。
+    @note 帧率统计使用两秒窗口；演示与回放使用记录时间，实测使用电脑到达时间。
     """
 
     def __init__(self, number):
@@ -356,7 +357,9 @@ class SensorCard(QWidget):
         """
         super().__init__()
         self.number, self.last = number, None
-        self.arrivals = deque(maxlen=30)
+        self.arrivals = deque(maxlen=256)
+        self.rate_start = None
+        self.rate_clock = None
         self.total, self.missed, self.last_sequence = 0, 0, None
         self.dark = False
         self.setObjectName("sensorCard")
@@ -402,6 +405,8 @@ class SensorCard(QWidget):
         self.total = self.missed = 0
         self.last_sequence = None
         self.arrivals.clear()
+        self.rate_start = None
+        self.rate_clock = None
         self.map.frame = None
         self.map.update()
         self.source.setText("等待数据")
@@ -420,13 +425,12 @@ class SensorCard(QWidget):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
 
-    def receive(self, frame):
+    def receive(self, frame, historical=False):
         """@brief 接收一帧并更新有效区域统计及接收频率。
         @param frame 已校验的 ToF 字典，距离单位 mm。
-        @note N 个接收时刻包含 N-1 个间隔，频率用 (N-1)/总时长；它反映界面接收节奏。
+        @param historical 演示或回放为真，以记录时间计算数据帧率，不受播放倍率影响。
         """
         self.last = time.monotonic()
-        self.arrivals.append(self.last)
         self.total += 1
         sequence = frame.get("sequence")
         if isinstance(sequence, int) and isinstance(self.last_sequence, int):
@@ -448,15 +452,50 @@ class SensorCard(QWidget):
         self.source.setText(frame.get("source", "未知来源"))
         self.source.setProperty("tone", "")
         self._repolish(self.source)
-        hz = (
-            (len(self.arrivals) - 1) / (self.arrivals[-1] - self.arrivals[0])
-            if len(self.arrivals) > 1 and self.arrivals[-1] > self.arrivals[0]
-            else 0
-        )
-        self.tiles["rate"].set_value(f"{hz:.1f}" if hz else None)
+        self._update_rate(frame, historical)
         self.tiles["gap"].set_value(
             str(self.missed), tone="warn" if self.missed else "ok"
         )
+
+    def _update_rate(self, frame, historical):
+        """@brief 按时间窗口估计帧率；至少积累一秒，避免把同批到达间隔外推为 Hz。
+        @note 时钟回退、来源变化或时间缺失时重新积累；序号缺口单独统计。
+        """
+        stamp = self.last
+        basis = "host_monotonic"
+        if historical:
+            stamp = frame.get("source_time_us")
+            basis = frame.get("time_basis", "source")
+            if type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= 0:
+                stamp /= 1e6
+            else:
+                stamp = frame.get("record_time_s")
+                basis = "recording"
+        self.tiles["rate"].title.setText("数据帧率" if historical else "接收帧率")
+        self.tiles["rate"].setToolTip(
+            "按记录时间计算，不受回放倍率影响；至少一秒数据后显示。" if historical else
+            "最近两秒电脑收到的帧数；至少接收一秒后显示。")
+        clock = (historical, frame.get("source"), basis)
+        valid = type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= 0
+        if (not valid or clock != self.rate_clock or
+                (self.arrivals and stamp < self.arrivals[-1])):
+            self.arrivals.clear()
+            self.rate_start = None
+            self.rate_clock = clock
+        if not valid:
+            self.tiles["rate"].set_value(None)
+            return
+        if self.rate_start is None:
+            self.rate_start = stamp
+        if not historical or not self.arrivals or stamp > self.arrivals[-1]:
+            self.arrivals.append(stamp)
+        start = max(self.rate_start, stamp - 2.0)
+        while self.arrivals and self.arrivals[0] < start:
+            self.arrivals.popleft()
+        elapsed = stamp - start
+        # 窗口起点上的第一帧是间隔基准，不计入到达数量。
+        count = len(self.arrivals) - int(bool(self.arrivals) and self.arrivals[0] == start)
+        self.tiles["rate"].set_value(f"{count / elapsed:.1f}" if elapsed >= 1 else None)
 
     def mark_stale(self):
         """@brief 超过两秒未收到新帧时标记过期，保留最后一帧供查看。

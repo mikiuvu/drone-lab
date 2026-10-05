@@ -8,17 +8,11 @@ import json
 import math
 from pathlib import Path
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
-
-from PySide6.QtCore import QPointF, QProcess, QRectF, Qt, QTimer, QUrl
+from PySide6.QtCore import QPointF, QProcess, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
-    QImage,
     QPainter,
     QPainterPath,
     QPen,
@@ -46,11 +40,10 @@ from PySide6.QtWidgets import (
 )
 
 from app import theme
+from app.simulation_reader import SimulationReader, SimulationRefresh
 from simulation.localization_metrics import (
-    LocalizationMetrics,
     home_positions,
     map_bounds,
-    read_status,
 )
 
 # 状态字典到中文与色调的映射：表格用色调给状态列上色，不需要额外图标。
@@ -144,7 +137,6 @@ class LocalizationMap(QWidget):
         self.setMinimumHeight(280)
         self.snapshot = None
         self.config = {}
-        self.terrain = None
         self.terrain_image = None
         self.center_zoom = False
         self.dark = False
@@ -170,41 +162,9 @@ class LocalizationMap(QWidget):
             return -2.5, 2.5, -2.5, 2.5
         return bounds
 
-    def set_terrain(self, terrain):
-        """@brief 将高度网格转为可重用的 RGB 地形图。
-        @param terrain (x, y, z) 数组元组或 None；z 单位 m，需要 NumPy。
-        @note 同一元组对象不重复转换；QImage.copy 使图像拥有像素内存，不依赖局部 NumPy 数组的寿命。
-        """
-        if terrain is self.terrain:
-            return
-        self.terrain = terrain
-        self.terrain_image = None
-        if terrain is not None:
-            z = terrain[2]
-            # 1. 用 3.7 m 归一化高度，缺测 NaN 按零着色并限幅，使高度对应连续颜色。
-            ratio = np.clip(np.nan_to_num(z, nan=0.0) / 3.7, 0, 1)
-            stops = np.array(
-                [
-                    [int(theme.HEIGHT_STOPS[0][i : i + 2], 16) for i in (1, 3, 5)],
-                    [int(theme.HEIGHT_STOPS[2][i : i + 2], 16) for i in (1, 3, 5)],
-                    [int(theme.HEIGHT_STOPS[4][i : i + 2], 16) for i in (1, 3, 5)],
-                ],
-                dtype=float,
-            )
-            scaled = np.clip(ratio * 2, 0, 2)
-            low = np.floor(scaled).astype(int)
-            frac = (scaled - low)[..., None]
-            pixels = stops[low] * (1 - frac) + stops[np.minimum(low + 1, 2)] * frac
-            # 2. 数组行序反转以对应屏幕向下的 Y 轴，再转为连续 RGB 字节。
-            #    QImage 暂借 NumPy 内存，copy 后像素归图像自身持有。
-            pixels = np.ascontiguousarray(pixels[::-1].astype(np.uint8))
-            self.terrain_image = QImage(
-                pixels.data,
-                pixels.shape[1],
-                pixels.shape[0],
-                pixels.strides[0],
-                QImage.Format.Format_RGB888,
-            ).copy()
+    def set_terrain(self, image):
+        """@brief 接收后台已着色的地形 QImage；None 清空地图底图。"""
+        self.terrain_image = image
         self.update()
 
     def set_data(self, snapshot, config):
@@ -433,19 +393,24 @@ class LocalizationMap(QWidget):
 
 class GazeboPanel(QWidget):
     """@brief 管理 WSL 仿真命令与运行状态展示。
-    @note process 跟踪当前管理命令；metrics 持续读取当前运行目录；800 ms 定时器刷新状态与相机画面。
+    @note 800 ms 定时器请求后台刷新；界面只绘制快照，读取器独占增量游标。
     """
+    shutdown_complete = Signal()
 
     def __init__(self, root):
         """@param root 项目根目录，用于地图、运行状态和文档路径。"""
         super().__init__()
         self.root = Path(root)
         self.process = None
-        self.metrics = None
+        self.snapshot = None
+        self.reader = SimulationReader(self.root)
+        self.refresh_worker = None
+        self._refresh_pending = False
+        self._closing = False
+        self._shutdown_notified = False
         self.current_folder = None
         self.current_map = self.root / "simulation/maps/rmuc_2026_sentry26.json"
         self.map_config = {}
-        self._terrain_cache = None
         self.flight_dashboard = None
         self.dark = False
         outer = QVBoxLayout(self)
@@ -636,6 +601,7 @@ class GazeboPanel(QWidget):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.document().setMaximumBlockCount(500)
         self.log.setMaximumHeight(76)
         self.log.setPlaceholderText("Gazebo 启动与管理脚本输出会显示在这里。")
         outer.addWidget(self.log)
@@ -681,16 +647,39 @@ class GazeboPanel(QWidget):
     def _dashboard_closed(self):
         """@brief 对话框销毁时释放面板中的引用。"""
         self.flight_dashboard = None
+        if self._closing:
+            self._finish_shutdown()
 
     def close_flight_dashboard(self):
         """@brief 关闭附属飞行窗口，由其关闭流程结束日志线程。"""
         if self.flight_dashboard is not None:
             self.flight_dashboard.close()
 
-    def closeEvent(self, event):
-        """@brief 先关闭附属飞行窗口，再交给 QWidget 处理关闭事件。"""
+    def shutdown(self):
+        """@brief 请求后台读取与曲线窗口停止，返回是否已可安全释放本面板。"""
+        self._closing = True
+        self._refresh_pending = False
+        self.timer.stop()
+        if self.refresh_worker is not None:
+            self.refresh_worker.requestInterruption()
         self.close_flight_dashboard()
-        super().closeEvent(event)
+        return (self.refresh_worker is None and self.flight_dashboard is None
+                and self.process is None)
+
+    def _finish_shutdown(self):
+        """@brief 由 finished/destroyed 回调检查资源归零，再通知父窗口关闭。"""
+        if (self._closing and not self._shutdown_notified and self.refresh_worker is None
+                and self.flight_dashboard is None and self.process is None):
+            self._shutdown_notified = True
+            self.shutdown_complete.emit()
+            self.close()
+
+    def closeEvent(self, event):
+        """@brief 保持后台线程及其父控件存活，直到异步收尾完成。"""
+        if self.shutdown():
+            event.accept()
+        else:
+            event.ignore()
 
     def _set_camera_count(self, count):
         """@brief 按机数重建相机标签，使用至多四列布局。
@@ -758,7 +747,7 @@ class GazeboPanel(QWidget):
         @param action start、stop 或 gui。
         @note Windows 盘符映射到 /mnt/盘符；高度模式优先于飞行选项。process 非空时拒绝并发管理命令。
         """
-        if self.process:
+        if self.process or self._closing:
             return
         map_path = Path(self.map_choice.currentData() or self.current_map)
         script = (
@@ -808,83 +797,120 @@ class GazeboPanel(QWidget):
         process.finished.connect(
             lambda code, state: self._finished(process, action, code)
         )
+        process.errorOccurred.connect(lambda error: self._process_error(process, error))
         process.start("wsl.exe", args)
+
+    def _process_error(self, process, error):
+        """@brief 启动失败没有 finished 信号，需在此释放管理命令占用。"""
+        if error == QProcess.ProcessError.FailedToStart and self.process is process:
+            self.log.appendPlainText(f"无法启动仿真管理命令：{process.errorString()}")
+            self.process = None
+            process.deleteLater()
+            self._finish_shutdown()
 
     def _finished(self, process, action, code):
         """@brief 接收管理命令退出，释放 QProcess 并刷新运行状态。"""
+        if self.process is not process:
+            return
         self.log.appendPlainText(
             f"{action} 命令退出码 {code}；请查看定位指标和进程状态。"
         )
         self.process = None
         process.deleteLater()
         self.refresh()
+        self._finish_shutdown()
 
     def refresh(self):
-        """@brief 读取 manager.json 定位运行目录，再刷新指标、地图和相机。
-        @note 运行目录变化时重建统计器；相同目录沿用增量读取状态，避免每次重读完整日志。
-        """
-        state_path = self.root / "simulation/runtime/manager.json"
-        if not state_path.exists():
+        """@brief 请求一次后台刷新；忙时只保留一次后续请求，避免任务排队。"""
+        if self._closing:
             return
-        try:
-            value = json.loads(state_path.read_text(encoding="utf-8"))
-            path = value["run_dir"]
-            if path.startswith("/mnt/"):
-                path = path[5].upper() + ":" + path[6:]
-            folder = Path(path)
-            # 切换运行目录需要重置增量读取位置，防止把上一轮的轨迹混入新运行。
-            if folder != self.current_folder:
-                self.current_folder = folder
-                self.metrics = LocalizationMetrics(folder, manager=value)
-            elif self.metrics is not None:
-                self.metrics.manager = value
-            self.map_config = dict(value.get("map", {}))
-            configured_count = len(self.map_config.get("spawns", []))
-            if configured_count >= 1 and configured_count != len(self.cameras):
-                self._set_camera_count(configured_count)
-            self.metrics.set_homes(self.map_config.get("spawns", []))
-            self._update_map_context(self.map_config)
-            snapshot = self.metrics.poll(include_trails=True)
-            self.map_view.set_data(snapshot, self.map_config)
-            self._fill_table(snapshot)
-            self.cards.setPlainText(self._format(snapshot))
+        if self.refresh_worker is not None:
+            self._refresh_pending = True
+            return
+        worker = SimulationRefresh(self.reader, self)
+        self.refresh_worker = worker
+        worker.loaded.connect(self._apply_refresh)
+        worker.failed.connect(self._refresh_failed)
+        worker.finished.connect(self._refresh_finished)
+        worker.start()
+
+    def _refresh_finished(self):
+        """@brief 线程退出后释放引用；随后执行合并的刷新或关闭请求。"""
+        worker = self.refresh_worker
+        self.refresh_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        if self._closing:
+            self._finish_shutdown()
+        elif self._refresh_pending:
+            self._refresh_pending = False
+            self.refresh()
+
+    def _refresh_failed(self, message):
+        """@brief 在界面显示后台读取异常。"""
+        if not self._closing:
+            self.status.setText(f"等待有效仿真状态与定位日志：{message}")
+
+    def _apply_refresh(self, result):
+        """@brief 绘制独立快照；此槽只访问内存，不读取日志、地形或相机文件。"""
+        if self._closing:
+            return
+        if result is None:
+            self.current_folder = None
+            self.snapshot = None
+            self.map_config = {}
+            self.map_view.set_data(None, {})
+            self.map_view.set_terrain(None)
+            self.table.setRowCount(0)
+            self.cards.clear()
+            self.map_note.clear()
+            self.team_line.setText("等待任务阶段。")
             for i, camera in enumerate(self.cameras):
-                image = folder / "camera" / f"camera_{i}.ppm"
-                if image.exists():
-                    pixmap = QPixmap(str(image))
-                    if not pixmap.isNull():
-                        camera.setPixmap(
-                            pixmap.scaled(
-                                camera.size(), Qt.AspectRatioMode.KeepAspectRatio
-                            )
-                        )
-            map_label = self.map_config.get("label", "未知")
-            if self.map_config.get("name") == "rmuc_2026_sentry26":
-                map_label = "Sentry26 2026 全场地形 · 开放边界派生版"
-            team = snapshot.get("team_status", {})
-            phase = self._phase_text(team)
-            self.team_line.setText(phase)
-            fly_requested = self.map_config.get("fly_requested")
-            if fly_requested is None:
-                # 旧运行目录从伴随端启动参数恢复模式，不能由当前复选框推断。
-                runners = [p for p in value.get("processes", [])
-                           if p.get("name", "").startswith("companion_")]
-                if runners:
-                    fly_requested = all("--arm" in p.get("command", [])
-                                        and "--offboard" in p.get("command", [])
-                                        for p in runners)
-            mode = ("自动飞行" if fly_requested is True else
-                    "仅观察（自动飞行未启用）" if fly_requested is False else "未记录")
-            self.status.setText(
-                ("仿真已请求停止" if value.get("stopped") else "仿真进程已启动")
-                + f" · {folder.name} · 地图：{map_label} · 模式：{mode}"
-            )
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            # 带上异常消息：KeyError 的键名和 ValueError 的说明是定位缺字段的主要线索，
-            # 只显示类型名会让「等待有效仿真状态」变成无法排障的提示。
-            self.status.setText(
-                f"等待有效仿真状态与定位日志：{type(exc).__name__}：{exc}"
-            )
+                camera.setText(f"无人机 {i} · 等待图像")
+            self.status.setText("等待仿真运行目录。")
+            return
+        self.current_folder = folder = result["folder"]
+        self.map_config = result["config"]
+        self.snapshot = snapshot = result["snapshot"]
+        value = result["manager"]
+        count = len(snapshot["vehicles"])
+        if count != len(self.cameras):
+            self._set_camera_count(count)
+        self._update_map_context(self.map_config)
+        if result["terrain_error"]:
+            self.map_note.setText(self.map_note.text() + " · " + result["terrain_error"])
+        self.map_view.set_terrain(result["terrain"])
+        self.map_view.set_data(snapshot, self.map_config)
+        self._fill_table(snapshot)
+        self.cards.setPlainText(self._format(snapshot))
+        for i, camera in enumerate(self.cameras):
+            image = result["cameras"].get(i)
+            if image is None:
+                camera.setText(f"无人机 {i} · 等待图像")
+            else:
+                camera.setPixmap(QPixmap.fromImage(image).scaled(
+                    camera.size(), Qt.AspectRatioMode.KeepAspectRatio))
+        map_label = self.map_config.get("label", "未知")
+        if self.map_config.get("name") == "rmuc_2026_sentry26":
+            map_label = "Sentry26 2026 全场地形 · 开放边界派生版"
+        team = snapshot.get("team_status", {})
+        phase = self._phase_text(team)
+        self.team_line.setText(phase)
+        fly_requested = self.map_config.get("fly_requested")
+        if fly_requested is None:
+            # 旧运行目录从伴随端启动参数恢复模式，不能由当前复选框推断。
+            runners = [p for p in value.get("processes", [])
+                       if p.get("name", "").startswith("companion_")]
+            if runners:
+                fly_requested = all("--arm" in p.get("command", [])
+                                    and "--offboard" in p.get("command", [])
+                                    for p in runners)
+        mode = ("自动飞行" if fly_requested is True else
+                "仅观察（自动飞行未启用）" if fly_requested is False else "未记录")
+        self.status.setText(
+            ("仿真已请求停止" if value.get("stopped") else "仿真进程已启动")
+            + f" · {folder.name} · 地图：{map_label} · 模式：{mode}"
+        )
 
     def _fill_table(self, snapshot):
         """@brief 用定位快照刷新每机指标表。
@@ -927,14 +953,9 @@ class GazeboPanel(QWidget):
                 self.table.setItem(row, column, item)
 
     def _update_map_context(self, config):
-        """@brief 更新地图尺寸说明并按文件路径及修改时间缓存高度网格。
-        @param config 当前地图字典，会补入 vehicle_extent_m 供绘图使用。
-        @note 相对网格路径以源地图目录为基准；读取失败时清除地形图，保留其他地图显示。
-        """
+        """@brief 从快照中的地图参数生成米制尺寸与起点说明。"""
         bounds = map_bounds(config)
-        audit = read_status(self.root / "simulation/docs/scale-verification.json")
-        extent = audit.get("vehicle_extent_m", [0.082, 0.082, 0.0285])
-        config["vehicle_extent_m"] = extent
+        extent = config.get("vehicle_extent_m", [0.082, 0.082, 0.0285])
         marker = config.get("home_marker", {})
         pieces = [
             f"无人机 {len(config.get('spawns', []))} 架 · UWB 基站 {len(config.get('uwb_anchors', []))} 个"
@@ -960,36 +981,6 @@ class GazeboPanel(QWidget):
         if "cruise_z_m" in mission:
             pieces.append(f"任务巡航高度 {float(mission['cruise_z_m']):g} m")
         self.map_note.setText(" · ".join(pieces))
-        source = config.get("source_map") or str(
-            self.root
-            / "simulation/maps"
-            / (config.get("name", "calibration") + ".json")
-        )
-        terrain = config.get("terrain_height_grid")
-        if not source or not terrain or np is None:
-            self.map_view.set_terrain(None)
-            return
-        try:
-            if source.startswith("/mnt/"):
-                source = source[5].upper() + ":" + source[6:]
-            path = Path(terrain)
-            if str(terrain).startswith("/mnt/"):
-                path = Path(str(terrain)[5].upper() + ":" + str(terrain)[6:])
-            elif not path.is_absolute():
-                path = Path(source).parent / path
-            path = path.resolve()
-            key = (str(path), path.stat().st_mtime_ns)
-            # 路径相同但内容更新时修改时间会改变，重新加载；未变时复用数组元组，
-            # set_terrain 也能按对象身份跳过昂贵的逐像素转换。
-            if self._terrain_cache is None or self._terrain_cache[0] != key:
-                with np.load(path, allow_pickle=False) as data:
-                    self._terrain_cache = (key, (data["x"], data["y"], data["z"]))
-            self.map_view.set_terrain(self._terrain_cache[1])
-        except (OSError, KeyError, ValueError) as exc:
-            self.map_view.set_terrain(None)
-            self.map_note.setText(
-                self.map_note.text() + f" · 无法读取地形网格：{type(exc).__name__}"
-            )
 
     def open_guide(self):
         """@brief 打开项目中的多机任务说明。"""
@@ -1049,7 +1040,7 @@ class GazeboPanel(QWidget):
         @note 这里只组织显示，不重新计算误差；区分实时回家点偏移与落地/完成时保存的偏移。
         """
         rows = [
-            f"范围：{'完整日志' if self.metrics and self.metrics.full else '接入后的日志片段'}"
+            f"范围：{'完整日志' if snapshot.get('scope', '').startswith('full') else '接入后的日志片段'}"
             f" · 对齐容差：{snapshot['alignment_tolerance_us'] / 1000:.0f} ms"
         ]
         for v in snapshot["vehicles"]:
@@ -1123,7 +1114,7 @@ class GazeboPanel(QWidget):
 
     def save_report(self):
         """@brief 将当前统计快照保存为 UTF-8 JSON，供离线分析使用。"""
-        if not self.metrics:
+        if self.snapshot is None:
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1133,6 +1124,6 @@ class GazeboPanel(QWidget):
         )
         if path:
             Path(path).write_text(
-                json.dumps(self.metrics.snapshot(), ensure_ascii=False, indent=2),
+                json.dumps(self.snapshot, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
