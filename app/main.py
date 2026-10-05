@@ -1,6 +1,7 @@
 """@file main.py
 @brief Drone Lab 桌面入口与实时采集、录制、回放的界面调度。
 通过 python -m app.main 启动。LabWindow 管理数据源状态，后台线程负责 I/O，Qt 主线程负责控件更新。
+视觉样式统一由 app.theme 提供，界面不直接写死颜色。
 """
 
 import csv
@@ -14,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QProcess
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -37,8 +38,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QSlider,
+    QSizePolicy,
 )
 from serial.tools import list_ports
+
+from . import theme
 from .data import (
     demonstration,
     validate_record,
@@ -46,7 +50,7 @@ from .data import (
     Recorder,
     load_recording,
 )
-from .widgets import SensorCard, AttitudeView, Trend
+from .widgets import SensorCard, AttitudeView, StatTile, Trend
 from .workers import FCWorker, NanoWorker, sensor_arguments
 from .research_panel import ResearchPanel
 from .simulation_panel import GazeboPanel
@@ -54,16 +58,45 @@ from .simulation_panel import GazeboPanel
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def button(text, fn):
+def button(text, fn, variant="", tip=""):
     """@brief 创建统一尺寸按钮并连接 clicked 信号。
     @param text 按钮文字。
     @param fn 点击回调，由 Qt 调度执行。
+    @param variant 视觉变体，取 primary、danger、ghost 或空字符串。
+    @param tip 悬停提示，可为空。
     @return 已连接信号的 QPushButton。
     """
     result = QPushButton(text)
     result.clicked.connect(fn)
     result.setMinimumHeight(34)
+    result.setCursor(Qt.CursorShape.PointingHandCursor)
+    if variant:
+        result.setProperty("variant", variant)
+    if tip:
+        result.setToolTip(tip)
     return result
+
+
+def hint(text):
+    """@brief 创建次要说明文字标签。
+    @param text 说明文本。
+    @return 应用了 hint 角色的 QLabel。
+    """
+    label = QLabel(text)
+    label.setProperty("role", "hint")
+    label.setWordWrap(True)
+    return label
+
+
+def note(text):
+    """@brief 创建带底色的提示条标签。
+    @param text 提示文本。
+    @return 应用了 note 角色的 QLabel。
+    """
+    label = QLabel(text)
+    label.setProperty("role", "note")
+    label.setWordWrap(True)
+    return label
 
 
 class LabWindow(QMainWindow):
@@ -76,7 +109,7 @@ class LabWindow(QMainWindow):
         """
         super().__init__()
         self.setWindowTitle("Drone Lab · DM-FC01 / LicheeRV Nano / 双 VL53L5CX")
-        self.resize(1250, 900)
+        self.resize(1360, 940)
         self.workers = {}  # 数据源名到线程对象；stop 后仍保留，直到 finished 回调清理。
         self.recorder = None
         self.mode = "idle"
@@ -88,6 +121,7 @@ class LabWindow(QMainWindow):
         self.previous_tick = time.monotonic()
         self.attitude_time = None
         self.build_process = None
+        self.dark = self._system_dark()
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
         self.make_live()
@@ -100,87 +134,177 @@ class LabWindow(QMainWindow):
         self.gazebo_panel = GazeboPanel(ROOT)
         self.tabs.addTab(self.gazebo_panel, "⑦ Gazebo 多机")
         self.load_settings()
+        self.apply_theme(self.dark)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(100)
         self.refresh_ports()
-        self.log(
-            "准备就绪。点击“演示数据”查看界面。"
-        )
+        self.log("准备就绪。点击“演示数据”查看界面。")
+
+    @staticmethod
+    def _system_dark():
+        """@return 系统当前是否使用深色外观；无法判断时返回 False。"""
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            return (
+                QGuiApplication.styleHints().colorScheme()
+                == Qt.ColorScheme.Dark
+            )
+        except Exception:
+            return False
+
+    def apply_theme(self, dark):
+        """@brief 切换深浅主题并同步到自绘控件与子面板。
+        @param dark 为真表示使用深色主题。
+        @note 自绘控件不读取样式表，必须显式通知后重绘。
+        """
+        self.dark = dark
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply_theme(app, dark)
+        for card in self.cards:
+            card.set_theme(dark)
+        self.attitude.set_theme(dark)
+        self.trend.set_theme(dark)
+        for panel in (getattr(self, "research_panel", None), getattr(self, "gazebo_panel", None)):
+            if hasattr(panel, "set_theme"):
+                panel.set_theme(dark)
+        if hasattr(self, "theme_button"):
+            self.theme_button.setText("☀ 浅色外观" if dark else "🌙 深色外观")
+
+    def toggle_theme(self):
+        """@brief 在深浅主题之间切换并写入本地配置。"""
+        self.apply_theme(not self.dark)
+        self.save_settings(silent=True)
 
     def make_live(self):
         """@brief 建立实时页，将数据源操作、测距热图、姿态和趋势控件连接起来。
         """
         page = QWidget()
         outer = QVBoxLayout(page)
-        row = QHBoxLayout()
+        outer.setContentsMargins(18, 16, 18, 16)
+        outer.setSpacing(14)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        title = QLabel("实时数据")
+        title.setProperty("role", "pageTitle")
+        header.addWidget(title)
         self.mode_label = QLabel("未连接 · 等待选择数据源")
-        self.mode_label.setStyleSheet("font-size:19px;font-weight:600;color:#176a89")
-        row.addWidget(self.mode_label, 1)
-        self.demo_button = button("▶ 演示数据", self.start_demo)
-        row.addWidget(self.demo_button)
-        row.addWidget(button("停止数据源", self.stop_sources))
+        self.mode_label.setProperty("role", "hint")
+        header.addWidget(self.mode_label)
+        header.addStretch()
+        self.demo_button = button(
+            "▶ 演示数据", self.start_demo, "primary", "用合成数据预览全部界面"
+        )
+        header.addWidget(self.demo_button)
+        header.addWidget(button("停止数据源", self.stop_sources))
         self.record_button = button("● 开始录制", self.toggle_record)
-        row.addWidget(self.record_button)
-        outer.addLayout(row)
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("DM-FC01 直连电脑："))
+        header.addWidget(self.record_button)
+        outer.addLayout(header)
+
+        source = QGroupBox("数据源")
+        source_row = QHBoxLayout(source)
+        source_row.setContentsMargins(16, 14, 16, 14)
+        source_row.setSpacing(10)
+        source_row.addWidget(QLabel("DM-FC01 直连电脑"))
         self.fc_port = QComboBox()
         self.fc_port.setEditable(True)
-        self.fc_port.setMinimumWidth(200)
-        controls.addWidget(self.fc_port)
-        controls.addWidget(button("刷新串口", self.refresh_ports))
+        self.fc_port.setMinimumWidth(240)
+        self.fc_port.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        source_row.addWidget(self.fc_port)
+        source_row.addWidget(button("刷新串口", self.refresh_ports))
+        source_row.addWidget(QLabel("波特率"))
         self.fc_baud = QComboBox()
         self.fc_baud.addItems(["115200", "57600", "230400", "460800", "921600"])
-        controls.addWidget(self.fc_baud)
-        controls.addWidget(button("接收飞控数据", self.start_fc))
-        controls.addStretch()
-        outer.addLayout(controls)
-        note = QLabel(
-            "串口同一时刻仅供一个软件使用：QGC 占用时请先断开。热力图为区域测距，未做定位或姿态补偿。"
+        source_row.addWidget(self.fc_baud)
+        source_row.addWidget(button("接收飞控数据", self.start_fc, "primary"))
+        source_row.addStretch()
+        outer.addWidget(source)
+        outer.addWidget(
+            note(
+                "串口同一时刻仅供一个软件使用：QGC 占用时请先断开。热力图为区域测距，未做定位或姿态补偿。"
+            )
         )
-        note.setWordWrap(True)
-        outer.addWidget(note)
+
         body = QHBoxLayout()
+        body.setSpacing(14)
         self.cards = [SensorCard(0), SensorCard(1)]
         for card in self.cards:
             body.addWidget(card, 3)
-        attitude = QGroupBox("飞控姿态")
-        layout = QVBoxLayout(attitude)
+        attitude_box = QGroupBox("飞控姿态")
+        attitude_layout = QVBoxLayout(attitude_box)
+        attitude_layout.setContentsMargins(16, 14, 16, 16)
+        attitude_layout.setSpacing(10)
         self.attitude = AttitudeView()
-        layout.addWidget(self.attitude, 1)
-        self.angles = QLabel("Roll —°\nPitch —°\nYaw —°")
-        self.angles.setStyleSheet("font-size:18px")
-        layout.addWidget(self.angles)
-        self.heartbeat = QLabel("心跳：未收到")
-        self.heartbeat.setWordWrap(True)
-        layout.addWidget(self.heartbeat)
+        attitude_layout.addWidget(self.attitude, 1)
+        angles = QHBoxLayout()
+        angles.setSpacing(8)
+        self.angle_tiles = {
+            "roll": StatTile("横滚 Roll", "°"),
+            "pitch": StatTile("俯仰 Pitch", "°"),
+            "yaw": StatTile("航向 Yaw", "°"),
+        }
+        for tile in self.angle_tiles.values():
+            angles.addWidget(tile, 1)
+        attitude_layout.addLayout(angles)
+        self.heartbeat = StatTile("飞控心跳", "")
+        self.heartbeat.setToolTip("显示系统编号与解锁状态；未收到心跳时保持占位符。")
+        attitude_layout.addWidget(self.heartbeat)
         self.attitude_status = QLabel("等待数据")
-        layout.addWidget(self.attitude_status)
-        body.addWidget(attitude, 2)
+        self.attitude_status.setProperty("role", "hint")
+        attitude_layout.addWidget(self.attitude_status)
+        body.addWidget(attitude_box, 2)
         outer.addLayout(body, 1)
-        view = QHBoxLayout()
-        self.flip = QCheckBox("热力图旋转 180°（传感器光学反转）")
+
+        options = QGroupBox("显示选项")
+        option_row = QHBoxLayout(options)
+        option_row.setContentsMargins(16, 14, 16, 14)
+        option_row.setSpacing(16)
+        self.flip = QCheckBox("热力图旋转 180°")
         self.flip.setChecked(True)
+        self.flip.setToolTip("传感器光学反转时开启，仅影响显示方向。")
         self.flip.toggled.connect(self.update_map_options)
-        view.addWidget(self.flip)
-        view.addWidget(QLabel("色标上限 mm"))
+        option_row.addWidget(self.flip)
+        self.auto_range = QCheckBox("色标按本帧范围自动量程")
+        self.auto_range.setChecked(True)
+        self.auto_range.setToolTip("关闭后使用固定 0–上限量程，便于跨帧比较绝对距离。")
+        self.auto_range.toggled.connect(self.update_map_options)
+        option_row.addWidget(self.auto_range)
+        self.show_values = QCheckBox("在格内显示距离")
+        self.show_values.setChecked(True)
+        self.show_values.toggled.connect(self.update_map_options)
+        option_row.addWidget(self.show_values)
+        option_row.addWidget(QLabel("固定量程上限"))
         self.maximum = QSpinBox()
         self.maximum.setRange(100, 10000)
         self.maximum.setValue(4000)
+        self.maximum.setSuffix(" mm")
         self.maximum.valueChanged.connect(self.update_map_options)
-        view.addWidget(self.maximum)
-        view.addStretch()
-        view.addWidget(QLabel("灰色 = 无有效目标；悬停单元格查看原始状态"))
-        outer.addLayout(view)
-        outer.addWidget(QLabel("最近 200 帧中位距离：蓝 = 传感器 1，橙 = 传感器 2"))
+        option_row.addWidget(self.maximum)
+        option_row.addStretch()
+        option_row.addWidget(
+            hint("灰色 = 无有效目标 · 行列标号为传感器原始区域坐标 · 悬停单元格查看状态码")
+        )
+        outer.addWidget(options)
+
+        trend_box = QGroupBox("中位距离趋势")
+        trend_layout = QVBoxLayout(trend_box)
+        trend_layout.setContentsMargins(16, 14, 16, 16)
         self.trend = Trend()
-        outer.addWidget(self.trend)
+        trend_layout.addWidget(self.trend)
+        outer.addWidget(trend_box)
+
+        events_box = QGroupBox("事件日志")
+        events_layout = QVBoxLayout(events_box)
+        events_layout.setContentsMargins(16, 14, 16, 16)
         self.events = QPlainTextEdit()
         self.events.setReadOnly(True)
-        self.events.setMaximumHeight(115)
+        self.events.setMaximumHeight(120)
         self.events.document().setMaximumBlockCount(500)
-        outer.addWidget(self.events)
+        events_layout.addWidget(self.events)
+        outer.addWidget(events_box)
         self.tabs.addTab(page, "① 实时数据")
 
     def make_nano(self):
@@ -188,13 +312,25 @@ class LabWindow(QMainWindow):
         """
         page = QWidget()
         outer = QVBoxLayout(page)
-        intro = QLabel(
-            "Nano 先完成镜像启动与联网。填入地址后可检查设备、上传已编译程序并采集。密码只保留在当前输入框，不写入配置文件。"
+        outer.setContentsMargins(18, 16, 18, 16)
+        outer.setSpacing(14)
+        title = QLabel("Nano 连接与部署")
+        title.setProperty("role", "pageTitle")
+        outer.addWidget(title)
+        outer.addWidget(
+            note(
+                "Nano 先完成镜像启动与联网。填入地址后可检查设备、上传已编译程序并采集。密码只保留在当前输入框，不写入配置文件。"
+            )
         )
-        intro.setWordWrap(True)
-        outer.addWidget(intro)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(14)
         connection = QGroupBox("SSH 连接")
         form = QFormLayout(connection)
+        form.setContentsMargins(16, 14, 16, 16)
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.nano_host = QLineEdit()
         self.nano_host.setPlaceholderText("Nano 的实际 IP 地址")
         self.nano_port = QSpinBox()
@@ -207,17 +343,13 @@ class LabWindow(QMainWindow):
         form.addRow("SSH 端口", self.nano_port)
         form.addRow("用户名", self.nano_user)
         form.addRow("密码", self.nano_password)
-        outer.addWidget(connection)
-        row = QHBoxLayout()
-        row.addWidget(
-            button("检查 Nano 与设备列表", lambda: self.start_nano("inspect"))
-        )
-        row.addWidget(button("上传采集程序", lambda: self.start_nano("deploy")))
-        row.addWidget(button("保存连接配置", self.save_settings))
-        row.addStretch()
-        outer.addLayout(row)
+        columns.addWidget(connection, 1)
+
         settings = QGroupBox("采集设置 · 初次先启用一颗传感器")
         grid = QGridLayout(settings)
+        grid.setContentsMargins(16, 14, 16, 16)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
         self.sensor_enable = []
         self.bus = []
         self.address = []
@@ -229,9 +361,9 @@ class LabWindow(QMainWindow):
                 enable.setToolTip("先使用第一颗；第二颗可按需启用。")
             bus = QComboBox()
             bus.setEditable(True)
-            bus.setMinimumWidth(200)
             bus.setPlaceholderText("检查 Nano 后选择 /dev/i2c-*")
             address = QLineEdit("0x29")
+            address.setMaximumWidth(90)
             grid.addWidget(enable, i, 0)
             grid.addWidget(bus, i, 1)
             grid.addWidget(QLabel("7 位地址"), i, 2)
@@ -242,7 +374,8 @@ class LabWindow(QMainWindow):
         self.nano_hz = QSpinBox()
         self.nano_hz.setRange(1, 15)
         self.nano_hz.setValue(10)
-        grid.addWidget(QLabel("8×8 帧率 Hz"), 2, 0)
+        self.nano_hz.setSuffix(" Hz")
+        grid.addWidget(QLabel("8×8 帧率"), 2, 0)
         grid.addWidget(self.nano_hz, 2, 1)
         self.nano_tty = QComboBox()
         self.nano_tty.setEditable(True)
@@ -253,17 +386,24 @@ class LabWindow(QMainWindow):
         grid.addWidget(self.nano_tty, 3, 1)
         grid.addWidget(QLabel("波特率"), 3, 2)
         grid.addWidget(self.nano_baud, 3, 3)
-        outer.addWidget(settings)
-        note = QLabel(
-            "两颗同地址模块请使用独立 I²C 总线，或先在硬件端完成 LPn 地址分配。连接前确认模块供电、3.3 V 信号电平和引脚复用。"
-        )
-        note.setWordWrap(True)
-        outer.addWidget(note)
+        grid.setColumnStretch(1, 1)
+        columns.addWidget(settings, 2)
+        outer.addLayout(columns)
+
         row = QHBoxLayout()
-        row.addWidget(button("▶ 上传并开始采集", lambda: self.start_nano("stream")))
-        row.addWidget(button("停止 Nano 操作", lambda: self.stop_worker("nano")))
+        row.setSpacing(10)
+        row.addWidget(button("检查 Nano 与设备列表", lambda: self.start_nano("inspect")))
+        row.addWidget(button("上传采集程序", lambda: self.start_nano("deploy")))
+        row.addWidget(button("保存连接配置", self.save_settings))
         row.addStretch()
+        row.addWidget(button("▶ 上传并开始采集", lambda: self.start_nano("stream"), "primary"))
+        row.addWidget(button("停止 Nano 操作", lambda: self.stop_worker("nano")))
         outer.addLayout(row)
+        outer.addWidget(
+            note(
+                "两颗同地址模块请使用独立 I²C 总线，或先在硬件端完成 LPn 地址分配。连接前确认模块供电、3.3 V 信号电平和引脚复用。"
+            )
+        )
         self.nano_events = QPlainTextEdit()
         self.nano_events.setReadOnly(True)
         self.nano_events.document().setMaximumBlockCount(1000)
@@ -275,13 +415,20 @@ class LabWindow(QMainWindow):
         """
         page = QWidget()
         outer = QVBoxLayout(page)
+        outer.setContentsMargins(18, 16, 18, 16)
+        outer.setSpacing(14)
+        title = QLabel("日志回放")
+        title.setProperty("role", "pageTitle")
+        outer.addWidget(title)
         outer.addWidget(
-            QLabel(
+            note(
                 "打开本程序保存的 JSONL 日志，播放时到“实时数据”页观察热力图与姿态。最大支持 128 MB。"
             )
         )
+
         row = QHBoxLayout()
-        row.addWidget(button("打开日志", self.choose_replay))
+        row.setSpacing(10)
+        row.addWidget(button("打开日志", self.choose_replay, "primary"))
         row.addWidget(
             button(
                 "打开自带示例",
@@ -293,23 +440,45 @@ class LabWindow(QMainWindow):
         row.addWidget(button("导出区域明细 CSV", self.export_csv))
         row.addStretch()
         outer.addLayout(row)
+
+        info = QGroupBox("当前日志")
+        info_layout = QVBoxLayout(info)
+        info_layout.setContentsMargins(16, 14, 16, 16)
+        info_layout.setSpacing(10)
+        tiles = QHBoxLayout()
+        tiles.setSpacing(10)
+        self.replay_tiles = {
+            "records": StatTile("记录条数", "条"),
+            "duration": StatTile("日志时长", "s"),
+            "sources": StatTile("数据来源", ""),
+        }
+        for tile in self.replay_tiles.values():
+            tiles.addWidget(tile, 1)
+        info_layout.addLayout(tiles)
         self.replay_label = QLabel("尚未选择日志")
-        outer.addWidget(self.replay_label)
+        self.replay_label.setProperty("role", "sectionTitle")
+        info_layout.addWidget(self.replay_label)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 1000)
         self.slider.sliderReleased.connect(self.seek)
-        outer.addWidget(self.slider)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("播放速度"))
+        info_layout.addWidget(self.slider)
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(10)
+        speed_row.addWidget(QLabel("播放速度"))
         self.speed = QDoubleSpinBox()
         self.speed.setRange(0.1, 4)
         self.speed.setSingleStep(0.25)
         self.speed.setValue(1)
-        row.addWidget(self.speed)
-        row.addStretch()
-        outer.addLayout(row)
+        self.speed.setSuffix(" ×")
+        speed_row.addWidget(self.speed)
+        speed_row.addStretch()
+        speed_row.addWidget(hint("拖动进度条定位；回放按电脑接收时间排列"))
+        info_layout.addLayout(speed_row)
+        outer.addWidget(info)
+
         self.replay_info = QPlainTextEdit()
         self.replay_info.setReadOnly(True)
+        self.replay_info.setPlaceholderText("选择日志后在此显示文件概况。")
         outer.addWidget(self.replay_info, 1)
         self.tabs.addTab(page, "③ 日志回放")
 
@@ -318,34 +487,48 @@ class LabWindow(QMainWindow):
         """
         page = QWidget()
         outer = QVBoxLayout(page)
-        tools = QGridLayout()
+        outer.setContentsMargins(18, 16, 18, 16)
+        outer.setSpacing(14)
+        title = QLabel("软件工具")
+        title.setProperty("role", "pageTitle")
+        outer.addWidget(title)
+        outer.addWidget(
+            note(
+                "图形程序启动后独立运行。Rufus 会打开写卡界面，必须由你核对目标 TF 卡后点击开始。"
+            )
+        )
         entries = [
             ("QGroundControl · 飞控配置", lambda: self.launch_qgc()),
             ("MobaXterm · 远程终端与文件", lambda: self.launch_moba()),
             ("Rufus · TF 卡镜像写入", lambda: self.launch_rufus()),
-            (
-                "打开官方镜像文件夹",
-                lambda: self.open_path(ROOT / "images" / "nano-official"),
-            ),
+            ("打开官方镜像文件夹", lambda: self.open_path(ROOT / "images" / "nano-official")),
             ("打开飞控固件文件夹", lambda: self.open_path(ROOT / "firmware")),
             ("VS Code · 编辑项目", lambda: self.launch_code()),
             ("打开日志文件夹", lambda: self.open_path(ROOT / "logs")),
-            (
-                "打开飞控使用手册",
-                lambda: self.open_path(ROOT / "docs" / "DM-FC01-V1.1.pdf"),
-            ),
-            ("重新编译 Nano 程序", self.build_nano),
+            ("打开飞控使用手册", lambda: self.open_path(ROOT / "docs" / "DM-FC01-V1.1.pdf")),
         ]
-        for i, (title, fn) in enumerate(entries):
-            tools.addWidget(button(title, fn), i // 2, i % 2)
-        outer.addLayout(tools)
-        outer.addWidget(
-            QLabel(
-                "图形程序启动后独立运行。Rufus 会打开写卡界面，必须由你核对目标 TF 卡后点击开始。"
-            )
-        )
+        tools_box = QGroupBox("外部程序与目录")
+        tools = QGridLayout(tools_box)
+        tools.setContentsMargins(16, 14, 16, 16)
+        tools.setSpacing(10)
+        for i, (text, fn) in enumerate(entries):
+            tools.addWidget(button(text, fn), i // 2, i % 2)
+        outer.addWidget(tools_box)
+
+        build_box = QGroupBox("维护操作")
+        build_row = QHBoxLayout(build_box)
+        build_row.setContentsMargins(16, 14, 16, 16)
+        build_row.setSpacing(10)
+        build_row.addWidget(button("重新编译 Nano 程序", self.build_nano))
+        self.theme_button = button("🌙 深色外观", self.toggle_theme)
+        build_row.addWidget(self.theme_button)
+        build_row.addStretch()
+        build_row.addWidget(hint("主题选择会随连接配置一并保存"))
+        outer.addWidget(build_box)
+
         self.tool_log = QPlainTextEdit()
         self.tool_log.setReadOnly(True)
+        self.tool_log.setPlaceholderText("编译输出会显示在这里。")
         outer.addWidget(self.tool_log, 1)
         self.tabs.addTab(page, "④ 软件工具")
 
@@ -392,20 +575,25 @@ class LabWindow(QMainWindow):
         self.attitude.angles = None
         self.attitude.update()
         self.attitude_time = None
-        self.angles.setText("Roll —°\nPitch —°\nYaw —°")
+        for tile in self.angle_tiles.values():
+            tile.set_value(None)
         self.attitude_status.setText("等待数据")
-        self.heartbeat.setText("心跳：未收到")
-        for series in self.trend.values:
-            series.clear()
-        self.trend.update()
+        self.attitude_status.setProperty("tone", "")
+        self.attitude_status.style().unpolish(self.attitude_status)
+        self.attitude_status.style().polish(self.attitude_status)
+        self.heartbeat.set_value(None)
+        self.trend.reset()
 
     def update_map_options(self):
-        """@brief 将旋转选项和毫米色标上限传给两幅热图，并请求重绘。
+        """@brief 将旋转、量程和数值显示选项传给两幅热图，并请求重绘。
         """
         for card in self.cards:
-            card.map.flip = self.flip.isChecked()
-            card.map.maximum = self.maximum.value()
-            card.map.update()
+            card.map.configure(
+                flip=self.flip.isChecked(),
+                maximum=self.maximum.value(),
+                auto_range=self.auto_range.isChecked(),
+                show_values=self.show_values.isChecked(),
+            )
 
     def start_demo(self):
         """@brief 在设备线程全部退出后进入演示，重置录制和显示时间轴。
@@ -591,17 +779,23 @@ class LabWindow(QMainWindow):
                 self.trend.values[item["sensor"]].append(statistics.median(values))
                 self.trend.update()
         elif item["type"] == "attitude":
-            angles = [item[k] for k in ("roll_deg", "pitch_deg", "yaw_deg")]
-            self.attitude.angles = angles
+            for key, tile in self.angle_tiles.items():
+                tile.set_value(f"{item[f'{key}_deg']:.1f}")
+            self.attitude.angles = [
+                item[k] for k in ("roll_deg", "pitch_deg", "yaw_deg")
+            ]
             self.attitude.update()
             self.attitude_time = time.monotonic()
-            self.angles.setText(
-                f"Roll {angles[0]:.1f}°\nPitch {angles[1]:.1f}°\nYaw {angles[2]:.1f}°"
-            )
             self.attitude_status.setText(f"来源：{item.get('source', '未知')}")
+            # 过期提示由 tick 改成琥珀色，收到新帧必须清掉，否则一次短暂断流会让状态永久留黄。
+            self.attitude_status.setProperty("tone", "")
+            self.attitude_status.style().unpolish(self.attitude_status)
+            self.attitude_status.style().polish(self.attitude_status)
         else:
-            self.heartbeat.setText(
-                f"心跳：系统 {item.get('system_id', '?')} / {'已解锁' if item.get('armed') else '未解锁'}"
+            armed = bool(item.get("armed"))
+            self.heartbeat.set_value(
+                f"系统 {item.get('system_id', '?')} · {'已解锁' if armed else '未解锁'}",
+                tone="ok" if armed else "",
             )
 
     def toggle_record(self):
@@ -621,6 +815,9 @@ class LabWindow(QMainWindow):
             self.error(str(exc))
             return
         self.record_button.setText("■ 停止录制")
+        self.record_button.setProperty("variant", "danger")
+        self.record_button.style().unpolish(self.record_button)
+        self.record_button.style().polish(self.record_button)
         self.log(f"正在录制：{path.name}")
 
     def stop_record(self):
@@ -632,6 +829,9 @@ class LabWindow(QMainWindow):
             recorder.close()
             self.log(f"日志已保存：{recorder.path.name}（{recorder.count} 条）")
         self.record_button.setText("● 开始录制")
+        self.record_button.setProperty("variant", "")
+        self.record_button.style().unpolish(self.record_button)
+        self.record_button.style().polish(self.record_button)
 
     def choose_replay(self):
         """@brief 从文件对话框取得 JSONL 路径并交给 open_replay。
@@ -664,10 +864,14 @@ class LabWindow(QMainWindow):
         self.reset_views()
         self.mode_label.setText("日志回放 · 历史记录")
         sources = sorted({r.get("source", "未知") for _, r in records})
+        duration = records[-1][0]
+        self.replay_tiles["records"].set_value(f"{len(records):,}")
+        self.replay_tiles["duration"].set_value(f"{duration:.2f}")
+        self.replay_tiles["sources"].set_value("、".join(map(str, sources)))
         self.replay_info.setPlainText(
-            f"文件：{path}\n记录：{len(records)}\n时长：{records[-1][0]:.2f} 秒\n来源：{sources}\n回放按电脑接收时间排列；不同设备时钟尚未同步。"
+            f"文件：{path}\n记录：{len(records)}\n时长：{duration:.2f} 秒\n来源：{sources}\n回放按电脑接收时间排列；不同设备时钟尚未同步。"
         )
-        self.replay_label.setText(f"{Path(path).name} · 0.00 / {records[-1][0]:.2f} 秒")
+        self.replay_label.setText(f"{Path(path).name} · 0.00 / {duration:.2f} 秒")
         self.log("日志已加载，点击播放。")
 
     def play_pause(self):
@@ -786,9 +990,12 @@ class LabWindow(QMainWindow):
                 card.mark_stale()
             if self.attitude_time and now - self.attitude_time > 2:
                 self.attitude_status.setText("姿态数据已过期")
+                self.attitude_status.setProperty("tone", "warn")
+                self.attitude_status.style().unpolish(self.attitude_status)
+                self.attitude_status.style().polish(self.attitude_status)
 
     def save_settings(self, checked=False, silent=False):
-        """@brief 将连接和采集表单保存为 config/local.json。
+        """@brief 将连接、采集和外观设置保存为 config/local.json。
         @param checked 接收按钮 clicked 的布尔参数，本方法不使用。
         @param silent 为真时省略成功日志。
         """
@@ -805,6 +1012,7 @@ class LabWindow(QMainWindow):
             "hz": self.nano_hz.value(),
             "tty": self.nano_tty.currentText(),
             "baud": self.nano_baud.currentText(),
+            "dark": self.dark,
         }
         try:
             (ROOT / "config" / "local.json").write_text(
@@ -817,7 +1025,7 @@ class LabWindow(QMainWindow):
             self.log("配置已保存（不含密码）")
 
     def load_settings(self):
-        """@brief 从本地配置恢复表单；缺失或解析失败时保留控件当前值。
+        """@brief 从本地配置恢复表单和外观；缺失或解析失败时保留控件当前值。
         """
         path = ROOT / "config" / "local.json"
         if not path.exists():
@@ -836,6 +1044,8 @@ class LabWindow(QMainWindow):
             self.nano_hz.setValue(int(value.get("hz", 10)))
             self.nano_tty.setCurrentText(value.get("tty", ""))
             self.nano_baud.setCurrentText(value.get("baud", "115200"))
+            if isinstance(value.get("dark"), bool):
+                self.dark = value["dark"]
         except (ValueError, TypeError, OSError):
             pass
 
@@ -956,15 +1166,18 @@ class LabWindow(QMainWindow):
 
 def main():
     """@brief 创建 QApplication、配置外观并进入 Qt 事件循环。
-    @note --gazebo 仅选择启动时显示的页签。
+    @note --gazebo 仅选择启动时显示的页签；--dark 与 --light 覆盖本地保存的外观偏好。
     """
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    app.setFont(QFont("Microsoft YaHei UI", 10))
-    app.setStyleSheet(
-        "QMainWindow,QWidget{background:#f7f9fc;color:#19334b} QGroupBox{border:1px solid #d9e2ec;border-radius:8px;margin-top:12px;padding-top:14px} QGroupBox::title{subcontrol-origin:margin;left:12px} QPushButton{background:#e7eff7;border:1px solid #c8d8e8;border-radius:6px;padding:6px 12px} QPushButton:hover{background:#d4e8f8} QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QPlainTextEdit{background:white;border:1px solid #cbd8e4;border-radius:4px;padding:4px} QTabBar::tab{padding:12px 20px} QTabBar::tab:selected{background:#dbeefa;color:#075e7a}"
-    )
+    dark = None
+    if "--dark" in sys.argv:
+        dark = True
+    elif "--light" in sys.argv:
+        dark = False
+    theme.apply_theme(app, bool(dark) if dark is not None else LabWindow._system_dark())
     window = LabWindow()
+    if dark is not None:
+        window.apply_theme(dark)
     if "--gazebo" in sys.argv:
         window.tabs.setCurrentWidget(window.gazebo_panel)
     window.show()

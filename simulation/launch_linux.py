@@ -403,6 +403,8 @@ def main():
             (args.map.resolve().parent / config["terrain_triangles_file"]).resolve()
         )
     config["mission_mode"] = args.mission
+    # 保存启动模式供界面显示；它表示飞行请求，不代表飞控已经解锁。
+    config["fly_requested"] = bool(args.fly)
     config["source_map"] = str(args.map.resolve())
     run_map = run_dir / "map.json"
     run_map.write_text(

@@ -110,10 +110,15 @@ void TeamMission::enter(TeamPhase p, uint64_t now) {
     return_index_=config_.transit_waypoints.empty()?-1:std::min(transit_index_-1,static_cast<int>(config_.transit_waypoints.size())-1);
 }
 // 长时间无有效状态的成员暂不参与全队屏障；保留其失联记录，其他成员继续。
+// 记录按机号去重：已经错过轮次的成员恢复后再次失联时只更新 skipped_now_，
+// 不重复追加历史条目，否则 skipped_ 会随失联次数线性增长并淹没界面与日志。
 void TeamMission::skipUnrecoverable(uint64_t wall) {
   if (std::none_of(seen_.begin(),seen_.end(),[](bool seen){return seen;})) return;
   for (size_t i=0;i<status_.size();++i) if (!skipped_now_[i] && loss_start_[i] && wall-loss_start_[i] >= config_.loss_abort_us) {
-    skipped_now_[i]=true; skipped_.push_back(static_cast<int>(i)); reason_="车辆失联，任务以部分结果继续";
+    skipped_now_[i]=true;
+    const int id=static_cast<int>(i);
+    if (std::find(skipped_.begin(),skipped_.end(),id)==skipped_.end()) skipped_.push_back(id);
+    reason_="车辆失联，任务以部分结果继续";
   }
 }
 void TeamMission::abort(uint64_t now, const char* r) { aborted_=true; reason_=r; enter(TeamPhase::ABORT_RETURN,now); }

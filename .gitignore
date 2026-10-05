@@ -29,6 +29,7 @@ simulation/docs/terrain-depth-*.json
 simulation/docs/terrain-poses.json
 simulation/docs/*observability.csv
 docs/*.png
+docs/_shots/
 docs/research/*.png
 docs/research/*verification.json
 docs/research/*audit.json

@@ -246,7 +246,25 @@ class TeamContactQtTests(unittest.TestCase):
             self.assertEqual(args[args.index("--vehicle-count") + 1], "4")
             self.assertEqual(args[args.index("--vision-delay-ms") + 1], "0")
             self.assertNotIn("--uwb-anchors", args)
+            self.assertIn("--fly", args)
+
+    def test_observation_mode_does_not_request_flight(self):
+        self.panel.fly.setChecked(False)
+        with patch("app.simulation_panel.QProcess") as process:
+            self.panel.command("start")
+            self.assertNotIn("--fly", process.return_value.start.call_args.args[1])
+
+    def test_height_only_disables_automatic_flight(self):
+        self.panel.height_only.setChecked(True)
+        self.assertFalse(self.panel.fly.isChecked())
+        self.assertFalse(self.panel.fly.isEnabled())
+        with patch("app.simulation_panel.QProcess") as process:
+            self.panel.command("start")
+            args = process.return_value.start.call_args.args[1]
+            self.assertIn("--vertical-only", args)
             self.assertNotIn("--fly", args)
+        self.panel.height_only.setChecked(False)
+        self.assertTrue(self.panel.fly.isEnabled())
 
     def test_home_zoom_and_red_markers_render_before_logs(self):
         view = LocalizationMap()
@@ -281,9 +299,11 @@ class TeamContactQtTests(unittest.TestCase):
         )
         self.panel.refresh()
         text = self.panel.cards.toPlainText()
-        self.assertIn("轮流撞击", text)
-        self.assertIn("当前机 2", text)
-        self.assertIn("已撞击：0、1", text)
+        phase_text = self.panel.team_line.text()
+        self.assertIn("轮流撞击", phase_text)
+        self.assertIn("当前机 2", phase_text)
+        self.assertIn("已撞击：0、1", phase_text)
+        self.assertEqual(self.panel.table.rowCount(), 4)
         for i in range(4):
             self.assertIn(f"机 {i}", text)
         self.assertEqual(text.count("实时回家点偏移"), 4)

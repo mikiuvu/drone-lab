@@ -174,10 +174,33 @@ void contactGates() {
   f.states[0].yaw_rad = 0; ++f.states[0].impact_seq; f.tick();
   check(f.mission.phase() == TeamPhase::RETREAT,"零速度物理碰撞未被接受");
 }
+// 已经错过轮次的成员在恢复后再次失联时，历史记录只能保留一条。
+// 若记录不去重，skipped_ 会随「失联—恢复」次数线性增长，界面与报告里会出现几百个重复机号。
+void repeatedLossKeepsOneRecord() {
+  Fixture f; f.contact();
+  // 先让机 0 完成撞击与退出，使 turn_ 越过它；此后恢复不再清除历史记录
+  // （updateStatus 只在 slot >= turn_ 时擦除，正是重复累积的入口）。
+  f.set(0,f.c.target); ++f.states[0].impact_seq; f.tick();
+  check(f.mission.phase() == TeamPhase::RETREAT,"撞击后未进入退出阶段");
+  f.set(0,f.c.approach); f.settle();
+  f.set(0,f.c.assembly[0]); f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH && f.mission.activeVehicle() == 1,
+        "机 0 退出后未进入下一轮次");
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    for (int i = 0; i < 65; ++i) f.tick(0);
+    check(f.mission.partial(),"长期失联没有记录部分任务");
+    check(f.mission.skipped().size() == 1,"失联记录按次重复累积");
+    // 恢复：重新喂入机 0 的状态，它会被重新纳入全队屏障。
+    f.tick();
+    check(!f.commands[0].skipped && !f.commands[0].degraded,"恢复机仍然被排除在全队屏障之外");
+  }
+  check(f.mission.skipped().size() == 1,"失联记录按次重复累积");
+  check(f.mission.skipped()[0] == 0,"失联记录指向了错误的机号");
+}
 }
 int main() {
   try {
-    barriers(); physicalContactAndTimeout(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates();
+    barriers(); physicalContactAndTimeout(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
