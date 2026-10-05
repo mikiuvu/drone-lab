@@ -85,10 +85,15 @@ std::vector<Light> findLights(const PpmImage& image, bool trapezoid) {
     if(trapezoid){
       std::vector<cv::Point> polygon;
       cv::approxPolyDP(contour,polygon,.025*cv::arcLength(contour,true),true);
-      if(polygon.size()!=4)continue;
-      std::sort(polygon.begin(),polygon.end(),[](auto p,auto q){return p.y<q.y;});
-      a=(cv::Point2f(polygon[0])+cv::Point2f(polygon[1]))*.5F;
-      b=(cv::Point2f(polygon[2])+cv::Point2f(polygon[3]))*.5F;
+      // 近距时灯条轮廓不再是严格四边形，approxPolyDP 会给出 3 或 5 个顶点——实测在
+      // 接触阶段的真实帧里约 12.5% 的轮廓如此。旧实现直接丢弃该灯条，两条中丢一条就
+      // 没有配对、整帧 PnP 失锁。顶点数不为 4 时保留上面 minAreaRect 给出的中心线端点：
+      // 对透视梯形略差，但仍可参与配对和测距。
+      if(polygon.size()==4){
+        std::sort(polygon.begin(),polygon.end(),[](auto p,auto q){return p.y<q.y;});
+        a=(cv::Point2f(polygon[0])+cv::Point2f(polygon[1]))*.5F;
+        b=(cv::Point2f(polygon[2])+cv::Point2f(polygon[3]))*.5F;
+      }
     }
     const double length = cv::norm(b - a);
     const double width = std::min(edge0, edge1);

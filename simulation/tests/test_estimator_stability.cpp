@@ -15,6 +15,11 @@ static EstimatorConfig config() {
 int main() {
   Estimator estimator(config());
   estimator.reset(1000000);
+  const auto initial = estimator.estimate();
+  assert(!initial.xy_valid);
+  assert(initial.localization_mode == "INITIALIZING");
+  assert(std::abs(initial.xy_uncertainty_m - 0.2) < 1e-12);
+  assert(std::abs(initial.position_confidence - std::exp(-0.02)) < 1e-12);
 
   ImuSample imu;
   imu.sim_time_us = 1000000;

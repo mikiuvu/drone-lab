@@ -8,7 +8,7 @@ namespace {
 void check(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
-TeamMissionConfig config(bool transit = false) {
+TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0) {
   TeamMissionConfig c; c.stable_us = 200000;
   for (int i = 0; i < 4; ++i) {
     c.homes[i] = {double(i)-1.5,0,.5125,0};
@@ -16,6 +16,10 @@ TeamMissionConfig config(bool transit = false) {
   }
   c.approach = {0,5,1.2,0}; c.target = {1,5,1.2,0};
   if (transit) c.transit_waypoints = {{0,1,1.2,0},{0,2,1.4,0}};
+  // 负值表示不启用视觉接触；0 表示视觉接触但不设进入距离门。
+  if (visual_entry_range >= 0.0) {
+    c.visual_contact = true; c.visual_entry_range_m = visual_entry_range;
+  }
   return c;
 }
 struct Fixture {
@@ -23,7 +27,8 @@ struct Fixture {
   std::vector<TeamVehicleStatus> states{4};
   uint64_t now = 1000000, wall = 1000000;
   std::vector<TeamCommand> commands{4};
-  explicit Fixture(bool transit = false) : c(config(transit)), mission(c) {
+  explicit Fixture(bool transit = false, double visual_entry_range = -1.0)
+      : c(config(transit, visual_entry_range)), mission(c) {
     for (int i = 0; i < 4; ++i) {
       states[i].vehicle = i; states[i].xy_valid = states[i].z_valid = states[i].ready = true;
       set(i,c.homes[i]);
@@ -197,10 +202,53 @@ void repeatedLossKeepsOneRecord() {
   check(f.mission.skipped().size() == 1,"失联记录按次重复累积");
   check(f.mission.skipped()[0] == 0,"失联记录指向了错误的机号");
 }
+// 视觉模式的距离门：图像已锁定但仍在远处时不得进入接触阶段。
+// 否则从集结距离一锁定就进接触，最后几米全部交给视觉伺服爬行，
+// 而视觉伺服的横向纠偏会来回摆动，实测比任务位置环慢好几倍。
+void visualApproachRangeGate() {
+  Fixture f(false, 1.0);
+  f.takeoff();
+  check(f.mission.phase() == TeamPhase::ASSEMBLE,"视觉用例：起飞阶段未完成");
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"视觉用例：集合阶段未完成");
+  // 集结点距目标约 2.7 m，远超 1.0 m 的进入距离：锁定也不应进入接触。
+  for (auto& s : f.states) s.visual_ready = true;
+  f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"图像在远处锁定就进入了接触阶段");
+  // 推进到搜索点，距目标 1.0 m，恰好落在门限内。
+  f.set(0,f.c.approach);
+  f.settle();
+  check(f.mission.phase() == TeamPhase::CONTACT,"进入距离内仍未进入接触阶段");
+}
+// 不配置进入距离时保持旧行为：只要图像锁定就进入接触阶段。
+void visualRangeGateDisabledWithoutSetting() {
+  Fixture f(false, 0.0);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"无距离门用例：集合阶段未完成");
+  for (auto& s : f.states) s.visual_ready = true;
+  f.settle();
+  check(f.mission.phase() == TeamPhase::CONTACT,"未配置进入距离时锁定期望直接进入接触");
+}
+// 视觉模式不再要求到达搜索点：位置条件已由距离门替代，停在原地也应能推进。
+void visualGateIgnoresApproachYaw() {
+  Fixture f(false, 1.0);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  for (auto& s : f.states) s.visual_ready = true;
+  f.set(0,f.c.approach);
+  f.states[0].yaw_rad = 1.4;  // 远离搜索点航向
+  f.settle();
+  check(f.mission.phase() == TeamPhase::CONTACT,"视觉模式下仍被搜索点航向卡住");
+}
 }
 int main() {
   try {
     barriers(); physicalContactAndTimeout(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
+    visualApproachRangeGate(); visualRangeGateDisabledWithoutSetting(); visualGateIgnoresApproachYaw();
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

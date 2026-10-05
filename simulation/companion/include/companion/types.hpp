@@ -201,6 +201,7 @@ struct EstimatorConfig {
  *       covariance(i,j) 是两维误差的相关程度，单位为对应状态单位的乘积；对角线为方差，
  *       例如位置 m²、航向 rad²、速度 m²/s²。非对角项使速度测量也能修正相关位置误差。
  *       roll/pitch 由 IMU 提供，不属于这七维；xy_valid 汇总来源，不能代替检查来源标志。
+ *       初始位姿属于状态初值，不自动构成有效 XY 量测；没有有效来源时应显示 INITIALIZING。
  */
 struct Estimate {
   uint64_t sim_time_us{0};
@@ -220,8 +221,9 @@ struct Estimate {
   bool degenerate_geometry{false}; // ToF 的 [x,y,yaw] 信息秩不足 3，可与 accepted 同时为真
   bool stale_input{false};
   bool flow_valid{false};
-  double position_confidence{0.0}; // exp(-0.5*(Pxx+Pyy)) 的诊断值，不是统计校准后的概率
-  std::string localization_mode{"SPAWN_PRIOR"};
+  double position_confidence{0.0}; // exp(-0.5*(Pxx+Pyy)) 的协方差评分，不是统计校准后的概率
+  double xy_uncertainty_m{0.0}; // sqrt(Pxx+Pyy)，XY 协方差迹的平方根，单位 m
+  std::string localization_mode{"INITIALIZING"};
   int reference_origin{-1};
   uint64_t reference_seq{0};
   uint64_t reference_time_us{0};

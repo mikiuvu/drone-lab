@@ -32,12 +32,33 @@ Estimator::Estimator(EstimatorConfig c):config_(std::move(c)) {
 }
 void Estimator::reset(uint64_t now) {
   state_=Estimate{}; state_.vehicle_id=config_.vehicle_id; state_.pose=config_.initial_pose; state_.covariance=config_.initial_covariance;
-  state_.covariance(2,2)=std::max(state_.covariance(2,2),config_.initial_z_sigma_m*config_.initial_z_sigma_m); state_.initialized=true; state_.xy_valid=true; state_.sim_time_us=now;
+  // 初始位姿只是滤波器状态初值；在收到有效 XY 来源前不能把它当作定位量测。
+  state_.covariance(2,2)=std::max(state_.covariance(2,2),config_.initial_z_sigma_m*config_.initial_z_sigma_m); state_.initialized=true; state_.xy_valid=false; state_.localization_mode="INITIALIZING"; state_.sim_time_us=now;
   assimilated_tof_us_.fill(0);
   last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; local_tof_rank_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
 }
 bool Estimator::fresh(uint64_t t,uint64_t timeout) const { return t&&t<=state_.sim_time_us&&state_.sim_time_us-t<=timeout; }
-Estimate Estimator::estimate() const { Estimate e=state_; e.xy_structural_valid=fresh(last_absolute_us_,config_.terrain?std::min<uint64_t>(config_.prediction_timeout_us,500000):config_.prediction_timeout_us)&&e.covariance(0,0)+e.covariance(1,1)<2.0; const bool flow=fresh(last_flow_us_,config_.flow_timeout_us)&&flow_valid_&&e.covariance(0,0)+e.covariance(1,1)<=config_.flow_xy_covariance_limit; const bool within_spawn_window=startup_sim_us_!=0&&state_.sim_time_us>=startup_sim_us_&&state_.sim_time_us-startup_sim_us_<=config_.spawn_prior_timeout_us; e.spawn_prior_valid=!e.xy_structural_valid&&within_spawn_window&&e.covariance(0,0)+e.covariance(1,1)<=config_.spawn_prior_xy_variance_limit; e.xy_peer_valid=!e.xy_structural_valid&&fresh(last_peer_xy_us_,config_.peer_timeout_us*2)&&e.covariance(0,0)+e.covariance(1,1)<=config_.spawn_prior_xy_variance_limit; e.flow_valid=flow; e.xy_valid=e.xy_structural_valid||e.xy_peer_valid||e.spawn_prior_valid||flow; e.z_valid=fresh(last_height_us_,config_.height_timeout_us)||fresh(last_baro_us_,500000); e.height_assisted=fresh(last_height_us_,config_.height_timeout_us); e.vz_derived_from_height=e.height_assisted&&state_.vz_derived_from_height; e.position_confidence=std::exp(-0.5*std::max(0.0,e.covariance(0,0)+e.covariance(1,1))); e.localization_mode=e.xy_structural_valid?"STRUCTURAL":(e.xy_peer_valid?"PEER_REFERENCE":(flow?"FLOW_DRIFT":"SPAWN_PRIOR")); return e; }
+Estimate Estimator::estimate() const {
+  Estimate e=state_;
+  const double xy_trace=std::max(0.0,e.covariance(0,0)+e.covariance(1,1));
+  e.xy_structural_valid=fresh(last_absolute_us_,config_.terrain?std::min<uint64_t>(config_.prediction_timeout_us,500000):config_.prediction_timeout_us)&&xy_trace<2.0;
+  const bool flow=fresh(last_flow_us_,config_.flow_timeout_us)&&flow_valid_&&xy_trace<=config_.flow_xy_covariance_limit;
+  const bool within_spawn_window=startup_sim_us_!=0&&state_.sim_time_us>=startup_sim_us_&&state_.sim_time_us-startup_sim_us_<=config_.spawn_prior_timeout_us;
+  const bool has_xy_measurement=last_local_tof_us_||last_absolute_us_||last_peer_xy_us_||last_flow_us_;
+  e.xy_peer_valid=!e.xy_structural_valid&&fresh(last_peer_xy_us_,config_.peer_timeout_us*2)&&xy_trace<=config_.spawn_prior_xy_variance_limit;
+  // 出生点先验门限仍保留；没有任何有效 XY 来源时，初始位姿不能触发 SPAWN_PRIOR。
+  e.spawn_prior_valid=!e.xy_structural_valid&&!e.xy_peer_valid&&!flow&&has_xy_measurement&&within_spawn_window&&xy_trace<=config_.spawn_prior_xy_variance_limit;
+  e.flow_valid=flow;
+  e.xy_valid=e.xy_structural_valid||e.xy_peer_valid||e.spawn_prior_valid||flow;
+  e.z_valid=fresh(last_height_us_,config_.height_timeout_us)||fresh(last_baro_us_,500000);
+  e.height_assisted=fresh(last_height_us_,config_.height_timeout_us);
+  e.vz_derived_from_height=e.height_assisted&&state_.vz_derived_from_height;
+  // 该值只描述协方差规模，保留原始公式用于诊断，不能解释为概率或校准置信度。
+  e.position_confidence=std::exp(-0.5*xy_trace);
+  e.xy_uncertainty_m=std::sqrt(xy_trace);
+  e.localization_mode=e.xy_structural_valid?"STRUCTURAL":(e.xy_peer_valid?"PEER_REFERENCE":(flow?"FLOW_DRIFT":(e.spawn_prior_valid?"SPAWN_PRIOR":(has_xy_measurement?"INVALID":"INITIALIZING"))));
+  return e;
+}
 /**
  * @brief 将七维状态从当前时间推进到目标时间。
  * @note 正常间隔按不超过 20 ms 的小步长积分，并用 FPFᵀ+Q 传播协方差；超过 2 s

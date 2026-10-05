@@ -149,7 +149,7 @@ class Heatmap(QWidget):
     def __init__(self):
         """@brief 初始化空帧、180°显示旋转和 4000 mm 固定色标。"""
         super().__init__()
-        self.setMinimumSize(300, 330)
+        self.setMinimumSize(280, 300)
         self.setMouseTracking(True)
         self.frame = None
         self.flip = True
@@ -604,7 +604,7 @@ class Trend(QWidget):
         """@brief 建立两个限长队列，队列元素的单位为 mm。
         """
         super().__init__()
-        self.setMinimumHeight(190)
+        self.setMinimumHeight(150)
         self.setMouseTracking(True)
         self.values = [deque(maxlen=200), deque(maxlen=200)]
         self.dark = False

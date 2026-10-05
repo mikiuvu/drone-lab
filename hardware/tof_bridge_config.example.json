@@ -1,0 +1,20 @@
+{
+  "vehicle": 0,
+  "sensor_count": 3,
+  "allowed_status": [5, 9],
+  "tof_udp_host": "127.0.0.1",
+  "tof_udp_port": 16000,
+  "time_mode": "timesync",
+  "receive_time_error_us": 2000,
+  "timesync_period_s": 1.0,
+  "timesync_max_rtt_us": 20000,
+  "timesync_stale_s": 5.0,
+  "serial": {
+    "port": "/dev/ttyUSB0",
+    "baud": 115200
+  },
+  "mavlink_udp_listen_host": "127.0.0.1",
+  "mavlink_udp_listen_port": 14580,
+  "mavlink_udp_target_host": "127.0.0.1",
+  "mavlink_udp_target_port": 14540
+}

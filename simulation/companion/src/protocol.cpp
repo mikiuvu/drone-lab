@@ -233,6 +233,7 @@ std::string serializeEstimateDatagram(const Estimate& estimate) {
       {"degenerate_geometry", estimate.degenerate_geometry},
       {"flow_valid", estimate.flow_valid},
       {"position_confidence", estimate.position_confidence},
+      {"xy_uncertainty_m", estimate.xy_uncertainty_m},
       {"localization_mode", estimate.localization_mode},
       {"reference_origin", estimate.reference_origin},
       {"reference_seq", estimate.reference_seq},

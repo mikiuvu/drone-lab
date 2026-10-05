@@ -196,6 +196,12 @@ int main(int argc,char**argv){try{
     if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<=0))throw std::runtime_error(std::string("invalid team_mission.")+key);
   for(const char* key:{"velocity_damping","impact_settle_s","impact_recovery_s","impact_pitch_rad","impact_roll_rad","touchdown_thrust"})
     if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<0))throw std::runtime_error(std::string("invalid team_mission.")+key);
+  // 视觉撞击的现场调参项：必须在启动时报错而不是在飞行中静默退化成默认值。
+  for(const char* key:{"intercept_horizon_s","visual_stale_age_s"})
+    if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<=0))throw std::runtime_error(std::string("invalid team_mission.")+key);
+  for(const char* key:{"visual_approach_speed_mps","visual_no_reverse_range_m","visual_fresh_age_s","visual_ready_age_s","visual_lost_push_mps","visual_lost_coast_s"})
+    if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<0))throw std::runtime_error(std::string("invalid team_mission.")+key);
+  if(!std::isfinite(team_settings.value("visual_min_forward_scale",.3))||team_settings.value("visual_min_forward_scale",.3)<0||team_settings.value("visual_min_forward_scale",.3)>1)throw std::runtime_error("visual_min_forward_scale must be 0..1");
   if(team_settings.value("impact_pitch_rad",0.0)>=companion::kPi/2||team_settings.value("impact_roll_rad",0.0)>=companion::kPi/2||team_settings.value("touchdown_thrust",0.0)>1)throw std::runtime_error("invalid recovery attitude or thrust");
   std::unique_ptr<Udp> team;
   if(team_enabled)team=std::make_unique<Udp>(18000+o.vehicle);
@@ -313,9 +319,14 @@ int main(int argc,char**argv){try{
       auto camera_dir=o.runtime; if(std::filesystem::exists(o.runtime/"camera"))camera_dir=o.runtime/"camera";
       try{auto meta=readJson(camera_dir/("camera_"+std::to_string(o.vehicle)+".json"));auto seq=meta.at("frame_seq").get<uint64_t>();const auto stamp=meta.at("sim_time_us").get<uint64_t>();if(seq!=frame_seq){if(armor_enabled||visual_contact){auto image=companion::readPpm((camera_dir/("camera_"+std::to_string(o.vehicle)+".ppm")).string());if(image && image->frame_seq==seq && image->sim_time_us==stamp){target=companion::detectArmorStrips(*image,camera,detection);frame_seq=seq;camera_us=stamp;emit({{"kind","vision"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"pixel_only",true},{"detected",target.valid},{"centroid_x_px",target.centroid_x_px},{"centroid_y_px",target.centroid_y_px},{"angular_error_rad",target.angular_error_rad},{"range_m",target.range_m}});}}else{frame_seq=seq;camera_us=stamp;emit({{"kind","camera_metadata"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"detection_skipped",true}});}}}catch(const std::exception&){}
       if(!camera_us||camera_us>sim_us||sim_us-camera_us>camera.timeout_us)target.valid=false;
+      // 像素闭环结果留作退化参考：PnP 在近距会因灯条轮廓不再是四边形而连续失锁。
+      companion::VisualGuidanceResult pixel_result;
+      bool pixel_ready=false;
       if(visual_contact){
-        visual_result=visual_tracker.update(sim_us,target,camera_us);
-        visual_ready=visual_result.target_valid&&visual_result.range_valid&&std::abs(target.angular_error_rad)<.15&&std::abs(target.vertical_error_rad)<.15;
+        pixel_result=visual_tracker.update(sim_us,target,camera_us);
+        visual_result=pixel_result;
+        pixel_ready=visual_result.target_valid&&visual_result.range_valid&&std::abs(target.angular_error_rad)<.15&&std::abs(target.vertical_error_rad)<.15;
+        visual_ready=pixel_ready;
       }
 
 #ifdef COMPANION_WITH_OPENCV
@@ -352,8 +363,8 @@ int main(int argc,char**argv){try{
           tracked.position=periodic.position;tracked.velocity=periodic.velocity;
           emit({{"kind","periodic_prediction"},{"sim_time_us",sim_us},{"confidence",periodic.confidence},{"horizon_s",periodic.horizon},{"y_m",periodic.position.y()}});
         }
-        visual_result={};visual_ready=false;
         if(tracked.valid){
+          visual_result={};visual_ready=false;
           Eigen::Vector3d relative=rotation(0,0,-e.pose.yaw_rad)*(tracked.position-Eigen::Vector3d(e.pose.x_m,e.pose.y_m,e.pose.z_m));
           Eigen::Vector3d feedforward=rotation(0,0,-e.pose.yaw_rad)*tracked.velocity;
           visual_result.tracking_valid=tracked.age_s<=.35||relative.x()<.3;visual_result.target_valid=tracked.measured;visual_result.range_valid=true;
@@ -362,23 +373,68 @@ int main(int argc,char**argv){try{
           visual_result.velocity_flu_mps.y()=std::clamp(2.0*relative.y()+feedforward.y(),-.65,.65);
           visual_result.velocity_flu_mps.z()=std::clamp(2.0*relative.z()+feedforward.z(),-.4,.4);
           // 板很近时允许最多0.8s的已锁定轨迹延拓，解决灯条离开视野到机体接触间的盲区。
+          // 就绪判据的帧龄门限单独可调：ArmorTracker 内部把「测量有效」硬编码在 150 ms，
+          // 而 PnP 实际只有约 5 Hz（实测间隔 p50 198 ms），于是 measured 只在约 23% 的时间为真，
+          // 屏障几乎无法连续成立。默认值仍取 0.15 s，即与 measured 完全一致的行为。
+          const double ready_age=team_settings.value("visual_ready_age_s",.15);
           const bool aligned=std::abs(relative.y())<team_settings.value("visual_lateral_gate_m",.10)&&std::abs(relative.z())<team_settings.value("visual_vertical_gate_m",.075);
           if(aligned&&visual_result.tracking_valid&&(tracked.measured||relative.x()<.3))visual_result.velocity_flu_mps.x()=team_settings.value("contact_speed_mps",.18);
-          visual_ready=tracked.measured&&std::abs(relative.y())<.12&&std::abs(relative.z())<.1;
+          visual_ready=tracked.valid&&tracked.age_s<=ready_age&&std::abs(relative.y())<.12&&std::abs(relative.z())<.1;
           if(team_settings.value("intercept_enabled",false)&&visual_result.tracking_valid){
-            const auto plan=companion::planIntercept({e.pose.x_m,e.pose.y_m,e.pose.z_m},e.velocity_enu_mps,tracked.position,tracked.velocity,
-                team_settings.value("intercept_speed_mps",1.0),team_settings.value("intercept_accel_mps2",1.5),std::max(.05,.8-tracked.age_s));
+            // 滑轨只沿世界 Y 轴往复（与 PeriodicMotion 的模型一致），X/Z 上的速度分量是
+            // 估计噪声。把它乘以接近一秒的预测窗会放大成几十厘米的瞄准点抖动，进而让
+            // 前向指令在零点两侧反复穿越——实测有 11% 的接触时间被指令倒车。只保留沿轨速度。
+            const Eigen::Vector3d rail_velocity(0.0,tracked.velocity.y(),0.0);
+            const double horizon=std::max(.05,team_settings.value("intercept_horizon_s",.30)-tracked.age_s);
+            const auto plan=companion::planIntercept({e.pose.x_m,e.pose.y_m,e.pose.z_m},e.velocity_enu_mps,tracked.position,rail_velocity,
+                team_settings.value("intercept_speed_mps",1.0),team_settings.value("intercept_accel_mps2",1.5),horizon);
             if(plan.valid){
-              auto body=rotation(0,0,-e.pose.yaw_rad)*plan.velocity;
+              // 必须写成具名 Vector3d：auto 会把 Eigen 的乘积推导成惰性表达式，
+              // 它持有 rotation(...) 返回的临时矩阵引用，语句结束后即为悬垂；
+              // 之后再读 body 的分量会得到未定义值（实测 body.x() 读到 0.003 而真值 0.779）。
+              const Eigen::Vector3d body=rotation(0,0,-e.pose.yaw_rad)*plan.velocity;
               visual_result.velocity_flu_mps=body;
               visual_result.velocity_flu_mps.z()=std::clamp(body.z(),-.4,.4);
-              if(!tracked.measured&&relative.x()>=.3)visual_result.velocity_flu_mps.x()=0;
-              visual_ready=tracked.measured&&relative.x()>0&&std::abs(visual_result.yaw_error_rad)<.5;
+              // 贴近目标后不再允许反向：撞击任务里倒车只会把目标推远、让画面更小，
+              // 从而制造更多失锁。距离门由视觉进入距离保证不会太远。
+              if(relative.x()<=team_settings.value("visual_no_reverse_range_m",1.2))
+                visual_result.velocity_flu_mps.x()=std::max(0.0,body.x());
+              // 帧龄越长前向越保守，而不是一刀切成 0：实测帧龄 p50 已达 50–112 ms，
+              // 150 ms 的硬门限会让无人机近三成时间停住。保留一个下限使推进不中断。
+              const double fresh=team_settings.value("visual_fresh_age_s",.10);
+              const double stale=team_settings.value("visual_stale_age_s",.40);
+              const double scale=std::clamp((stale-tracked.age_s)/std::max(1e-3,stale-fresh),0.0,1.0);
+              visual_result.velocity_flu_mps.x()*=std::max(team_settings.value("visual_min_forward_scale",.3),scale);
+              // 这里刻意不加入横向对准判据：实测在接近阶段等待装甲板摆进 ±0.10 m 或
+              // ±0.20 m 窗口要多花 1–2 s，而接触阶段只省下 0.2 s，总时长反而更长。
+              // 横向追赶由接触阶段的视觉闭环完成。
+              visual_ready=tracked.valid&&tracked.age_s<=ready_age&&relative.x()>0&&std::abs(visual_result.yaw_error_rad)<.5;
               emit({{"kind","intercept_plan"},{"sim_time_us",sim_us},{"arrival_s",plan.arrival_s},{"reachable",plan.reachable},{"aim_x_m",plan.aim.x()},{"aim_y_m",plan.aim.y()},{"aim_z_m",plan.aim.z()}});
             }
           }
 
+        }else{
+          // PnP 没有可用跟踪时退回像素闭环。近距灯条轮廓不再是四边形会让 PnP 连续失锁，
+          // 若此时把速度参考和就绪标志都清零，无人机会停在进入距离内永远推不动：
+          // 实测机 1 停在 0.92 m 处 80 秒，PnP 输出为 0 而像素检测成功率仍有 80%。
+          visual_result=pixel_result;visual_ready=pixel_ready;
         }
+        // 视觉门限诊断：把像素闭环与 PnP 两条路各自的判决分开记录，
+        // 否则「卡在进入距离内不动」无法区分是检测失败、测距失败还是就绪判据否决。
+        double gate_rel_y=0;
+        if(tracked.valid){
+          const Eigen::Vector3d gate_rel=rotation(0,0,-e.pose.yaw_rad)*(tracked.position-Eigen::Vector3d(e.pose.x_m,e.pose.y_m,e.pose.z_m));
+          gate_rel_y=gate_rel.y();
+        }
+        emit({{"kind","visual_gate"},{"sim_time_us",sim_us},
+              {"pixel_detected",target.valid},{"pixel_clipped",target.image_clipped},{"pixel_conf",target.confidence},
+              {"pixel_ang",target.angular_error_rad},{"pixel_vert",target.vertical_error_rad},
+              {"pixel_range_valid",target.range_valid},{"pixel_range_m",target.range_m},
+              {"pixel_ready",pixel_ready},{"pixel_age_s",pixel_result.observation_age_s},
+              {"pnp_valid",tracked.valid},{"pnp_measured",tracked.measured},{"pnp_age_s",tracked.age_s},
+              {"rel_y_m",gate_rel_y},
+              {"visual_ready",visual_ready},
+              {"vis_vx",visual_result.velocity_flu_mps.x()},{"vis_vy",visual_result.velocity_flu_mps.y()}});
       }
 #endif
       if(armor_enabled&&!visual_contact&&o.vehicle!=o.mission_vehicle)target.valid=false;
@@ -426,8 +482,20 @@ int main(int argc,char**argv){try{
           if(visual_contact&&team_command.value("active_vehicle",-1)==o.vehicle&&
              (intention.mode=="APPROACH"||intention.mode=="CONTACT")){
             intention.velocity_flu_mps=visual_result.velocity_flu_mps;
-            if(intention.mode=="APPROACH")intention.velocity_flu_mps.x()=0;
-            intention.yaw_rate_ref_rad_s=visual_result.yaw_rate_ref_rad_s;
+            if(intention.mode=="APPROACH"){
+              // 接近阶段前向由任务位置环驱动到搜索点，横向与垂向仍由视觉闭环对准。
+              // 旧实现把前向固定为 0，只在图像未锁定时才用位置环；而锁定发生在集结距离上，
+              // 于是无人机停在两三米外，最后几米全部交给视觉伺服爬行。配合进入距离门
+              // 会让它永远到不了门限，所以这里必须允许前向推进。设为 0 可恢复旧行为。
+              // 上限取 0.8 m/s：从集结距离到进入门限约 2 m，约 2.5 s 走完，
+              // 同时给横向对准留出时间。设为 0 可恢复「接近阶段不前推」的旧行为。
+              const double cap=team_settings.value("visual_approach_speed_mps",.8);
+              const Eigen::Vector3d to_waypoint=rotation(0,0,-e.pose.yaw_rad)*desired;
+              intention.velocity_flu_mps.x()=std::clamp(to_waypoint.x(),-cap,cap);
+            }
+            // 接近阶段保留任务位置环的偏航控制：机头没对准搜索点时，机体系前向分量很小，
+            // 无人机只能靠侧移慢慢挪过去（实测有机停在半路 47 s）。接触阶段才交给视觉闭环。
+            if(intention.mode=="CONTACT")intention.yaw_rate_ref_rad_s=visual_result.yaw_rate_ref_rad_s;
             intention.target_valid=visual_result.target_valid;
             intention.target_range_m=visual_result.range_m;
             intention.target_yaw_error_rad=visual_result.yaw_error_rad;
@@ -439,16 +507,27 @@ int main(int argc,char**argv){try{
                 const double horizontal=intention.velocity_flu_mps.head<2>().norm();
                 if(horizontal>.35)intention.velocity_flu_mps.head<2>()*=.35/horizontal;
               }else {
+                // 丢失后继续小幅前推，而不是倒车。倒车会让目标变小、更容易继续丢失，
+                // 形成「丢—退—更丢」的正反馈；实测最差的一架有 19% 的接触时间在倒退。
+                // 只有在丢失很久、位置环仍能提供有效参考时才回退到任务目标。
                 if(!visual_lost_since)visual_lost_since=sim_us;
-                if(sim_us-visual_lost_since<800000){
-                  intention.velocity_flu_mps.setZero();intention.velocity_flu_mps.x()=-.15;
+                const double lost_s=static_cast<double>(sim_us-visual_lost_since)*1e-6;
+                if(lost_s<team_settings.value("visual_lost_coast_s",1.0)){
+                  // 沿用最后一次已知的推进方向，横向与垂向归零，避免用陈旧误差左右乱摆。
+                  intention.velocity_flu_mps.setZero();
+                  intention.velocity_flu_mps.x()=team_settings.value("visual_lost_push_mps",.18);
                 }else{
                   intention.velocity_flu_mps=rotation(0,0,-e.pose.yaw_rad)*desired;
+                  // 接触阶段一律不倒车：这里回退到的是静态任务目标，而无人机可能已经
+                  // 越过它，于是指令变成倒退。倒车会让目标更小、更难重新捕获，形成正反馈。
+                  // 实测所有倒车样本都来自这条分支（丢失超过 visual_lost_coast_s 之后）。
+                  if(intention.mode=="CONTACT")intention.velocity_flu_mps.x()=std::max(0.0,intention.velocity_flu_mps.x());
                   const double speed=intention.velocity_flu_mps.head<2>().norm();
                   if(speed>.3)intention.velocity_flu_mps.head<2>()*=.3/speed;
                 }
               }
-              intention.yaw_rate_ref_rad_s=0;
+              // 只有接触阶段才冻结偏航；接近阶段失去视觉时仍要能转向搜索点。
+              if(intention.mode=="CONTACT")intention.yaw_rate_ref_rad_s=0;
             }
           }
 

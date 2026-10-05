@@ -18,13 +18,16 @@ typedef struct {
     uint64_t read_payload_bytes, write_payload_bytes; // 成功分块的载荷字节数，不含地址、寄存器和 ACK。
 } VL53L5CX_Platform;
 // 每区保留一个目标；关闭未用于 JSONL 的结果字段以控制帧载荷。
+// 单帧 I2C 读取字节数完全由下面这组宏决定：只关 spads/反射率时是 1116 B，
+// 其中运动指示块独占 144 B，而本工程从不读取它（motion_indicator 插件没有参与编译），
+// 所以一并关闭，降到 972 B，10 Hz 下每秒少读约 1.4 kB。
 #define VL53L5CX_NB_TARGET_PER_ZONE 1U
 #define VL53L5CX_DISABLE_NB_SPADS_ENABLED
-#define VL53L5CX_DISABLE_AMBIENT_DMAX
 #define VL53L5CX_DISABLE_REFLECTANCE_PERCENT
-#define PROCESSOR_LITTLE_ENDIAN
-#define SWAP_UINT16(x) (x)
-#define SWAP_UINT32(x) (x)
+#define VL53L5CX_DISABLE_MOTION_INDICATOR
+// 字节序由 platform.c 的 SwapBuffer 无条件按 4 字节组翻转实现；ST 参考头里的
+// PROCESSOR_LITTLE_ENDIAN / SWAP_UINT16 / SWAP_UINT32 在本版 ULD 中没有任何引用，
+// VL53L5CX_DISABLE_AMBIENT_DMAX 同理（该版本已无 dmax 输出块），均已删除。
 /**
  * @brief 读取一个寄存器字节，使用 RdMulti 的错误与取消规则。
  * @param p 设备平台状态，须包含有效总线句柄。

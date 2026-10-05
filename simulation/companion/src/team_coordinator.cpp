@@ -115,6 +115,12 @@ TeamMissionConfig readConfig(const std::string& path) {
   c.fly_through_route=m.value("fly_through_route",false);
   c.pipelined_contact=m.value("pipelined_contact",false);
   c.visual_contact=m.value("visual_contact",false);
+  // 视觉进入距离：0 表示保持旧行为（锁定即进入接触）。
+  if(m.contains("visual_entry_range_m")){
+    const double range=number(m,"visual_entry_range_m");
+    if(range<0||range>10)throw std::invalid_argument("视觉进入距离超出范围");
+    c.visual_entry_range_m=range;
+  }
   if(m.contains("stable_s")) {
     const double seconds=number(m,"stable_s");
     if(seconds<=0||seconds>10)throw std::invalid_argument("稳定确认时间无效");

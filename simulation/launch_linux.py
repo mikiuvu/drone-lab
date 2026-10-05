@@ -55,8 +55,10 @@ def environment(dynamics="micro", horizontal=False):
 # @param output 本次运行的世界 SDF 输出路径。
 # @param map_path 地图 JSON 路径，用于解析世界与地形的相对路径。
 # @param config 已解析机队配置；None 时从地图加载。
+# @param contract 传感器契约；提供时加入 ToF 射线可视化插件。
+# @param tof_rays 为真时把射线可视化插件写入世界。
 # @return 世界名称和实际采用的配置；写入传感器插件、出生模型及可选起点标记。
-def prepare_world(output, map_path, config=None):
+def prepare_world(output, map_path, config=None, contract=None, tof_rays=True):
     config = (
         configure_fleet(json.loads(map_path.read_text(encoding="utf-8")))
         if config is None
@@ -114,6 +116,29 @@ def prepare_world(output, map_path, config=None):
         ET.SubElement(plugin, "terrain_triangles_file").text = str(
             (map_path.parent / config["terrain_triangles_file"]).resolve()
         )
+    # ToF 射线可视化使用与伴随端相同的安装外参，画出来的线就是算法看到的那条。
+    if tof_rays and contract:
+        rays = ET.SubElement(
+            world,
+            "plugin",
+            filename="libtof_ray_visualizer.so",
+            name="drone_sim::TofRayVisualizer",
+        )
+        ET.SubElement(rays, "vehicle_count").text = str(len(config["spawns"]))
+        ET.SubElement(rays, "publish_hz").text = "10"
+        ET.SubElement(rays, "hfov_rad").text = repr(contract["tof_hfov_rad"])
+        ET.SubElement(rays, "vfov_rad").text = repr(contract["tof_vfov_rad"])
+        ET.SubElement(rays, "min_range_m").text = "0.02"
+        ET.SubElement(rays, "max_range_m").text = "4.0"
+        for sensor, (origin, yaw) in enumerate(
+            zip(contract["tof_origins_body_m"], contract["tof_yaw_rad"])
+        ):
+            ET.SubElement(rays, f"sensor_{sensor}_origin").text = " ".join(
+                repr(value) for value in origin
+            )
+            ET.SubElement(rays, f"sensor_{sensor}_rpy").text = " ".join(
+                ("0", repr(contract["tof_pitch_down_rad"]), repr(yaw))
+            )
     for spawn in config["spawns"]:
         i = spawn["id"]
         include = ET.SubElement(world, "include")
@@ -270,6 +295,11 @@ def main():
         "--mission", choices=["hover", "survey", "team_contact"], default="hover"
     )
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument(
+        "--no-tof-rays",
+        action="store_true",
+        help="不在 Gazebo 中绘制各机三向 ToF 的 8×8 测距射线",
+    )
     parser.add_argument("--dynamics", choices=["micro", "x500"], default="micro")
     parser.add_argument("--horizontal-tof", action="store_true")
     parser.add_argument("--vehicle-count", type=int)
@@ -355,22 +385,26 @@ def main():
         config.setdefault("team_mission", {})["vision_delay_ms"] = args.vision_delay_ms
     if args.flow_disable:
         config["optical_flow"]["enabled"] = False
-    world_name, config = prepare_world(
-        run_dir / "world.sdf", args.map.resolve(), config
-    )
-    if args.mission == "team_contact" and "team_mission" not in config:
-        raise SystemExit("Selected map has no team_mission configuration")
     model_folder = (
         ("generated_micro_horizontal" if args.horizontal_tof else "generated_micro")
         if args.dynamics == "micro"
         else "generated"
     )
-    # 从模型契约同步传感器安装外参，保证模拟深度与伴随端投影使用同一几何。
+    # 从模型契约同步传感器安装外参，保证模拟深度、伴随端投影和射线可视化使用同一几何。
     contract = json.loads(
         (ROOT / "models" / model_folder / "sensor_contract.json").read_text(
             encoding="utf-8"
         )
     )
+    world_name, config = prepare_world(
+        run_dir / "world.sdf",
+        args.map.resolve(),
+        config,
+        contract,
+        tof_rays=not args.no_tof_rays,
+    )
+    if args.mission == "team_contact" and "team_mission" not in config:
+        raise SystemExit("Selected map has no team_mission configuration")
     source_model = ROOT / "models" / model_folder / "micro_0/model.sdf"
     for i in range(count):
         destination = ROOT / "models" / model_folder / f"micro_{i}"

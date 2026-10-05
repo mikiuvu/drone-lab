@@ -229,6 +229,7 @@
       }
     ],
     "visual_contact": true,
+    "visual_entry_range_m": 1.15,
     "visual_strip_height_m": 0.093427,
     "visual_strip_separation_m": 0.18409,
     "visual_bottom_separation_m": 0.108873,
@@ -237,7 +238,16 @@
     "contact_confirmation": "armor_pressure",
     "intercept_enabled": true,
     "intercept_speed_mps": 0.8,
-    "intercept_accel_mps2": 1.5
+    "intercept_accel_mps2": 1.5,
+    "intercept_horizon_s": 0.3,
+    "visual_approach_speed_mps": 0.8,
+    "visual_no_reverse_range_m": 1.2,
+    "visual_fresh_age_s": 0.1,
+    "visual_stale_age_s": 0.4,
+    "visual_ready_age_s": 0.15,
+    "visual_min_forward_scale": 0.3,
+    "visual_lost_push_mps": 0.18,
+    "visual_lost_coast_s": 1.0
   },
   "optical_flow": {
     "enabled": true,

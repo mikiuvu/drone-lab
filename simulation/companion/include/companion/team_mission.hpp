@@ -36,6 +36,9 @@ struct TeamMissionConfig {
   bool fly_through_route = false; // true 允许通过航点时保持运动，不要求先降至 0.30 m/s。
   bool pipelined_contact = false; // true 在前机让出通道后切换轮次，不必等其完全停稳。
   bool visual_contact = false; // 相机闭环接触；地图点只负责到达搜索区。
+  // 视觉模式下进入接触阶段前，本机到目标点必须小于该距离，单位 m。
+  // 0 表示不限制，此时只要图像锁定就会立刻进入接触，末段行程全部由视觉伺服完成。
+  double visual_entry_range_m = 0;
   double contact_exit_side = 0; // 接触航向左侧为正；0 按集结点决定待命侧。
   // 已接触飞机的停留点；不配置则沿用 assembly。
   std::vector<TeamPoint> completed_holding;

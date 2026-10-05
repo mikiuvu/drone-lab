@@ -156,7 +156,24 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     case TeamPhase::TAKEOFF: { bool ok=true; for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){auto p=config_.homes[i];p.z=config_.cruise_z_m;ok&=status_[i].armed&&near(static_cast<int>(i),p,false);} if(barrier(ok,sim))enter(config_.transit_waypoints.empty()?TeamPhase::ASSEMBLE:TeamPhase::TRANSIT,sim); break; }
     case TeamPhase::TRANSIT: if(transit_index_<static_cast<int>(config_.transit_waypoints.size())&&barrier(routeNear(transit_index_),sim)){if(++transit_index_==static_cast<int>(config_.transit_waypoints.size()))enter(TeamPhase::ASSEMBLE,sim); else { phase_start_=sim; stable_=false; }} break;
     case TeamPhase::ASSEMBLE: if(barrier(allNear(false),sim))enter(TeamPhase::APPROACH,sim); break;
-    case TeamPhase::APPROACH: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&barrier(config_.visual_contact?(validForBarrier(a,sim,wall)&&status_[a].visual_ready):(near(a,config_.approach)&&std::abs(std::remainder(status_[a].yaw_rad-config_.approach.yaw,6.283185307))<=.15),sim))enter(TeamPhase::CONTACT,sim); break; }
+    case TeamPhase::APPROACH: {
+      const int a=activeVehicle();
+      if(a<0||skipped_now_[a])break;
+      const auto&s=status_[a];
+      bool ok;
+      if(config_.visual_contact){
+        // 视觉模式：除了图像锁定，还要求已经贴近到搜索距离内。
+        // 否则从集结距离一锁定就进接触，最后几米全部交给视觉伺服爬行，
+        // 而视觉伺服的横向纠偏会来回摆动，比任务位置环慢得多。
+        const double range=std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y);
+        ok=validForBarrier(a,sim,wall)&&s.visual_ready&&
+           (config_.visual_entry_range_m<=0||range<=config_.visual_entry_range_m);
+      }else{
+        ok=near(a,config_.approach)&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.15;
+      }
+      if(barrier(ok,sim))enter(TeamPhase::CONTACT,sim);
+      break;
+    }
     // 接触要有新的冲击序号，且位置/航向符合基地条件；仅距离近或别的机撞击不算。
     case TeamPhase::CONTACT: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&validForBarrier(a,sim,wall)&&status_[a].impact_seq>impact_baseline_){impact_baseline_=status_[a].impact_seq;const auto&s=status_[a];if(config_.visual_contact||(std::hypot(std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y),s.z_m-config_.target.z)<=.35&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.3)){completed_.push_back(a);enter(TeamPhase::RETREAT,sim);}} break; }
     case TeamPhase::RETREAT: { const int a=activeVehicle();if(a<0){enter(TeamPhase::RETURN_ALL,sim);break;}

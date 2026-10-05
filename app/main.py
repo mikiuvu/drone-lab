@@ -39,6 +39,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSlider,
     QSizePolicy,
+    QScrollArea,
+    QFrame,
 )
 from serial.tools import list_ports
 
@@ -99,6 +101,24 @@ def note(text):
     return label
 
 
+def scrollable(page):
+    """@brief 把标签页包进可按需滚动的区域，使主窗口高度不再被内容撑死。
+    @param page 页面控件，通常是一个带 QVBoxLayout 的 QWidget。
+    @return 承载该页面的 QScrollArea。
+    @note 实时页内容的最小高度实测 1239 px、Gazebo 页 1096 px，而常见屏幕可用高度
+          只有 1000 px 上下。不套滚动区域时主窗口的最小高度会被内容抬到 1300 px，
+          用户既缩不矮窗口，底部控件也被裁在可视区之外。
+          widgetResizable 保证窗口足够大时页面仍然铺满视口，只是窗口过小时才出现滚动条。
+    """
+    area = QScrollArea()
+    area.setWidget(page)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    return area
+
+
 class LabWindow(QMainWindow):
     """@brief 管理采集状态、显示面板与日志生命周期的主窗口。
     @note mode 为 idle/live/demo/replay；workers 保持线程引用直到 finished，避免运行中的线程被回收。
@@ -110,6 +130,8 @@ class LabWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Drone Lab · DM-FC01 / LicheeRV Nano / 双 VL53L5CX")
         self.resize(1360, 940)
+        # 各标签页都套了滚动区域，窗口最小尺寸由这里显式给出，不再受内容高度牵制。
+        self.setMinimumSize(880, 560)
         self.workers = {}  # 数据源名到线程对象；stop 后仍保留，直到 finished 回调清理。
         self.recorder = None
         self.mode = "idle"
@@ -134,9 +156,9 @@ class LabWindow(QMainWindow):
         self.make_tools()
         self.make_help()
         self.research_panel = ResearchPanel(ROOT)
-        self.tabs.addTab(self.research_panel, "⑥ 预研与仿真")
+        self.tabs.addTab(scrollable(self.research_panel), "⑥ 预研与仿真")
         self.gazebo_panel = GazeboPanel(ROOT)
-        self.tabs.addTab(self.gazebo_panel, "⑦ Gazebo 多机")
+        self.tabs.addTab(scrollable(self.gazebo_panel), "⑦ Gazebo 多机")
         self.load_settings()
         self.apply_theme(self.dark)
         self.timer = QTimer(self)
@@ -305,11 +327,14 @@ class LabWindow(QMainWindow):
         events_layout.setContentsMargins(16, 14, 16, 16)
         self.events = QPlainTextEdit()
         self.events.setReadOnly(True)
+        # 最小高度必须显式给出：QPlainTextEdit 的默认最小尺寸提示约 160 px，
+        # 只设 maximumHeight(120) 会被它压过去，反而把实时页最小高度抬到 1239 px。
+        self.events.setMinimumHeight(72)
         self.events.setMaximumHeight(120)
         self.events.document().setMaximumBlockCount(500)
         events_layout.addWidget(self.events)
         outer.addWidget(events_box)
-        self.tabs.addTab(page, "① 实时数据")
+        self.tabs.addTab(scrollable(page), "① 实时数据")
 
     def make_nano(self):
         """@brief 建立 SSH 与传感器配置表单；按钮将操作类型传给 start_nano。
@@ -412,7 +437,7 @@ class LabWindow(QMainWindow):
         self.nano_events.setReadOnly(True)
         self.nano_events.document().setMaximumBlockCount(1000)
         outer.addWidget(self.nano_events, 1)
-        self.tabs.addTab(page, "② Nano 连接与部署")
+        self.tabs.addTab(scrollable(page), "② Nano 连接与部署")
 
     def make_replay(self):
         """@brief 建立日志选择、播放倍率和进度条；拖动释放后才执行 seek。
@@ -484,7 +509,7 @@ class LabWindow(QMainWindow):
         self.replay_info.setReadOnly(True)
         self.replay_info.setPlaceholderText("选择日志后在此显示文件概况。")
         outer.addWidget(self.replay_info, 1)
-        self.tabs.addTab(page, "③ 日志回放")
+        self.tabs.addTab(scrollable(page), "③ 日志回放")
 
     def make_tools(self):
         """@brief 建立外部工具入口和异步编译输出区域。
@@ -534,7 +559,7 @@ class LabWindow(QMainWindow):
         self.tool_log.setReadOnly(True)
         self.tool_log.setPlaceholderText("编译输出会显示在这里。")
         outer.addWidget(self.tool_log, 1)
-        self.tabs.addTab(page, "④ 软件工具")
+        self.tabs.addTab(scrollable(page), "④ 软件工具")
 
     def make_help(self):
         """@brief 使用本地 quickstart.html 填充帮助页。
@@ -544,7 +569,7 @@ class LabWindow(QMainWindow):
         guide = ROOT / "docs" / "quickstart.html"
         if guide.exists():
             self.help.setSource(QUrl.fromLocalFile(str(guide)))
-        self.tabs.addTab(self.help, "⑤ 从这里开始")
+        self.tabs.addTab(scrollable(self.help), "⑤ 从这里开始")
 
     def log(self, text, source="live"):
         """@brief 按来源写入日志框，并短暂显示在状态栏。

@@ -27,7 +27,7 @@ static EstimatorConfig makeConfig() {
 
 static void heightAndPrediction() {
   Estimator e(makeConfig()); e.reset(); ImuSample imu; imu.sim_time_us=1000000; imu.attitude_valid=true; imu.acceleration_valid=true; imu.acceleration_enu_mps2=Eigen::Vector3d(1,0,0); e.predict(imu);
-  assert(e.estimate().xy_valid&&e.estimate().spawn_prior_valid);
+  assert(!e.estimate().xy_valid&&e.estimate().localization_mode=="INITIALIZING");
   assert(e.fuseHeightAssist({1010000,1.0,"SIM_HEIGHT_ASSIST"}).accepted);
   assert(e.fuseHeightAssist({1020000,1.1,"SIM_HEIGHT_ASSIST"}).accepted);
   assert(e.estimate().z_valid&&e.estimate().vz_derived_from_height);

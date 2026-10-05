@@ -236,6 +236,7 @@ class LocalizationMetrics:
                 "flow_valid": 0,
                 "position_confidence": 0,
                 "position_confidence_count": 0,
+                "latest": {},
                 "localization_mode": None,
             }
             for _ in range(self.vehicle_count)
@@ -369,6 +370,21 @@ class LocalizationMetrics:
                             row["position_confidence"]
                         )
                         counts["position_confidence_count"] += 1
+                    uncertainty = row.get("xy_uncertainty_m")
+                    if not (isinstance(uncertainty, (int, float)) and math.isfinite(uncertainty)):
+                        covariance = row.get("pose_covariance")
+                        if isinstance(covariance, list) and len(covariance) == 9:
+                            try:
+                                uncertainty = math.sqrt(max(0.0, float(covariance[0]) + float(covariance[4])))
+                            except (TypeError, ValueError, OverflowError):
+                                uncertainty = None
+                    counts["latest"] = {
+                        "xy_valid": row.get("xy_valid") if isinstance(row.get("xy_valid"), bool) else None,
+                        "flow_valid": row.get("flow_valid") if isinstance(row.get("flow_valid"), bool) else None,
+                        "position_confidence": row.get("position_confidence") if isinstance(row.get("position_confidence"), (int, float)) and math.isfinite(row["position_confidence"]) else None,
+                        "xy_uncertainty_m": uncertainty if isinstance(uncertainty, (int, float)) and math.isfinite(uncertainty) else None,
+                        "localization_mode": row.get("localization_mode") if isinstance(row.get("localization_mode"), str) else None,
+                    }
                     if isinstance(row.get("localization_mode"), str):
                         counts["localization_mode"] = row["localization_mode"]
                 trail.append(xy)
@@ -496,6 +512,7 @@ class LocalizationMetrics:
                     else None
                 ),
                 "localization_mode": counts["localization_mode"],
+                "latest": dict(counts["latest"]),
                 "fusion": dict(self.fusion[i]),
                 "matched_samples": stats["n"],
                 "rmse_m": math.sqrt(stats["sum_sq"] / stats["n"])

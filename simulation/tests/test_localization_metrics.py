@@ -1,4 +1,5 @@
 import json
+import math
 import tempfile
 import unittest
 import os
@@ -48,6 +49,30 @@ class LocalizationMetricsTests(unittest.TestCase):
             self.assertGreater(vehicle["rmse_m"], 0)
             self.assertEqual(vehicle["validity"]["valid"], 1)
             self.assertEqual(vehicle["validity"]["peer"], 0.5)
+
+    def test_latest_localization_state_preserves_invalid_bit_and_legacy_uncertainty(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_rows(root / "truth_evaluation_only.jsonl", [row("truth_evaluation_only", 0, 2_000_000, 0, 0)])
+            write_rows(root / "companion_0.jsonl", [
+                row(
+                    "estimate", 0, 1_000_000, 0, 0, source="ESTIMATE",
+                    xy_valid=True, flow_valid=False, position_confidence=0.9,
+                    xy_uncertainty_m=0.3, localization_mode="STRUCTURAL",
+                ),
+                row(
+                    "estimate", 0, 2_000_000, 1, 0, source="ESTIMATE",
+                    xy_valid=False, flow_valid=False, position_confidence=0.8,
+                    pose_covariance=[0.16, 0, 0, 0, 0.25, 0, 0, 0, 0.36],
+                    localization_mode="INVALID",
+                ),
+            ])
+            vehicle = LocalizationMetrics(root).poll()["vehicles"][0]
+            self.assertEqual(vehicle["latest"]["xy_valid"], False)
+            self.assertEqual(vehicle["latest"]["localization_mode"], "INVALID")
+            self.assertEqual(vehicle["latest"]["position_confidence"], 0.8)
+            self.assertAlmostEqual(vehicle["latest"]["xy_uncertainty_m"], math.sqrt(0.41))
+            self.assertAlmostEqual(vehicle["position_confidence"], 0.85)
 
     def test_bounds_prefer_explicit_contract(self):
         self.assertEqual(map_bounds({"bounds": {"x_min": -1, "x_max": 2, "y_min": -3, "y_max": 4}}), (-1.0, 2.0, -3.0, 4.0))
