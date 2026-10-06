@@ -57,9 +57,12 @@ def test_sensor_configuration():
             {"bus": "/dev/i2c-1", "address": "0x29"},
             {"bus": "/dev/i2c-2", "address": "0x29"},
         ],
+        "vehicle": 2,
         "hz": 10,
     }
     assert sensor_arguments(config) == [
+        "--vehicle",
+        "2",
         "--sensor",
         "/dev/i2c-1:0x29",
         "--sensor",

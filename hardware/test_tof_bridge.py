@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tof_bridge import ClockModel, MavlinkParser, convert_nano_record, make_timesync_request, x25_crc
 
 
-def record(status=5):
-    return {
+def record(status=5, vehicle=None):
+    value = {
         "schema": 1,
         "type": "tof",
         "source": "NANO",
@@ -20,6 +20,9 @@ def record(status=5):
         "distance_mm": [1000] * 64,
         "status": [status] * 64,
     }
+    if vehicle is not None:
+        value["vehicle"] = vehicle
+    return value
 
 
 class BridgeTests(unittest.TestCase):
@@ -46,6 +49,11 @@ class BridgeTests(unittest.TestCase):
         bad = record()
         bad["sensor"] = 3
         self.assertIsNone(convert_nano_record(bad, 0, 3, {5, 9}, 2_000_000_000, clock))
+
+    def test_vehicle_identity_is_checked_when_present(self):
+        clock = ClockModel("monotonic")
+        self.assertIsNotNone(convert_nano_record(record(vehicle=1), 1, 3, {5, 9}, 2_000_000_000, clock))
+        self.assertIsNone(convert_nano_record(record(vehicle=1), 2, 3, {5, 9}, 2_000_000_000, clock))
 
     def test_timesync_clock_requires_valid_sample_and_reports_bound(self):
         clock = ClockModel("timesync", max_rtt_us=20_000, receive_error_us=2000)

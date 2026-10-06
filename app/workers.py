@@ -115,12 +115,16 @@ def sensor_arguments(config):
     """@brief 校验 Nano 设备配置并生成采集程序参数列表。
     @param config sensors 含总线和 7 位地址；hz 为帧率，tty 非空时添加飞控串口参数。
     @return 尚未进行 shell 引号拼接的字符串列表。
-    @note 同总线地址不可重复，8×8 频率限定 1–15 Hz；输入不合要求抛出 ValueError。
+    @note 同总线地址不可重复，8×8 频率限定 1–15 Hz；vehicle 为 0–245，输入不合要求抛出 ValueError。
     """
     sensors = config.get("sensors", [])
     if not 1 <= len(sensors) <= 2:
         raise ValueError("请选择 1 或 2 颗传感器")
     args, seen = [], set()
+    vehicle = config.get("vehicle", 0)
+    if type(vehicle) is not int or not 0 <= vehicle <= 245:
+        raise ValueError("无人机编号应为 0–245")
+    args += ["--vehicle", str(vehicle)]
     for sensor in sensors:
         bus = sensor["bus"]
         if not re.fullmatch(r"/dev/i2c-[0-9]+", bus):

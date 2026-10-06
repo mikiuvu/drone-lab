@@ -406,6 +406,12 @@ class LabWindow(QMainWindow):
         self.nano_hz.setSuffix(" Hz")
         grid.addWidget(QLabel("8×8 帧率"), 2, 0)
         grid.addWidget(self.nano_hz, 2, 1)
+        self.nano_vehicle = QSpinBox()
+        self.nano_vehicle.setRange(0, 245)
+        self.nano_vehicle.setValue(0)
+        self.nano_vehicle.setToolTip("与 companion runner 使用相同的无人机编号；ToF、姿态和心跳都会带上此编号。")
+        grid.addWidget(QLabel("无人机编号"), 2, 2)
+        grid.addWidget(self.nano_vehicle, 2, 3)
         self.nano_tty = QComboBox()
         self.nano_tty.setEditable(True)
         self.nano_tty.setPlaceholderText("留空：不经 Nano 接收飞控")
@@ -683,6 +689,7 @@ class LabWindow(QMainWindow):
         return dict(
             sensors=sensors,
             hz=self.nano_hz.value(),
+            vehicle=self.nano_vehicle.value(),
             tty=self.nano_tty.currentText(),
             baud=int(self.nano_baud.currentText()),
         )
@@ -1040,6 +1047,7 @@ class LabWindow(QMainWindow):
                 for i in range(2)
             ],
             "hz": self.nano_hz.value(),
+            "vehicle": self.nano_vehicle.value(),
             "tty": self.nano_tty.currentText(),
             "baud": self.nano_baud.currentText(),
             "dark": self.dark,
@@ -1072,6 +1080,7 @@ class LabWindow(QMainWindow):
                 self.address[i].setText(sensor.get("address", "0x29"))
             self.sensor_enable[0].setChecked(True)
             self.nano_hz.setValue(int(value.get("hz", 10)))
+            self.nano_vehicle.setValue(int(value.get("vehicle", 0)))
             self.nano_tty.setCurrentText(value.get("tty", ""))
             self.nano_baud.setCurrentText(value.get("baud", "115200"))
             if isinstance(value.get("dark"), bool):

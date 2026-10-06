@@ -35,6 +35,7 @@ static void interrupted(int number) {(void)number;running=0;}
 static char record[4096];
 static size_t record_size,record_limit=sizeof(record);
 static bool record_valid;
+static unsigned vehicle_id;
 /** @brief 将格式化片段追加到当前记录；容量不足后锁存无效状态，后续追加不再写入。
  * @param format printf 格式及随后对应的可变参数，文本属于同一条记录。
  */
@@ -97,11 +98,11 @@ typedef struct {
  */
 static int emit_tof(Sensor *s,int number,uint64_t ready_time) {
     VL53L5CX_ResultsData *r=&s->result;begin_record("tof");
-    append_record("\"sensor\":%d,\"sequence\":%llu,\"sensor_streamcount\":%u,"
+    append_record("\"vehicle\":%u,\"sensor\":%d,\"sequence\":%llu,\"sensor_streamcount\":%u,"
            "\"source_time_us\":%llu,\"read_end_us\":%llu,\"time_basis\":\"nano_data_ready_poll\","
            "\"poll_start_us\":%llu,\"read_start_us\":%llu,\"data_read_us\":%llu,"
            "\"i2c_read_payload_bytes_total\":%llu,\"i2c_write_payload_bytes_total\":%llu,"
-           "\"temperature_c\":%d,\"distance_mm\":[",number,(unsigned long long)s->sequence,s->device.streamcount,
+           "\"temperature_c\":%d,\"distance_mm\":[",vehicle_id,number,(unsigned long long)s->sequence,s->device.streamcount,
            (unsigned long long)ready_time,(unsigned long long)s->read_end,
            (unsigned long long)s->poll_start,(unsigned long long)s->read_start,
            (unsigned long long)(s->read_end-s->read_start),
@@ -202,19 +203,19 @@ static int poll_mavlink(int fd) {
                 // 飞控启动毫秒转为 source_time_us；Nano 接收时间单独保存，两个时钟不能直接相减。
                 // 姿态从 MAVLink 弧度换成度；不做坐标变换或生成控制指令。
                 begin_record("attitude");
-                append_record("\"system_id\":%u,\"component_id\":%u,\"source_time_us\":%llu,"
+                append_record("\"vehicle\":%u,\"system_id\":%u,\"component_id\":%u,\"source_time_us\":%llu,"
                        "\"nano_rx_monotonic_us\":%llu,\"time_basis\":\"fc_boot\","
                        "\"mavlink_sequence\":%u,\"uart_bytes_total\":%llu,"
                        "\"roll_deg\":%.5f,\"pitch_deg\":%.5f,\"yaw_deg\":%.5f}\n",
-                       message.sysid,message.compid,(unsigned long long)a.time_boot_ms*1000ULL,
+                       vehicle_id,message.sysid,message.compid,(unsigned long long)a.time_boot_ms*1000ULL,
                        (unsigned long long)received,message.seq,(unsigned long long)uart_bytes_total,
                        a.roll*57.295779513,a.pitch*57.295779513,a.yaw*57.295779513);
                 if(finish_record())return EXIT_OUTPUT;
             } else if(message.msgid==MAVLINK_MSG_ID_HEARTBEAT) {
                 mavlink_heartbeat_t h;mavlink_msg_heartbeat_decode(&message,&h);begin_record("heartbeat");
-                append_record("\"system_id\":%u,\"component_id\":%u,\"armed\":%s,\"autopilot\":%u,"
+                append_record("\"vehicle\":%u,\"system_id\":%u,\"component_id\":%u,\"armed\":%s,\"autopilot\":%u,"
                        "\"nano_rx_monotonic_us\":%llu,\"mavlink_sequence\":%u,\"uart_bytes_total\":%llu}\n",
-                       message.sysid,message.compid,(h.base_mode&128)?"true":"false",h.autopilot,
+                       vehicle_id,message.sysid,message.compid,(h.base_mode&128)?"true":"false",h.autopilot,
                        (unsigned long long)received,message.seq,(unsigned long long)uart_bytes_total);
                 if(finish_record())return EXIT_OUTPUT;
             }
@@ -223,7 +224,7 @@ static int poll_mavlink(int fd) {
     return 0;
 }
 static void usage(void) {
-    puts("drone-nano --sensor /dev/i2c-N:0x29 [--sensor /dev/i2c-M:0x29] [--hz 10] [--mavlink /dev/ttyS1 --baud 115200]");
+    puts("drone-nano --sensor /dev/i2c-N:0x29 [--sensor /dev/i2c-M:0x29] [--vehicle 0] [--hz 10] [--mavlink /dev/ttyS1 --baud 115200]");
     puts("Addresses are 7-bit. Same bus/address pairs are rejected. Default 8x8 / 10 Hz. No flight commands are sent.");
 }
 /** @brief 解析参数、锁定单实例、初始化设备，并轮询采集直到停止或故障。
@@ -235,7 +236,7 @@ static void usage(void) {
 int main(int argc,char **argv) {
     Sensor sensors[2]={0};int count=0,result=1,serial_fd=-1,output_flags=-1;
     unsigned hz=10,baud=115200;const char *serial_path=NULL;speed_t speed;
-    running=1;uart_bytes_total=0;record_limit=sizeof(record);
+    vehicle_id=0;running=1;uart_bytes_total=0;record_limit=sizeof(record);
     for(int n=0;n<2;n++)sensors[n].device.platform.fd=-1;
     for(int i=1;i<argc;i++) {
         if(!strcmp(argv[i],"--help")){usage();return 0;}if(i+1>=argc){usage();return 2;}
@@ -246,6 +247,8 @@ int main(int argc,char **argv) {
             if(!parse_unsigned(argv[++i],10,&hz)){fprintf(stderr,"Invalid Hz\n");return 2;}
         } else if(!strcmp(argv[i],"--baud")) {
             if(!parse_unsigned(argv[++i],10,&baud)){fprintf(stderr,"Invalid baud rate\n");return 2;}
+        } else if(!strcmp(argv[i],"--vehicle")) {
+            if(!parse_unsigned(argv[++i],10,&vehicle_id)||vehicle_id>245){fprintf(stderr,"Invalid vehicle id\n");return 2;}
         } else if(!strcmp(argv[i],"--mavlink"))serial_path=argv[++i];else{usage();return 2;}
     }
     if(count<1||hz<1||hz>15 || !serial_speed(baud,&speed) ||

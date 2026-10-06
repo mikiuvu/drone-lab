@@ -8,6 +8,7 @@ int main(void) {
     SwapBuffer(data,8);
     assert(data[0]==4 && data[3]==1 && data[4]==8 && data[7]==5);
     Sensor sensor={0};
+    vehicle_id=7;
     for(int i=0;i<64;i++) {
         sensor.result.distance_mm[i]=(int16_t)(1000+i);
         sensor.result.target_status[i]=5;

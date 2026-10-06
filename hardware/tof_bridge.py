@@ -205,6 +205,9 @@ def convert_nano_record(
         return None
     if record.get("source") not in (None, "NANO"):
         return None
+    record_vehicle = record.get("vehicle")
+    if record_vehicle is not None and record_vehicle != vehicle:
+        return None
     sensor = record.get("sensor")
     source_time_us = record.get("source_time_us")
     distances = record.get("distance_mm")
