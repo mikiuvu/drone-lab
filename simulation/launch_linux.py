@@ -1,10 +1,7 @@
 # @file launch_linux.py
 # @brief 管理 Linux/WSL 中的 Gazebo、PX4 和伴随进程，生成运行配置并回收进程组。
 
-"""Launch real Gazebo/PX4 processes in WSL; no scripted trajectories or truth odometry.
-
-This manager's pose knowledge is confined to one-time spawning and evaluation.
-"""
+"""启动和管理 WSL 中的 Gazebo 场景、PX4 飞控与伴随程序。"""
 
 import argparse
 import json
@@ -12,6 +9,7 @@ import math
 import os
 import signal
 import subprocess
+import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -25,6 +23,13 @@ ROOT = Path(__file__).resolve().parent
 PX4 = Path("/home/devcontainers/drone-sim/PX4-Autopilot")
 SENSORS = Path("/home/devcontainers/drone-sim/build-sensors")
 ACTIVE = ROOT / "runtime" / "manager.json"
+GUI_CONFIG = ROOT / "gui.config"
+GAZEBO_ENV_KEYS = (
+    "GZ_PARTITION",
+    "IGN_PARTITION",
+    "GZ_SIM_RESOURCE_PATH",
+    "GZ_SIM_SYSTEM_PLUGIN_PATH",
+)
 
 
 # @brief 为同一次运行的所有进程提供一致的 Gazebo 通信与资源搜索环境。
@@ -238,53 +243,179 @@ def alive(item):
 
 
 # 将已启动进程及地图配置写入临时 JSON，再替换 manager.json，使读取方获得完整快照。
-def write_status(items, run_dir, config):
+def save_manager(state):
+    """原子更新状态，重试 Windows 读者短暂占用文件造成的共享冲突。"""
     ACTIVE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ACTIVE.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(
-            {
+    tmp = ACTIVE.with_name(f"manager.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        for attempt in range(40):
+            try:
+                tmp.replace(ACTIVE)
+                return
+            except PermissionError:
+                if attempt == 39:
+                    raise
+                time.sleep(0.05)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def write_status(items, run_dir, config, env=None):
+    save_manager({
                 "run_dir": str(run_dir),
                 "processes": items,
                 "map": config,
                 "height_assist": True,
                 "official_field": config.get("official_field", False),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    tmp.replace(ACTIVE)
+                "gazebo_environment": {
+                    key: env[key] for key in GAZEBO_ENV_KEYS if env and key in env
+                },
+            })
+
+
+def gui_environment(env):
+    """为可见窗口选择显示后端，避免继承离屏 Qt 设置。"""
+    env = dict(env)
+    if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+        raise RuntimeError("Gazebo GUI 无可用显示：请检查 DISPLAY 或 WAYLAND_DISPLAY。")
+    if env.get("WSL_DISTRO_NAME") and env.get("DISPLAY"):
+        env["QT_QPA_PLATFORM"] = "xcb"
+    elif env.get("QT_QPA_PLATFORM") in ("offscreen", "minimal"):
+        env["QT_QPA_PLATFORM"] = "xcb" if env.get("DISPLAY") else "wayland"
+    return env
+
+
+def wait_for_gui(item, server, env, world_name, timeout=90):
+    """等待渲染场景的 MarkerManager 服务，并报告提前退出或超时。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not alive(server):
+            raise RuntimeError("Gazebo 服务器已退出：" + server["log"])
+        if not alive(item):
+            break
+        try:
+            services = subprocess.run(
+                ["gz", "service", "-l"], env=env, capture_output=True,
+                timeout=4, check=False,
+            )
+            names = services.stdout.decode("utf-8", "replace")
+            if "/gazebo/worlds" not in names or "/marker/list" not in names:
+                time.sleep(0.2)
+                continue
+            worlds = subprocess.run(
+                [
+                    "gz", "service", "-s", "/gazebo/worlds",
+                    "--reqtype", "gz.msgs.Empty", "--reptype", "gz.msgs.StringMsg_V",
+                    "--timeout", "1000", "--req", "",
+                ],
+                env=env, capture_output=True, timeout=4, check=False,
+            )
+            world_text = worlds.stdout.decode("utf-8", "replace")
+            if (worlds.returncode != 0 or worlds.stderr.strip()
+                    or world_name not in world_text):
+                time.sleep(0.2)
+                continue
+            response = subprocess.run(
+                [
+                    "gz", "service", "-s", "/marker/list",
+                    "--reqtype", "gz.msgs.Empty", "--reptype", "gz.msgs.Marker_V",
+                    "--timeout", "1000", "--req", "",
+                ],
+                env=env, capture_output=True, timeout=4, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        # gz service 在超时时也返回 0；必须同时检查错误输出。
+        if response.returncode == 0 and not response.stderr.strip() and alive(item):
+            return
+        time.sleep(0.2)
+    path = Path(item["log"])
+    detail = path.read_text(encoding="utf-8", errors="replace")[-3000:] if path.exists() else ""
+    raise RuntimeError("Gazebo GUI 未就绪（3D 场景 /marker/list）：" + str(path) + "\n" + detail)
+
+
+def launch_gui(items, run_dir, env):
+    """记录 GUI 进程后等待场景初始化，使失败进程仍可被管理器回收。"""
+    server = next((p for p in items if p["name"] == "gazebo" and alive(p)), None)
+    if server is None:
+        raise RuntimeError("Gazebo 服务器未运行，请先启动多机环境。")
+    env = gui_environment(env)
+    existing = next((p for p in items if p["name"] == "gazebo_gui" and alive(p)), None)
+    if existing is None:
+        existing = start_one(
+            "gazebo_gui",
+            ["gz", "sim", "-g", "-v", "4", "--gui-config", GUI_CONFIG],
+            env, run_dir,
+        )
+        items.append(existing)
+    world_name = ET.parse(run_dir / "world.sdf").getroot().find("world").get("name")
+    wait_for_gui(existing, server, env, world_name)
+    return existing
+
+
+def open_gui(state):
+    """连接当前运行的世界，复用 GUI，并把新窗口纳入停止流程。"""
+    items = state.get("processes", [])
+    server = next((p for p in items if p["name"] == "gazebo" and alive(p)), None)
+    if state.get("stopped") or server is None:
+        raise RuntimeError("Gazebo 服务器未运行，请先启动多机环境。")
+    env = environment()
+    saved = state.get("gazebo_environment")
+    if not saved:
+        # 旧运行记录从仍匹配身份的服务器恢复通信分区及资源目录。
+        entries = Path(f"/proc/{server['pid']}/environ").read_bytes().decode().split("\0")
+        saved = dict(entry.split("=", 1) for entry in entries if "=" in entry)
+    env.update({key: saved[key] for key in GAZEBO_ENV_KEYS if key in saved})
+    before = len(items)
+    try:
+        item = launch_gui(items, Path(state["run_dir"]), env)
+    except Exception:
+        for added in items[before:]:
+            if alive(added):
+                try:
+                    os.killpg(added["pid"], signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+        raise
+    finally:
+        state["gazebo_environment"] = {key: env[key] for key in GAZEBO_ENV_KEYS if key in env}
+        save_manager(state)
+    print(json.dumps({"run_dir": state["run_dir"], "gui": item, "status": "gui_ready"}, ensure_ascii=False))
 
 
 # 逆启动顺序向仍匹配身份的进程组发送 SIGTERM，最多等待 8 秒，再以 SIGKILL 终止残留组。
 # 状态保留在 manager.json 并标记 stopped，便于后续读取运行记录。
-def stop():
-    if not ACTIVE.exists():
-        return
-    state = json.loads(ACTIVE.read_text(encoding="utf-8"))
-    for item in reversed(state["processes"]):
+def stop_processes(items):
+    """根据内存中的 PID 和启动时间回收进程，状态文件写入失败也能清理。"""
+    for item in reversed(items):
         if alive(item):
             try:
                 os.killpg(item["pid"], signal.SIGTERM)
             except ProcessLookupError:
                 pass
     deadline = time.monotonic() + 8
-    while any(alive(p) for p in state["processes"]) and time.monotonic() < deadline:
+    while any(alive(p) for p in items) and time.monotonic() < deadline:
         time.sleep(0.1)
-    for item in reversed(state["processes"]):
+    for item in reversed(items):
         if alive(item):
             try:
                 os.killpg(item["pid"], signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def stop():
+    if not ACTIVE.exists():
+        return
+    state = json.loads(ACTIVE.read_text(encoding="utf-8"))
+    stop_processes(state["processes"])
     state["stopped"] = True
-    ACTIVE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_manager(state)
 
 
 # 解析 start/stop/status/gui 命令；启动时准备配置、等待世界时钟、启动传感器和各 PX4 实例。
-# 每次启动后保存进程清单；异常路径先保存已启动项，再调用 stop 回收。
+# 每次启动后保存进程清单；异常路径从内存清单回收，避免依赖状态文件写入。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["start", "stop", "status", "gui"])
@@ -345,12 +476,18 @@ def main():
         return
     env = environment(args.dynamics, args.horizontal_tof)
     if args.action == "gui":
-        subprocess.Popen(["gz", "sim", "-g"], env=env, start_new_session=True)
+        state = json.loads(ACTIVE.read_text(encoding="utf-8")) if ACTIVE.exists() else {}
+        open_gui(state)
         return
     if ACTIVE.exists():
         previous = json.loads(ACTIVE.read_text(encoding="utf-8"))
         if any(alive(p) for p in previous["processes"]):
+            if args.gui and not previous.get("stopped"):
+                open_gui(previous)
+                return
             raise SystemExit("An existing simulation is still running; stop it first.")
+    if args.gui:
+        gui_environment(env)
     for path in (
         PX4 / "build/px4_sitl_default/bin/px4",
         SENSORS / "sensor_gateway",
@@ -360,6 +497,9 @@ def main():
             raise SystemExit("Missing build artifact: " + str(path))
     run_dir = ROOT / "runtime" / time.strftime("run_%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=False)
+    # 每次运行独立分区，遗留窗口不会连接到新世界；所有子进程共享此环境。
+    env["GZ_PARTITION"] = "drone-lab-" + run_dir.name
+    env["IGN_PARTITION"] = env["GZ_PARTITION"]
     config = configure_fleet(
         json.loads(args.map.read_text(encoding="utf-8")),
         args.vehicle_count,
@@ -458,9 +598,9 @@ def main():
         for i in range(3)
     ]
     if config.get("moving_armor", {}).get("source") == "original_base_mesh":
-        settings["companion"]["camera"]["strip_center_separation_m"] = config[
-            "team_mission"
-        ].get("visual_strip_separation_m", 0.195)
+        separation = config.get("team_mission", {}).get("visual_strip_separation_m")
+        if separation is not None:
+            settings["companion"]["camera"]["strip_center_separation_m"] = separation
     (run_dir / "companion_config.json").write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
     )
@@ -471,7 +611,7 @@ def main():
                 "gazebo", ["gz", "sim", "-s", "-r", run_dir / "world.sdf"], env, run_dir
             )
         )
-        write_status(items, run_dir, config)
+        write_status(items, run_dir, config, env)
         # 等待世界时钟话题出现再启动观测网关，超时使用本机单调时钟。
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
@@ -489,6 +629,9 @@ def main():
             time.sleep(0.5)
         else:
             raise RuntimeError("Gazebo world clock missing")
+        if args.gui:
+            launch_gui(items, run_dir, env)
+            write_status(items, run_dir, config, env)
         items.append(
             start_one(
                 "sensors",
@@ -503,7 +646,7 @@ def main():
                 run_dir,
             )
         )
-        write_status(items, run_dir, config)
+        write_status(items, run_dir, config, env)
         for i in range(count):
             directory = (
                 Path("/home/devcontainers/drone-sim/runtime")
@@ -598,10 +741,7 @@ def main():
                     cwd=directory,
                 )
             )
-            write_status(items, run_dir, config)
-        if args.gui:
-            items.append(start_one("gazebo_gui", ["gz", "sim", "-g"], env, run_dir))
-            write_status(items, run_dir, config)
+            write_status(items, run_dir, config, env)
         if args.companions:
             binary = Path(
                 "/home/devcontainers/drone-sim/build-companion/drone_companion_runner"
@@ -638,7 +778,7 @@ def main():
                         run_dir,
                     )
                 )
-                write_status(items, run_dir, config)
+                write_status(items, run_dir, config, env)
             for i in range(count):
                 command = [
                     binary,
@@ -663,21 +803,27 @@ def main():
                         str(22000 + i),
                     ]
                 items.append(start_one(f"companion_{i}", command, env, run_dir))
-                write_status(items, run_dir, config)
+                write_status(items, run_dir, config, env)
         print(
             json.dumps(
                 {
                     "run_dir": str(run_dir),
                     "world": world_name,
                     "processes": items,
-                    "status": "started_not_yet_flight_verified",
+                    "status": "running",
                 },
                 ensure_ascii=False,
             )
         )
     except Exception:
-        write_status(items, run_dir, config)
-        stop()
+        stop_processes(items)
+        try:
+            write_status(items, run_dir, config, env)
+            state = json.loads(ACTIVE.read_text(encoding="utf-8"))
+            state["stopped"] = True
+            save_manager(state)
+        except OSError as error:
+            print(f"无法保存停止状态：{error}", file=sys.stderr)
         raise
 
 

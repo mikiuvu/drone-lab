@@ -402,6 +402,7 @@ class GazeboPanel(QWidget):
         super().__init__()
         self.root = Path(root)
         self.process = None
+        self.command_error = ""
         self.snapshot = None
         self.reader = SimulationReader(self.root)
         self.refresh_worker = None
@@ -750,6 +751,7 @@ class GazeboPanel(QWidget):
         """
         if self.process or self._closing:
             return
+        self.command_error = ""
         map_path = Path(self.map_choice.currentData() or self.current_map)
         script = (
             "/mnt/"
@@ -805,6 +807,8 @@ class GazeboPanel(QWidget):
         """@brief 启动失败没有 finished 信号，需在此释放管理命令占用。"""
         if error == QProcess.ProcessError.FailedToStart and self.process is process:
             self.log.appendPlainText(f"无法启动仿真管理命令：{process.errorString()}")
+            self.command_error = f"Gazebo 命令启动失败：{process.errorString()}"
+            self.status.setText(self.command_error)
             self.process = None
             process.deleteLater()
             self._finish_shutdown()
@@ -813,9 +817,14 @@ class GazeboPanel(QWidget):
         """@brief 接收管理命令退出，释放 QProcess 并刷新运行状态。"""
         if self.process is not process:
             return
-        self.log.appendPlainText(
-            f"{action} 命令退出码 {code}；请查看定位指标和进程状态。"
-        )
+        action_label = {"start": "启动环境", "stop": "停止仿真", "gui": "打开窗口"}[action]
+        self.log.appendPlainText(f"{action_label} · 退出码 {code}")
+        if code:
+            self.command_error = f"{action_label}失败，退出码 {code}；请查看下方日志。"
+            self.status.setText(self.command_error)
+        else:
+            self.status.setText({"start": "仿真环境已就绪", "stop": "仿真已停止",
+                                 "gui": "Gazebo 窗口已就绪"}[action])
         self.process = None
         process.deleteLater()
         self.refresh()
@@ -850,7 +859,7 @@ class GazeboPanel(QWidget):
     def _refresh_failed(self, message):
         """@brief 在界面显示后台读取异常。"""
         if not self._closing:
-            self.status.setText(f"等待有效仿真状态与定位日志：{message}")
+            self.status.setText(self.command_error or f"无法读取仿真状态：{message}")
 
     def _apply_refresh(self, result):
         """@brief 绘制独立快照；此槽只访问内存，不读取日志、地形或相机文件。"""
@@ -868,7 +877,7 @@ class GazeboPanel(QWidget):
             self.team_line.setText("等待任务阶段。")
             for i, camera in enumerate(self.cameras):
                 camera.setText(f"无人机 {i} · 等待图像")
-            self.status.setText("等待仿真运行目录。")
+            self.status.setText(self.command_error or "等待仿真运行目录。")
             return
         self.current_folder = folder = result["folder"]
         self.map_config = result["config"]
@@ -909,8 +918,9 @@ class GazeboPanel(QWidget):
         mode = ("自动飞行" if fly_requested is True else
                 "仅观察（自动飞行未启用）" if fly_requested is False else "未记录")
         self.status.setText(
-            ("仿真已请求停止" if value.get("stopped") else "仿真进程已启动")
+            self.command_error or (("仿真已停止" if value.get("stopped") else "仿真运行中")
             + f" · {folder.name} · 地图：{map_label} · 模式：{mode}"
+            )
         )
 
     def _fill_table(self, snapshot):

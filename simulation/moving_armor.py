@@ -1,4 +1,4 @@
-"""把原基地模型顶部中央板件绑定到原滑轨；不创建额外板体或轨道。"""
+"""基地顶部飞镖检测模块沿原滑轨移动，小装甲板正面提供触压反馈。"""
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -64,27 +64,23 @@ def add_moving_armor(world, config, output=None, source=None):
         armor, "visual", "original_carriage", output / "carriage_body_surfaces.stl"
     )
     material = node(visual, "material")
-    node(material, "ambient", "0.42 0.48 0.50 1")
-    node(material, "diffuse", "0.55 0.61 0.63 1")
+    node(material, "ambient", "0.025 0.028 0.032 1")
+    node(material, "diffuse", "0.06 0.065 0.07 1")
     visual = mesh(
         armor, "visual", "original_blue_surfaces", output / "carriage_blue_surfaces.stl"
     )
     material = node(visual, "material")
     for key in ("ambient", "diffuse", "emissive"):
         node(material, key, "0 0.03 1 1")
-    for part, color in (("white", "1 1 1 1"), ("black", "0.005 0.005 0.005 1")):
-        visual = mesh(
-            armor,
-            "visual",
-            "original_base_logo_" + part,
-            output / ("logo_" + part + ".stl"),
-        )
-        material = node(visual, "material")
-        node(material, "ambient", color)
-        node(material, "diffuse", color)
+    visual = mesh(armor, "visual", "green_dart_guide", output / "carriage_green_guide.stl")
+    material = node(visual, "material")
+    for key in ("ambient", "diffuse", "emissive"):
+        node(material, key, "0.01 1 0.01 1")
     plate_collision = mesh(
-        armor, "collision", "armor_plate", output / "base_original_carriage.stl"
+        armor, "collision", "armor_plate", output / "armor_hit_surface.stl"
     )
+    housing = mesh(armor, "collision", "carriage_housing", output / "carriage_housing.stl")
+    node(node(node(housing, "surface"), "contact"), "collide_bitmask", 2)
     # 关节约束板与原轨道的相对运动，避免两份原装配接触网格互相挤压；飞机仍与二者碰撞。
     node(node(node(plate_collision, "surface"), "contact"), "collide_bitmask", 2)
     sensor = node(armor, "sensor", name="armor_contact", type="contact")
@@ -97,9 +93,9 @@ def add_moving_armor(world, config, output=None, source=None):
     axis = node(joint, "axis")
     node(axis, "xyz", "0 1 0")
     limit = node(axis, "limit")
-    travel = float(config["moving_armor"].get("half_travel_m", 0.22))
+    travel = float(config["moving_armor"].get("half_travel_m", 0.28))
     speed = float(config["moving_armor"].get("speed_mps", 0.2))
-    if not 0 < travel <= 0.25 or not 0 <= speed <= 1:
+    if not 0 < travel <= 0.28 or not 0 <= speed <= 1:
         raise ValueError("原滑轨运动参数超出范围")
     for key, value in [
         ("lower", -travel),

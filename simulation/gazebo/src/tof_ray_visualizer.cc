@@ -32,7 +32,7 @@
 namespace drone_sim
 {
 /**
- * @brief 订阅三向深度图并发布 LINE_LIST 标记，逐架无人机一种颜色。
+ * @brief 订阅三向深度图并向 GUI 标记服务发送 LINE_LIST，逐架无人机一种颜色。
  * @note 射线几何与 companion 的 Estimator::tofRayBody 完全一致：像素列/行给出
  *       光轴坐标下的横向/纵向偏移，深度是沿光轴的轴向距离而非欧氏距离。
  */
@@ -110,10 +110,9 @@ class TofRayVisualizer final : public gz::sim::System,
                                         const gz::transport::MessageInfo &) {
                   OnDepth(_msg, vehicle, sensor);
                 }));
-    publisher_ = node_.Advertise<gz::msgs::Marker>(kMarkerTopic);
     valid_ = true;
-    gzmsg << "TofRayVisualizer: publishing ToF rays for " << vehicleCount_
-          << " vehicles on " << kMarkerTopic << "\n";
+    gzmsg << "TofRayVisualizer: ToF rays for " << vehicleCount_
+          << " vehicles via " << kMarkerService << " service\n";
   }
 
   /**
@@ -182,8 +181,12 @@ class TofRayVisualizer final : public gz::sim::System,
           stop->set_z(end.Z());
         }
       }
-      // 没有任何有效测距时也发一次空标记，清掉上一帧遗留的射线。
-      publisher_.Publish(marker);
+      // 空点集的 ADD_MODIFY 不清除旧点；显式删除本机上一帧标记。
+      if (marker.point_size() == 0)
+        marker.set_action(gz::msgs::Marker::DELETE_MARKER);
+      // MarkerManager 的 /marker 服务接收标记，同名话题仅输出更新。
+      // 单向请求不等待 GUI 响应，GUI 稍后连接时下一周期会重发当前测距。
+      node_.Request(kMarkerService, marker);
     }
   }
 
@@ -194,7 +197,7 @@ class TofRayVisualizer final : public gz::sim::System,
   static constexpr int kMaxVehicles = 16;
   static constexpr double kCenter = 3.5; // 8×8 的像素中心偏移
   static constexpr double kHalf = 4.0;
-  static constexpr const char *kMarkerTopic = "/marker";
+  static constexpr const char *kMarkerService = "/marker";
   static constexpr const char *kMarkerNamespace = "drone_tof_rays";
 
   /** @return 指定机与传感器的深度图话题名。 */
@@ -237,6 +240,8 @@ class TofRayVisualizer final : public gz::sim::System,
   /** @return 成功读取一个轴向深度像素（米）时为 true。 */
   bool ReadDepth(const gz::msgs::Image &_msg, int _cell, double &_depthM) const
   {
+    if (_cell < 0 || _cell >= kCellCount)
+      return false;
     size_t bytesPerPixel = 0;
     switch (_msg.pixel_format_type())
     {
@@ -249,8 +254,12 @@ class TofRayVisualizer final : public gz::sim::System,
       default:
         return false;
     }
-    const size_t offset =
-        (static_cast<size_t>(_cell) * bytesPerPixel);
+    const size_t rowBytes = static_cast<size_t>(_msg.width()) * bytesPerPixel;
+    const size_t stride = _msg.step() != 0 ? _msg.step() : rowBytes;
+    if (stride < rowBytes)
+      return false;
+    const size_t offset = static_cast<size_t>(_cell / kSide) * stride +
+                          static_cast<size_t>(_cell % kSide) * bytesPerPixel;
     if (offset + bytesPerPixel > _msg.data().size())
       return false;
     if (bytesPerPixel == sizeof(float))
@@ -310,7 +319,6 @@ class TofRayVisualizer final : public gz::sim::System,
   std::vector<std::array<bool, kSensorCount>> fresh_;
   mutable std::mutex mutex_;
   gz::transport::Node node_;
-  gz::transport::Node::Publisher publisher_;
 };
 }  // namespace drone_sim
 

@@ -108,7 +108,8 @@ std::vector<Light> findLights(const PpmImage& image, bool trapezoid) {
   return lights;
 }
 
-double pairScore(const std::vector<Light>& lights, size_t i, size_t j, bool trapezoid) {
+double pairScore(const std::vector<Light>& lights, size_t i, size_t j, bool trapezoid,
+                 double stripHeightM) {
   const auto& left = lights[i];
   const auto& right = lights[j];
   const cv::Point2f delta = right.center - left.center;
@@ -118,8 +119,17 @@ double pairScore(const std::vector<Light>& lights, size_t i, size_t j, bool trap
   const double angle = std::atan2(std::abs(delta.y), delta.x);
   const double parallel = (left.bottom - left.top).dot(right.bottom - right.top) /
                           (left.length * right.length);
+  // 小装甲灯条宽约 5 mm。斜视使长边投影缩短，近距离透视也使两条灯条
+  // 向消失点收敛；只在宽高比显示明显缩短时允许较大的夹角，PnP 继续筛选。
+  const double lampAspect = 0.005 / stripHeightM;
+  const double observedAspect =
+      0.5 * (left.width / left.length + right.width / right.length);
+  const bool stronglyForeshortened = !trapezoid && observedAspect > lampAspect * 1.2;
+  const double maxParallelAngle = stronglyForeshortened ? 45.0 :
+      (trapezoid ? 60.0 : 20.0);
   if (delta.x < 3.0 || ratio < 0.6 || gap_ratio < 1.0 || gap_ratio > 5.0 ||
-      angle > 35.0 * CV_PI / 180.0 || parallel < std::cos((trapezoid?60.0:20.0) * CV_PI / 180.0)) return 0.0;
+      angle > 35.0 * CV_PI / 180.0 ||
+      parallel < std::cos(maxParallelAngle * CV_PI / 180.0)) return 0.0;
   // 中间存在另一灯条时不跨条配对。
   const cv::Rect box = cv::boundingRect(std::vector<cv::Point2f>{
       left.top, left.bottom, right.top, right.bottom});
@@ -189,7 +199,8 @@ RmArmorDetection detectRmArmor(const PpmImage& image, const CameraConfig& camera
   double best_score = 0;
   for (size_t i = 0; i < lights.size(); ++i) {
     for (size_t j = i + 1; j < lights.size(); ++j) {
-      const double geometry_score = pairScore(lights, i, j, bottom_separation_m>0);
+      const double geometry_score = pairScore(
+          lights, i, j, bottom_separation_m > 0, strip_height_m);
       if (geometry_score <= 0) continue;
       const auto candidate = solvePair(lights[i], lights[j], camera, strip_height_m, bottom_separation_m);
       const double score = geometry_score / (1.0 + candidate.reprojection_error_px);

@@ -23,7 +23,7 @@ target_compile_features(peer_height_system PRIVATE cxx_std_17)
 target_compile_options(peer_height_system PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(peer_height_system PRIVATE gz-sim8::gz-sim8 Eigen3::Eigen)
 
-# ToF 射线可视化：订阅三向深度图，向 /marker 发布只对 GUI 可见的线标记。
+# ToF 射线可视化：订阅三向深度图，向 /marker 服务发送 GUI 线标记。
 add_library(tof_ray_visualizer SHARED src/tof_ray_visualizer.cc)
 target_compile_features(tof_ray_visualizer PRIVATE cxx_std_17)
 target_compile_options(tof_ray_visualizer PRIVATE -Wall -Wextra -Wpedantic)
@@ -33,7 +33,7 @@ target_link_libraries(tof_ray_visualizer PRIVATE
   gz-msgs10::gz-msgs10
 )
 
-option(DRONE_GAZEBO_BUILD_TESTS "Build independent UWB terrain occlusion tests" ON)
+option(DRONE_GAZEBO_BUILD_TESTS "Build sensor and visualization tests" ON)
 if(DRONE_GAZEBO_BUILD_TESTS)
   enable_testing()
   add_executable(test_uwb_occlusion
@@ -43,6 +43,14 @@ if(DRONE_GAZEBO_BUILD_TESTS)
   target_compile_options(test_uwb_occlusion PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
   target_link_libraries(test_uwb_occlusion PRIVATE Eigen3::Eigen)
   add_test(NAME uwb_occlusion COMMAND test_uwb_occlusion)
+
+  add_executable(test_tof_ray_visualizer ../tests/test_tof_ray_visualizer.cpp)
+  target_compile_features(test_tof_ray_visualizer PRIVATE cxx_std_17)
+  target_compile_options(test_tof_ray_visualizer PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
+  target_link_libraries(test_tof_ray_visualizer PRIVATE
+    gz-sim8::gz-sim8 gz-transport13::gz-transport13 gz-msgs10::gz-msgs10
+    Threads::Threads)
+  add_test(NAME tof_ray_visualizer COMMAND test_tof_ray_visualizer)
 endif()
 
 add_executable(sensor_gateway src/sensor_gateway.cc)

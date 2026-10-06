@@ -1,2 +1,16 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>原基地滑轨板件</title><style>body{font:16px/1.8 "Microsoft YaHei",sans-serif;max-width:1000px;margin:30px auto;padding:20px}img{max-width:100%}table{border-collapse:collapse}td,th{border:1px solid #bcc;padding:10px}</style>
-<h1>原基地滑轨板件</h1><p>场景使用 Sentry26 原场地网格顶部滑轨中央板件。原轨道、支架和板件外形保留；滑块零位与原网格坐标一致。</p><table><tr><th>项目</th><th>数值</th></tr><tr><td>原网格三角面</td><td>124965</td></tr><tr><td>静态三角面</td><td>123903</td></tr><tr><td>中央可动板件</td><td>1062</td></tr><tr><td>板件世界高度范围</td><td>1.3756–1.5844 m</td></tr><tr><td>仿真滑动范围</td><td>沿 Y 轴 ±0.22 m，速度 0.2 m/s；可调测试参数</td></tr></table><p>simulation/base_mesh.py 从原三角网格分组，运行目录 original_base/ 保存分离网格和 partition.json。静态定位地图同步排除可动板件，防止将移动目标作为固定定位参考。源 STL 保持不变。</p><img src="original-base-carriage.png" alt="橙色为原模型中央滑轨板件，灰色为保留轨道"><p>原 STL 没有颜色、纹理或部件语义。当前完成几何分离和关节运动核验；原板件视觉命中尚未验证。相机识别应使用原有可见特征的材质或纹理，不增加独立装甲板几何。旧固定基地表面的 30 s 结果不代表移动装甲板视觉任务性能。</p></html>
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>基地滑轨与飞镖检测模块</title>
+<style>body{font:16px/1.8 "Microsoft YaHei",sans-serif;max-width:1000px;margin:30px auto;padding:20px;color:#193b50}img{max-width:100%}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bcc;padding:10px}</style>
+<h1>基地滑轨与飞镖检测模块</h1>
+<p>基地顶部滑轨承载飞镖检测模块，由小装甲模块、飞镖检测传感器和绿色引导灯组成。外观依据《RoboMaster 2026 机甲大师超级对抗赛比赛规则手册 V2.2.0（20260807）》印刷第 40–41 页、图 4-13。基地及前哨站主体装甲的白色标志见图 5-17，不贴在顶部飞镖检测模块上。</p>
+<table><tr><th>项目</th><th>数值与来源</th></tr>
+<tr><td>模块宽度与局部高度</td><td>242 mm × 239 mm，图 4-13；源网格保留安装支架和突出部位。</td></tr>
+<tr><td>绿色引导灯</td><td>发光直径约 55 mm，第 4.2.2 节；采用原壳体表面分色。</td></tr>
+<tr><td>滑轨行程</td><td>沿世界 Y 轴 ±280 mm，第 5.6.5 节、印刷第 116 页。</td></tr>
+<tr><td>测试运动</td><td>0.2 m/s 匀速往返。比赛的随机固定、随机移动及末端移动模式由飞镖事件驱动。</td></tr>
+<tr><td>灯条与视觉标定</td><td>55 × 5 mm、中心间距 116 mm，按原小装甲表面设置；材质划分与 PnP 使用同一尺寸。</td></tr>
+<tr><td>小装甲中心</td><td>世界坐标 (11.58410, 0.001205, 1.52464) m，滑轨零位。</td></tr>
+<tr><td>源网格分组</td><td>124,965 个三角面，其中 1,062 个随滑台运动，123,903 个保持静止。</td></tr></table>
+<p>simulation/base_mesh.py 按原网格索引分离滑台，通过平面裁分划定灯条和绿灯材质区域。分色不改变原表面的几何位置和总面积。simulation/original_armor_faces.json 保存材质索引、安装方向及尺寸。</p>
+<p>armor_plate 碰撞体只覆盖小装甲板正面；滑台壳体、背面、引导灯与固定轨道仍参与碰撞，但不触发装甲触压。定位用静态地图排除整组可动板件。</p>
+<p><a href="../../docs/gazebo-fixes-20261006.html">Gazebo 画面与靶板改动说明</a></p></html>

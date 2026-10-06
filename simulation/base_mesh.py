@@ -1,4 +1,4 @@
-"""从 Sentry26 原网格分离顶部滑轨中央板件；不新增板或滑轨几何。"""
+"""分离基地原滑台，并在原表面划分小装甲灯条和绿色飞镖引导灯。"""
 
 import hashlib
 import json
@@ -6,6 +6,67 @@ import struct
 from pathlib import Path
 
 import numpy as np
+
+
+def split_plane(triangles, axis, offset):
+    """用平面裁分三角形；返回正侧、负侧，交点仍位于原三角面内。"""
+    positive, negative = [], []
+    for triangle in triangles:
+        distances = triangle @ axis - offset
+        for sign, destination in ((1, positive), (-1, negative)):
+            polygon = []
+            for index in range(3):
+                a, b = triangle[index], triangle[(index + 1) % 3]
+                da, db = distances[index] * sign, distances[(index + 1) % 3] * sign
+                if da >= -1e-10:
+                    polygon.append(a)
+                if (da > 1e-10 and db < -1e-10) or (da < -1e-10 and db > 1e-10):
+                    polygon.append(a + (b - a) * da / (da - db))
+            for index in range(1, len(polygon) - 1):
+                face = np.array([polygon[0], polygon[index], polygon[index + 1]])
+                if np.linalg.norm(np.cross(face[1] - face[0], face[2] - face[0])) > 1e-12:
+                    destination.append(face)
+    return (np.asarray(positive).reshape(-1, 3, 3),
+            np.asarray(negative).reshape(-1, 3, 3))
+
+
+def split_region(triangles, planes):
+    """取若干半平面的交集，同时收集外部碎片以保留原表面面积。"""
+    inside, outside = triangles, []
+    for axis, offset in planes:
+        inside, rejected = split_plane(inside, axis, offset)
+        outside.append(rejected)
+    return inside, np.concatenate(outside)
+
+
+def target_surfaces(triangles, specification):
+    """灯条尺寸使用小装甲正面的米制坐标；不把壳体轮廓当作灯条。"""
+    u = np.array([0., 1., 0.])
+    v = np.asarray(specification['panel_up'])
+    center = np.asarray(specification['center_m'])
+    panel = triangles[specification['panel_surface_faces']].astype(float)
+    strips, remaining = [], panel
+    half_height = specification['strip_height_m'] / 2
+    half_width = specification['strip_width_m'] / 2
+    for side in (-1, 1):
+        horizontal = center @ u + side * specification['strip_separation_m'] / 2
+        vertical = center @ v
+        region, remaining = split_region(remaining, [
+            (u, horizontal - half_width), (-u, -horizontal - half_width),
+            (v, vertical - half_height), (-v, -vertical - half_height),
+        ])
+        strips.append(region)
+    # 55 mm 绿灯用 48 边形材质区域描绘；裁分后仍与原壳体曲面重合。
+    guide = triangles[specification['guide_surface_faces']].astype(float)
+    guide_center = np.asarray(specification['guide_center_m'])
+    guide_up = np.asarray(specification['guide_up'])
+    radius = specification['guide_diameter_m'] / 2
+    planes = []
+    for angle in np.linspace(0, 2 * np.pi, 48, endpoint=False):
+        axis = np.cos(angle) * u + np.sin(angle) * guide_up
+        planes.append((-axis, -(guide_center @ axis + radius)))
+    green, guide_body = split_region(guide, planes)
+    return np.concatenate(strips), remaining, green, guide_body
 
 
 def write_stl(path, triangles):
@@ -54,49 +115,22 @@ def partition(source, output):
     )
     if hashlib.sha256(source.read_bytes()).hexdigest() != surfaces["source_sha256"]:
         raise ValueError("原装甲面材质索引与场地版本不一致")
-    blue = np.zeros(len(triangles), dtype=bool)
-    blue[surfaces["blue_surface_faces"]] = True
-    if not np.all(selected[blue]):
-        raise ValueError("灯条材质面不属于原滑块")
-    front = triangles[blue]
-    write_stl(
-        output / "carriage_blue_surfaces.stl",
-        np.concatenate([front, front[:, [0, 2, 1]]]),
-    )
-    logo = np.zeros(len(triangles), dtype=bool)
-    logo[surfaces["logo_surface_faces"]] = True
-    colored = triangles[logo].copy()
-    # 在原三角面内细分材质采样，几何曲面和碰撞面保持不变。
-    for _ in range(6):
-        a, b, c = colored[:, 0], colored[:, 1], colored[:, 2]
-        ab, bc, ca = (a + b) / 2, (b + c) / 2, (c + a) / 2
-        colored = np.concatenate(
-            [
-                np.stack(v, axis=1)
-                for v in [(a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca)]
-            ]
-        )
-    mask = np.asarray(
-        json.loads(
-            (Path(__file__).parent / "assets/base-sticker-mask.json").read_text(
-                encoding="utf-8"
-            )
-        )
-    )
-    centers = colored.mean(axis=1)
-    low, high = triangles[logo].min(axis=(0, 1)), triangles[logo].max(axis=(0, 1))
-    u = np.clip(
-        ((high[1] - centers[:, 1]) / (high[1] - low[1]) * 127).astype(int), 0, 127
-    )
-    v = np.clip(
-        ((high[2] - centers[:, 2]) / (high[2] - low[2]) * 127).astype(int), 0, 127
-    )
-    white = mask[v, u] > 0
-    write_stl(output / "logo_white.stl", colored[white])
-    write_stl(output / "logo_black.stl", colored[~white])
-    write_stl(
-        output / "carriage_body_surfaces.stl", triangles[selected & ~blue & ~logo]
-    )
+    panel_indices = surfaces['panel_surface_faces']
+    guide_indices = surfaces['guide_surface_faces']
+    if not np.all(selected[panel_indices + guide_indices]):
+        raise ValueError("小装甲板或引导灯不属于原滑台")
+    blue, panel_body, green, guide_body = target_surfaces(triangles, surfaces)
+    remapped = np.zeros(len(triangles), dtype=bool)
+    remapped[panel_indices + guide_indices] = True
+    body = np.concatenate([triangles[selected & ~remapped], panel_body, guide_body])
+    write_stl(output / 'carriage_blue_surfaces.stl', blue)
+    write_stl(output / 'carriage_green_guide.stl', green)
+    write_stl(output / 'carriage_body_surfaces.stl', body)
+    # 触压只覆盖原小装甲板正面；滑台壳体、背面和绿灯接触单独参与碰撞。
+    write_stl(output / 'armor_hit_surface.stl', triangles[panel_indices])
+    hit_mask = np.zeros(len(triangles), dtype=bool)
+    hit_mask[panel_indices] = True
+    write_stl(output / 'carriage_housing.stl', triangles[selected & ~hit_mask])
     write_stl(output / "terrain_fixed.stl", fixed)
     fixed.astype("<f4").tofile(output / "terrain_fixed.f32")
     report = {
@@ -110,6 +144,9 @@ def partition(source, output):
             moving.max(axis=(0, 1)).tolist(),
         ],
         "zero_pose_geometry_identical": True,
+        "target_type": "base_dart_detection_small_armor",
+        "material_faces": {"body": len(body), "blue": len(blue), "green": len(green)},
+        "target_center_m": surfaces['center_m'],
     }
     (output / "partition.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"

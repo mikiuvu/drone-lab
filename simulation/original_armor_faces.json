@@ -1,25 +1,58 @@
 {
   "source_sha256": "b846b38fe82394d6c20e09a7562deb1aa9eabd77af8dcb0178122cfea13b6c3f",
-  "blue_surface_faces": [
-    71576,
-    71577,
-    71580,
-    71581
+  "reference": "RMUC 2026 V2.2.0 (20260807), figure 4-13, printed page 41; section 5.6.5, printed page 116",
+  "target_type": "base_dart_detection_small_armor",
+  "panel_surface_faces": [
+    83068,
+    83069,
+    83070,
+    83071,
+    83072,
+    83073,
+    83074,
+    83075,
+    83076,
+    83077,
+    83078,
+    83079,
+    83080,
+    83081,
+    83082,
+    83083,
+    83084,
+    83085,
+    83086,
+    83087,
+    83088,
+    83089,
+    83090,
+    83091,
+    83092,
+    83093,
+    83094,
+    83095,
+    101298,
+    101299
   ],
-  "strip_separation_m": 0.192,
-  "strip_height_m": 0.139,
+  "panel_up": [
+    0.8870108331782217,
+    0.0,
+    0.4617486132350339
+  ],
+  "panel_normal": [
+    -0.4617486132350339,
+    0.0,
+    0.8870108331782217
+  ],
   "center_m": [
-    11.5156,
-    0.0012,
-    1.4433
+    11.584096908569336,
+    0.001205049455165863,
+    1.5246388912200928
   ],
-  "logo_surface_faces": [
-    103163,
-    103164,
-    103165,
-    103166,
-    103167,
-    103168,
+  "strip_height_m": 0.055,
+  "strip_width_m": 0.005,
+  "strip_separation_m": 0.116,
+  "guide_surface_faces": [
     91875,
     91876,
     91877,
@@ -30,6 +63,43 @@
     91882,
     91883,
     91884,
-    91885
-  ]
+    91885,
+    103163,
+    103164,
+    103165,
+    103166,
+    103167,
+    103168,
+    112876,
+    112877
+  ],
+  "guide_center_m": [
+    11.499825477600098,
+    0.0012046676129102707,
+    1.4440803527832031
+  ],
+  "guide_up": [
+    0.25037942827174725,
+    0.0,
+    0.9681477892854545
+  ],
+  "guide_diameter_m": 0.055,
+  "half_travel_m": 0.28,
+  "dimension_sources": {
+    "module_width_m": {
+      "value": 0.242,
+      "source": "Figure 4-13"
+    },
+    "module_height_m": {
+      "value": 0.239,
+      "source": "Figure 4-13, module local frame"
+    },
+    "guide_diameter_m": {
+      "value": 0.055,
+      "source": "Section 4.2.2"
+    },
+    "light_strips": "55 x 5 mm, 116 mm center spacing, fitted to original small armor face; render and PnP share these parameters"
+  },
+  "panel_face_pitch_from_horizontal_deg": 27.5,
+  "module_axis_length_m": 0.2394541
 }

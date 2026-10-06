@@ -111,13 +111,13 @@
     "approach": {
       "x": 10.6,
       "y": 0,
-      "z": 1.4433,
+      "z": 1.5246388912200928,
       "yaw": 0
     },
     "target": {
-      "x": 11.5156,
-      "y": 0.0012,
-      "z": 1.4433
+      "x": 11.584096908569336,
+      "y": 0.001205049455165863,
+      "z": 1.5246388912200928
     },
     "order": [
       0,
@@ -230,9 +230,9 @@
     ],
     "visual_contact": true,
     "visual_entry_range_m": 1.15,
-    "visual_strip_height_m": 0.093427,
-    "visual_strip_separation_m": 0.18409,
-    "visual_bottom_separation_m": 0.108873,
+    "visual_strip_height_m": 0.055,
+    "visual_strip_separation_m": 0.116,
+    "visual_bottom_separation_m": 0.0,
     "visual_lateral_gate_m": 0.1,
     "visual_vertical_gate_m": 0.075,
     "contact_confirmation": "armor_pressure",
@@ -268,7 +268,10 @@
   "moving_armor": {
     "enabled": true,
     "source": "original_base_mesh",
-    "half_travel_m": 0.22,
-    "speed_mps": 0.2
+    "half_travel_m": 0.28,
+    "speed_mps": 0.2,
+    "target_type": "base_dart_detection_small_armor",
+    "geometry_reference": "RMUC 2026 V2.2.0 (20260807), figure 4-13, printed page 41; section 5.6.5, printed page 116",
+    "motion_profile": "constant_speed_reciprocation"
   }
 }
