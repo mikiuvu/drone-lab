@@ -14,8 +14,11 @@ import argparse
 import copy
 import json
 import math
+import shutil
 from pathlib import Path
 import xml.etree.ElementTree as ET
+
+from mesh_bounds import read_bounds
 
 
 # 创建并返回 XML 子节点；text 非 None 时转为字符串，属性通过 attrs 传入。
@@ -130,6 +133,64 @@ def sensor_link(vehicle: int, pitch_down_deg: float, camera_width: int,
 # @param args 命令行解析结果，包括模型类型、安装几何、质量、转速及输出目录。
 # @note x500 从外部 SDF 深拷贝，micro 构造刚体与旋翼，fixture 构造静态传感器支架。
 # 输出每机 SDF、模型描述及共享传感器契约；micro 另写物理清单和对应 PX4 参数。
+def install_visual_mesh(output, args):
+    """@brief 把真实 CAD 导出的机体网格装进输出目录，并算出对齐参数。
+
+    @param output 模型输出根目录。
+    @param args 命令行解析结果，使用 visual_mesh 及其配套参数。
+    @return (相对 URI, 缩放字符串, 位姿字符串, 说明) 四元组；未指定网格时返回 None。
+    @note 只替换视觉，不碰碰撞体、质量、惯量与旋翼几何——那些决定 PX4 分配矩阵，
+          换掉会连带改变飞行特性。单位按包围盒自动判定：任一轴超过 1 视为毫米导出。
+    """
+    if not args.visual_mesh:
+        # 上一次接入过网格时，去掉参数重跑不应留下无引用的残留文件。
+        for stale in output.glob("drone_visual.*"):
+            stale.unlink()
+        return None
+    source = Path(args.visual_mesh)
+    if not source.exists():
+        raise FileNotFoundError(f"visual mesh not found: {source}")
+    bounds = read_bounds(source)
+    scale = args.visual_mesh_scale
+    note = "scale 由命令行指定"
+    if scale is None:
+        # SolidWorks 默认按毫米导出；真实机体尺寸在 0.1–1 m 量级，据此自动判定。
+        scale = 0.001 if max(bounds.extent) > 1.0 else 1.0
+        note = "scale 自动判定为 {}".format("毫米→米" if scale == 0.001 else "已是米")
+    target = output / f"drone_visual{source.suffix.lower()}"
+    shutil.copyfile(source, target)
+    # 网格中心平移到机体原点；--visual-mesh-pose 的平移在缩放后的机体坐标系里追加。
+    pose = [
+        -bounds.center[0] * scale + args.visual_mesh_pose[0],
+        -bounds.center[1] * scale + args.visual_mesh_pose[1],
+        -bounds.center[2] * scale + args.visual_mesh_pose[2],
+        args.visual_mesh_pose[3],
+        args.visual_mesh_pose[4],
+        args.visual_mesh_pose[5],
+    ]
+    print(f"机体网格 {source.name}: {bounds}")
+    print(f"  {note}，安装到 {target.name}")
+    print(
+        "  缩放后尺寸 {:.4f} × {:.4f} × {:.4f} m".format(
+            *(value * scale for value in bounds.extent)
+        )
+    )
+    return (
+        f"../{target.name}",
+        f"{scale:.17g} {scale:.17g} {scale:.17g}",
+        " ".join(f"{value:.17g}" for value in pose),
+        {
+            "source_name": source.name,
+            "source_extent": bounds.extent,
+            "scale": scale,
+            "scale_mode": note,
+            "installed_pose": pose,
+            "vertices": bounds.vertices,
+            "triangles": bounds.triangles,
+        },
+    )
+
+
 def generate(args):
     """@brief 按动力学模式生成每机 SDF、模型描述和共享传感器契约。
 
@@ -275,6 +336,10 @@ def generate(args):
     if vehicle_count < 1:
         raise ValueError("vehicle_count must be positive")
     contract["vehicle_count"] = vehicle_count
+    # 真实机体网格只装一份，各机用相对 URI 引用，避免按机重复拷贝大文件。
+    visual_mesh = install_visual_mesh(output, args) if mode == "micro" else None
+    if visual_mesh is not None:
+        contract["visual_mesh"] = visual_mesh[3]
     # 4. 每机使用独立模型名和观测话题；动力学 link 与传感器 link 通过固定关节连接。
     for vehicle in range(vehicle_count):
         model_dir = output / f"micro_{vehicle}"
@@ -322,8 +387,18 @@ def generate(args):
             child(contact, "topic", f"/evaluation/vehicle_{vehicle}/contacts")
             child(child(contact, "contact"), "collision", "body_collision")
             visual = child(base, "visual", name="body_visual")
-            child(child(child(visual, "geometry"), "box"), "size",
-                " ".join(f"{value:.17g}" for value in micro_body_size))
+            if visual_mesh is None:
+                child(child(child(visual, "geometry"), "box"), "size",
+                    " ".join(f"{value:.17g}" for value in micro_body_size))
+            else:
+                # 真实 CAD 网格只作视觉；碰撞体仍是上面的保护圈圆柱，
+                # 以保证接触判定与 PX4 分配矩阵不随外观变化。
+                mesh = child(child(visual, "geometry"), "mesh")
+                child(mesh, "uri", visual_mesh[0])
+                child(mesh, "scale", visual_mesh[1])
+                child(visual, "pose", visual_mesh[2])
+                if args.visual_mesh_transparency is not None:
+                    child(visual, "transparency", f"{args.visual_mesh_transparency:.17g}")
             material = child(visual, "material")
             child(material, "ambient", "0.12 0.14 0.16 1")
             child(material, "diffuse", "0.12 0.14 0.16 1")
@@ -420,4 +495,27 @@ if __name__ == "__main__":
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=360)
     parser.add_argument("--camera-hfov-deg", type=float, default=90.0)
+    # 真实机体外观：SolidWorks 导出 STL/OBJ 后直接接入，只替换视觉不动物理。
+    parser.add_argument(
+        "--visual-mesh",
+        help="真实机体网格（.stl/.obj），作为 base_link 的视觉替换占位方块",
+    )
+    parser.add_argument(
+        "--visual-mesh-scale",
+        type=float,
+        help="网格到米的缩放；省略时按包围盒自动判定（任一轴>1 视为毫米）",
+    )
+    parser.add_argument(
+        "--visual-mesh-pose",
+        type=float,
+        nargs=6,
+        metavar=("X", "Y", "Z", "ROLL", "PITCH", "YAW"),
+        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        help="在自动居中基础上追加的机体系平移与旋转（m、rad）",
+    )
+    parser.add_argument(
+        "--visual-mesh-transparency",
+        type=float,
+        help="网格透明度 0..1，用于同时观察内部结构；省略表示不透明",
+    )
     generate(parser.parse_args())

@@ -188,9 +188,13 @@ def main(args):
                         assert record["source"] == "SIM_HEIGHT_ASSIST"
                         assert abs(record["z_world_m"] - 1) < 1e-9
                     elif kind == "uwb":
-                        assert set(record) == {"schema", "kind", "vehicle", "peer", "sim_time_us", "range_m", "bearing_rad", "valid"}
+                        # nlos 与 quality 由地形遮挡模型加入，伴随端 protocol.cpp 会读取它们。
+                        assert set(record) == {"schema", "kind", "vehicle", "peer", "sim_time_us",
+                                               "range_m", "bearing_rad", "nlos", "quality", "valid"}
                         peer = record["peer"]
                         assert peer != vehicle and record["valid"]
+                        assert isinstance(record["nlos"], bool)
+                        assert 0.0 <= record["quality"] <= 1.0
                         assert abs(record["range_m"] - abs(peer - vehicle) * 8) < 1e-7
                         bearing = 0 if peer > vehicle else math.pi
                         assert abs(abs(record["bearing_rad"]) - bearing) < 1e-7
@@ -200,9 +204,34 @@ def main(args):
                             assert valid, (vehicle, record["sensor"], index, record)
                             expected = expected_depth(record["sensor"], index // 8, index % 8)
                             error_max = max(error_max, abs(distance - expected))
+                    elif kind == "optical_flow":
+                        # 世界位移按仿真间隔差分后逆旋转到机体 FLU，含缩放误差与噪声；
+                        # 倾角过大或丢帧时 quality 置零，方差仍保持正数。
+                        assert set(record) == {"schema", "kind", "vehicle", "sim_time_us",
+                                               "vx_body_mps", "vy_body_mps", "quality",
+                                               "variance_m2s2", "source"}
+                        assert record["source"] == "SIM_FLOW_MODULE"
+                        assert 0.0 <= record["quality"] <= 1.0
+                        assert record["variance_m2s2"] > 0.0
+                        assert math.isfinite(record["vx_body_mps"])
+                        assert math.isfinite(record["vy_body_mps"])
+                    elif kind == "uwb_anchor":
+                        # 基站只给三维距离；遮挡时附加正偏差并把质量降到 0.25。
+                        assert set(record) == {"schema", "kind", "vehicle", "anchor_id",
+                                               "sim_time_us", "range_m", "variance_m2",
+                                               "quality", "valid"}
+                        assert record["range_m"] > 0.0
+                        assert record["variance_m2"] > 0.0
+                        assert 0.0 <= record["quality"] <= 1.0
                     else:
                         raise AssertionError(f"unexpected observation kind {kind}")
-            if (len(seen) == 28 and min(counts.values()) >= 5 and
+            # 观测构成：每机 1 条高度辅助、3 颗 ToF、1 条光流，外加 4×3 条机间 UWB。
+            # 用构成而不是总数，避免以后再加一类观测时又要改一个魔数。
+            expected = {(i, "height_assist", -1) for i in range(4)}
+            expected |= {(i, "tof", sensor) for i in range(4) for sensor in range(3)}
+            expected |= {(i, "optical_flow", -1) for i in range(4)}
+            expected |= {(i, "uwb", peer) for i in range(4) for peer in range(4) if i != peer}
+            if (expected <= set(seen) and min(counts.values()) >= 5 and
                     all((runtime / f"camera_{i}.json").exists() for i in range(4))):
                 break
         else:
