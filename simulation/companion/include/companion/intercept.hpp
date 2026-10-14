@@ -6,6 +6,21 @@
 #include <cstdint>
 #include <optional>
 namespace companion {
+/** @brief 提交俯冲前核验独立曝光、入口高度、航向和前向运动；世界坐标单位 m、m/s。
+ * @note 允许前向速度 −0.05 m/s 的静止估计误差；目标须位于航向前方至少 50 mm。
+ */
+inline bool diveCommitEligible(const Eigen::Vector3d& self,const Eigen::Vector3d& velocity,
+    const Eigen::Vector3d& aim,double yaw,double heading,double entry_z,
+    uint64_t exposure,uint64_t now,double height_tolerance=.12,double yaw_tolerance=.35){
+  if(!self.allFinite()||!velocity.allFinite()||!aim.allFinite()||!std::isfinite(yaw)||
+     !std::isfinite(heading)||!std::isfinite(entry_z)||!std::isfinite(height_tolerance)||
+     !std::isfinite(yaw_tolerance)||height_tolerance<=0||yaw_tolerance<=0||
+     !exposure||exposure>now||now-exposure>150000)return false;
+  const Eigen::Vector3d forward(std::cos(heading),std::sin(heading),0);
+  return (aim-self).dot(forward)>.05&&velocity.dot(forward)>=-.05&&
+      std::abs(self.z()-entry_z)<=height_tolerance&&
+      std::abs(std::remainder(yaw-heading,6.283185307179586))<=yaw_tolerance;
+}
 /** @brief 沿滑轨作限速线性预测，可按已知半行程反射；输入和输出为世界 Y，单位 m。
  * @param reflection_half_width 半行程；0 表示不预测边界反向。horizon 单位 s。
  */

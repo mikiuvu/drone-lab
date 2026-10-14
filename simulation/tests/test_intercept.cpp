@@ -3,6 +3,17 @@
 #include <cassert>
 #include <limits>
 int main(){
+ const Eigen::Vector3d approach(10.7,0,2.075),armor(11.584,.1,1.525);
+ assert(companion::diveCommitEligible(approach,{1.9,0,0},armor,0,0,2.075,1000000,1150000));
+ assert(!companion::diveCommitEligible(approach,{-1.64,0,0},armor,0,0,2.075,1000000,1100000));
+ assert(!companion::diveCommitEligible({12.458,0,2.075},{-3.55,0,0},armor,0,0,2.075,1000000,1100000));
+ assert(!companion::diveCommitEligible({10.7,0,1.707},{3.17,0,0},armor,0,0,2.075,1000000,1100000));
+ assert(!companion::diveCommitEligible(approach,{1.9,0,0},armor,0,0,2.075,1000000,1150001));
+ assert(!companion::diveCommitEligible(approach,{1.9,0,0},armor,0,0,2.075,1200000,1100000));
+ assert(!companion::diveCommitEligible(approach,{1.9,0,0},armor,0,0,2.075,0,1100000));
+ assert(!companion::diveCommitEligible(approach,{1.9,0,0},armor,.4,0,2.075,1000000,1100000));
+ assert(companion::diveCommitEligible({0,10.7,2.075},{0,1.9,0},{0,11.584,1.525},1.5707963267948966,1.5707963267948966,2.075,1000000,1100000));
+ assert(!companion::diveCommitEligible(approach,{1.9,0,0},armor,std::numeric_limits<double>::quiet_NaN(),0,2.075,1000000,1100000));
  companion::RailMotionFit fit(.3);
  for(int i=0;i<12;++i){
    const double position=.2*(i*.066)+(i==7?.25:0);
