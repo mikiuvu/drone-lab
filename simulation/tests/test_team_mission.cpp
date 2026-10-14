@@ -8,7 +8,8 @@ namespace {
 void check(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
-TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0) {
+TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
+                         bool direct_retreat = false) {
   TeamMissionConfig c; c.stable_us = 200000;
   for (int i = 0; i < 4; ++i) {
     c.homes[i] = {double(i)-1.5,0,.5125,0};
@@ -20,6 +21,14 @@ TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0)
   if (visual_entry_range >= 0.0) {
     c.visual_contact = true; c.visual_entry_range_m = visual_entry_range;
   }
+  if (dive) {
+    c.dive_attack = true;
+    c.dive_entry = {0,4.5,1.7,0};
+    c.contact_timeout_us = 500000;
+    // 接近超时取得比接触超时用例的观察窗口长，避免两个超时互相干扰。
+    c.approach_timeout_us = 5000000;
+  }
+  c.retreat_holding_direct = direct_retreat;
   return c;
 }
 struct Fixture {
@@ -27,8 +36,9 @@ struct Fixture {
   std::vector<TeamVehicleStatus> states{4};
   uint64_t now = 1000000, wall = 1000000;
   std::vector<TeamCommand> commands{4};
-  explicit Fixture(bool transit = false, double visual_entry_range = -1.0)
-      : c(config(transit, visual_entry_range)), mission(c) {
+  explicit Fixture(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
+                   bool direct_retreat = false)
+      : c(config(transit, visual_entry_range, dive, direct_retreat)), mission(c) {
     for (int i = 0; i < 4; ++i) {
       states[i].vehicle = i; states[i].xy_valid = states[i].z_valid = states[i].ready = true;
       set(i,c.homes[i]);
@@ -115,6 +125,10 @@ void sequentialAndLanding() {
   check(f.mission.phase() == TeamPhase::LAND_ALL,"高速下降被计为着陆");
   f.states[3].vz_mps = 0;
   f.states[0].x_m += .25;
+  f.settle();
+  check(f.mission.phase() == TeamPhase::LAND_ALL,"仍解锁的全队提前进入终态");
+  for (const auto& command : f.commands) check(command.disarm && !command.complete,"降落阶段未请求停机");
+  for (auto& state : f.states) state.armed = false;
   f.settle();
   check(f.mission.phase() == TeamPhase::COMPLETE,"着陆完成失败");
   for (const auto& command : f.commands) check(command.disarm && command.complete,"完成后未解除武装");
@@ -203,8 +217,6 @@ void repeatedLossKeepsOneRecord() {
   check(f.mission.skipped()[0] == 0,"失联记录指向了错误的机号");
 }
 // 视觉模式的距离门：图像已锁定但仍在远处时不得进入接触阶段。
-// 否则从集结距离一锁定就进接触，最后几米全部交给视觉伺服爬行，
-// 而视觉伺服的横向纠偏会来回摆动，实测比任务位置环慢好几倍。
 void visualApproachRangeGate() {
   Fixture f(false, 1.0);
   f.takeoff();
@@ -221,7 +233,7 @@ void visualApproachRangeGate() {
   f.settle();
   check(f.mission.phase() == TeamPhase::CONTACT,"进入距离内仍未进入接触阶段");
 }
-// 不配置进入距离时保持旧行为：只要图像锁定就进入接触阶段。
+// 不配置进入距离时，只要求图像锁定即可进入接触阶段。
 void visualRangeGateDisabledWithoutSetting() {
   Fixture f(false, 0.0);
   f.takeoff();
@@ -244,11 +256,187 @@ void visualGateIgnoresApproachYaw() {
   f.settle();
   check(f.mission.phase() == TeamPhase::CONTACT,"视觉模式下仍被搜索点航向卡住");
 }
+// 俯冲模式：接近阶段的目标换成高处的俯冲入口，飞过入口就进入接触阶段。
+// 入口只按位置和航向判定，不要求图像锁定：近距离视觉失锁是必然的，
+// 把它当门限会让任务卡在接近阶段，而不是去撞板。
+void diveAttackFliesThroughEntryGate() {
+  Fixture f(false, -1.0, true);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"俯冲用例：集合阶段未完成");
+  check(std::abs(f.commands[0].target_z_m - f.c.dive_entry.z) < 1e-9,
+        "接近阶段没有瞄准俯冲入口高度");
+  check(std::abs(f.commands[0].target_y_m - f.c.dive_entry.y) < 1e-9,
+        "接近阶段没有瞄准俯冲入口位置");
+  f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"没到入口就进入接触阶段");
+  f.set(0,f.c.dive_entry);
+  f.settle();
+  check(f.mission.phase() == TeamPhase::CONTACT,"到达俯冲入口后未进入接触阶段");
+}
+// 入口航向偏差过大时不得进入：机体系前向与俯冲方向不一致，速度下限会作用在错误方向。
+void diveEntryRejectsMisalignedHeading() {
+  Fixture f(false, -1.0, true);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  f.set(0,f.c.dive_entry); f.states[0].yaw_rad = 1.0; f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"入口航向偏差过大仍进入接触阶段");
+  f.states[0].yaw_rad = 0; f.settle();
+  check(f.mission.phase() == TeamPhase::CONTACT,"航向对齐后未进入接触阶段");
+}
+// 接触超时机退出接触轮次，仍参与返航和降落屏障。
+void contactTimeoutSkipsFailedVehicle() {
+  Fixture f(false, -1.0, true);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  f.set(0,f.c.dive_entry); f.settle();
+  check(f.mission.phase() == TeamPhase::CONTACT && f.mission.activeVehicle() == 0,
+        "俯冲用例：未进入接触阶段");
+  for (int i = 0; i < 8; ++i) f.tick();
+  check(f.mission.activeVehicle() == 1,"接触超时后未换下一架");
+  check(f.mission.partial(),"接触超时未记录部分结果");
+  check(f.mission.completed().empty(),"接触超时被计为撞击成功");
+  check(f.mission.skipped().size() == 1 && f.mission.skipped()[0] == 0,
+        "接触超时没有记录正确的机号");
+  // 失败的机 0 仍然接到返航目标，没有被排除在全队屏障之外。
+  check(std::abs(f.commands[0].target_y_m - f.c.assembly[0].y) < 1e-9,
+        "接触超时机被排除在返航之外");
+  // 持续上报健康状态不会让它重新加入接触轮次。
+  for (int i = 0; i < 10; ++i) f.tick();
+  check(f.mission.activeVehicle() == 1,"接触超时机重新加入了接触轮次");
+  // 后续若被判定无法继续飞行，则退出路线屏障并独立恢复。
+  check(!f.commands[0].skipped,"接触超时机本应仍参与屏障");
+  f.states[0].unrecoverable = true;
+  f.settle();
+  check(f.commands[0].skipped,"趴窝的失败机没有退出全队屏障");
+}
+// 接近超时：入口是固定航点，飞不到就不该让整队一直等下去。
+void approachTimeoutSkipsVehicleThatCannotReachEntry() {
+  Fixture f(false, -1.0, true);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH,"接近超时用例：集合阶段未完成");
+  // 机 0 一直停在集结点，到不了入口。
+  for (int i = 0; i < 55; ++i) f.tick();
+  check(f.mission.activeVehicle() == 1,"接近超时后未换下一架");
+  check(f.mission.partial(),"接近超时未记录部分结果");
+  check(f.mission.completed().empty(),"接近超时被计为撞击成功");
+  check(f.mission.skipped().size() == 1 && f.mission.skipped()[0] == 0,
+        "接近超时没有记录正确的机号");
+  check(std::abs(f.commands[0].target_y_m - f.c.assembly[0].y) < 1e-9,
+        "接近超时机被排除在返航之外");
+}
+// 直接退避配置将撞击后的目标设为停留点，省去接触前低点的中间停留。
+void retreatHoldingDirect() {
+  Fixture slow(false, -1.0, false, false);
+  slow.contact();
+  slow.set(0,slow.c.target); ++slow.states[0].impact_seq; slow.tick();
+  check(slow.mission.phase() == TeamPhase::RETREAT,"撞击后未进入退出阶段");
+  check(std::abs(slow.commands[0].target_y_m - slow.c.approach.y) < 1e-9,
+        "默认退避没有先回到接触前低点");
+
+  Fixture f(false, -1.0, false, true);
+  f.contact();
+  f.set(0,f.c.target); ++f.states[0].impact_seq; f.tick();
+  check(f.mission.phase() == TeamPhase::RETREAT,"撞击后未进入退出阶段");
+  check(std::abs(f.commands[0].target_y_m - f.c.assembly[0].y) < 1e-9,
+        "开启直接退避后仍然先回到接触前低点");
+  check(std::abs(f.commands[0].target_y_m - f.c.approach.y) > 1e-6,
+        "直接退避的目标与接触前低点重合，用例失去意义");
+  // 到达停留点后直接换下一架，不再多停一次。
+  f.set(0,f.c.assembly[0]); f.settle();
+  check(f.mission.phase() == TeamPhase::APPROACH && f.mission.activeVehicle() == 1,
+        "到达停留点后未进入下一架");
+}
+}
+// 趴窝的成员要立刻记失败并越过，不能等接触超时干等。
+void landedVehicleFailsImmediately() {
+  Fixture f(false, -1.0, true);
+  f.takeoff();
+  for (int i = 0; i < 4; ++i) f.set(i,f.c.assembly[i]);
+  f.settle();
+  f.set(0,f.c.dive_entry);
+  // 只推进到刚进入接触阶段，确保下面的单拍远在接触超时（0.5 s）之内。
+  for (int i = 0; i < 4 && f.mission.phase() != TeamPhase::CONTACT; ++i) f.tick();
+  check(f.mission.phase() == TeamPhase::CONTACT && f.mission.activeVehicle() == 0,
+        "趴窝用例：未进入接触阶段");
+  f.states[0].unrecoverable = true;
+  f.tick();
+  check(f.mission.activeVehicle() == 1,"趴窝成员未被立刻越过");
+  check(f.mission.partial(),"趴窝成员未记入部分结果");
+  check(f.mission.skipped().size() == 1 && f.mission.skipped()[0] == 0,
+        "趴窝成员没有记录正确的机号");
+}
+// 起飞与降落阶段落地是正常状态，不能把上报的落地当成趴窝失败。
+void landedDuringTakeoffIsNotFailure() {
+  Fixture f(false, -1.0, true);
+  f.states[0].unrecoverable = true;
+  f.settle();
+  check(f.mission.phase() == TeamPhase::TAKEOFF,"落地误判：就绪阶段未完成");
+  check(f.mission.skipped().empty(),"起飞阶段的落地被误判为趴窝失败");
+}
+void allUnrecoverableWaitsForFreshLandingAndDisarm() {
+  Fixture f(true);
+  f.takeoff();
+  check(f.mission.phase()==TeamPhase::TRANSIT,"全队恢复用例未进入航路阶段");
+  for(auto& state:f.states)state.unrecoverable=true;
+  f.tick();
+  check(f.mission.phase()==TeamPhase::LAND_ALL,"全队失效后仍等待航路屏障");
+  check(f.mission.partial()&&f.mission.skipped().size()==4,"全队失效没有保留失败记录");
+  for(auto& state:f.states){
+    state.xy_valid=false;state.ready=false;state.landed=true;state.armed=false;
+    state.x_m=20;state.y_m=-8;state.z_m=.25;
+  }
+  f.states[0].armed=true;
+  f.settle();
+  check(f.mission.phase()==TeamPhase::LAND_ALL,"仍解锁的成员被当成恢复完成");
+  f.states[0].armed=false;f.states[0].landed=false;
+  f.settle();
+  check(f.mission.phase()==TeamPhase::LAND_ALL,"未确认着地的成员被当成恢复完成");
+  f.states[0].landed=true;
+  f.tick(0,f.c.freshness_us+1);
+  check(f.mission.phase()==TeamPhase::LAND_ALL,"陈旧的停机反馈被当成恢复完成");
+  f.settle();
+  check(f.mission.phase()==TeamPhase::ABORTED,"全队降落停机后未进入失败终态");
+  for(const auto& command:f.commands)check(command.phase==TeamPhase::ABORTED&&!command.complete&&command.disarm,"失败终态的停机命令不正确");
+}
+void partialLandingWaitsForSkippedMember() {
+  Fixture f;f.contact();
+  f.states[0].unrecoverable=true;f.tick();
+  for(int active=1;active<4;++active){
+    f.set(active,f.c.approach);f.settle();
+    f.set(active,f.c.target);++f.states[active].impact_seq;f.tick();
+    f.set(active,f.c.approach);f.settle();
+    f.set(active,f.c.assembly[active]);f.settle();
+  }
+  check(f.mission.phase()==TeamPhase::RETURN_ALL,"部分降落用例未返航");
+  for(int i=1;i<4;++i){auto point=f.c.homes[i];point.z=f.c.cruise_z_m;f.set(i,point);}
+  f.settle();check(f.mission.phase()==TeamPhase::LAND_ALL,"部分降落用例未进入降落阶段");
+  for(int i=1;i<4;++i){auto point=f.c.homes[i];point.z=f.c.home_ground_z_m+f.c.body_clearance_m;f.set(i,point);f.states[i].landed=true;f.states[i].armed=false;}
+  f.states[0].xy_valid=false;f.states[0].ready=false;
+  f.settle();check(f.mission.phase()==TeamPhase::LAND_ALL,"跳过的未着地成员被排除在终态检查之外");
+  check(!f.commands[0].disarm,"未着地的跳过成员收到停机请求");
+  f.states[0].landed=true;f.settle();
+  check(f.mission.phase()==TeamPhase::LAND_ALL&&f.commands[0].disarm,"跳过成员仍解锁时提前终止或未请求停机");
+  f.states[0].armed=false;
+  f.tick(0,f.c.freshness_us+1);
+  check(f.mission.phase()==TeamPhase::LAND_ALL&&!f.commands[0].disarm,"陈旧反馈推进终态或触发停机");
+  f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"跳过成员停机后未进入失败终态");
+  for(const auto& command:f.commands)check(!command.complete&&command.disarm,"部分终态命令错误");
 }
 int main() {
   try {
     barriers(); physicalContactAndTimeout(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
     visualApproachRangeGate(); visualRangeGateDisabledWithoutSetting(); visualGateIgnoresApproachYaw();
+    diveAttackFliesThroughEntryGate(); diveEntryRejectsMisalignedHeading(); contactTimeoutSkipsFailedVehicle();
+    approachTimeoutSkipsVehicleThatCannotReachEntry(); retreatHoldingDirect();
+    landedVehicleFailsImmediately(); landedDuringTakeoffIsNotFailure();
+    allUnrecoverableWaitsForFreshLandingAndDisarm();
+    partialLandingWaitsForSkippedMember();
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

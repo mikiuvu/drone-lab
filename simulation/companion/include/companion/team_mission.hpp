@@ -26,6 +26,16 @@ struct TeamMissionConfig {
   double cruise_z_m = 1.2;
   std::vector<TeamPoint> homes{{-1.5,0,.5125,0},{-.5,0,.5125,0},{.5,0,.5125,0},{1.5,0,.5125,0}}, assembly{{-1.5,4,1.2,0},{-.5,4,1.2,0},{.5,4,1.2,0},{1.5,4,1.2,0}};
   TeamPoint approach{}, target{}; // approach 是接触前稳定点；target 是基地表面参考点。
+  // 俯冲接触：APPROACH 使用板面前上方的入口；按位置和航向判定通过入口。
+  bool dive_attack = false;
+  TeamPoint dive_entry{};               // 俯冲入口：高于装甲板中心、位于其正前方。
+  double dive_entry_tolerance_m = .20;  // 判定已飞过入口的水平容差，m。
+  double dive_entry_height_m = .12;     // 判定已飞过入口的垂直容差，m。
+  double dive_entry_yaw_tolerance_rad = .35; // 入口处允许的航向偏差，rad。
+  // 接触阶段最长时间，0 表示不限制；超时成员退出接触轮次并参与返航。
+  uint64_t contact_timeout_us = 0;
+  // 俯冲接近阶段的最长时间，0 表示不限制。
+  uint64_t approach_timeout_us = 0;
   // 航路点描述编队中心；每机再叠加 formation_offsets，保持队形。
   std::vector<TeamPoint> transit_waypoints;
   std::vector<TeamPoint> formation_offsets;
@@ -40,6 +50,8 @@ struct TeamMissionConfig {
   // 0 表示不限制，此时只要图像锁定就会立刻进入接触，末段行程全部由视觉伺服完成。
   double visual_entry_range_m = 0;
   double contact_exit_side = 0; // 接触航向左侧为正；0 按集结点决定待命侧。
+  // true 时接触后直接飞往 completed_holding；false 时先经过 approach。
+  bool retreat_holding_direct = false;
   // 已接触飞机的停留点；不配置则沿用 assembly。
   std::vector<TeamPoint> completed_holding;
   double home_ground_z_m = .5; // 起飞平台表面世界高度，m。
@@ -57,6 +69,10 @@ struct TeamVehicleStatus {
   bool xy_valid = false, z_valid = false, ready = false, armed = false, landed = false;
   bool flow_valid = false; // 协调器解码时可用有效光流补充 xy_valid。
   bool visual_ready = false; // 近期图像锁定目标，且满足接触推进的对准条件。
+  /** 本机无法继续任务，由 runner 对持续落地或结构卡住作时间过滤后置位。
+   * @note 碰撞瞬间的短暂着地标志不触发失效；置位后退出路线屏障并独立降落。
+   */
+  bool unrecoverable = false;
   std::string xy_reason;
 };
 /**
@@ -77,7 +93,7 @@ struct TeamCommand {
   double target_x_m = 0, target_y_m = 0, target_z_m = 0, target_yaw_rad = 0;
   double contact_speed_mps = 0;
   // degraded 表示当前单机不能执行正常目标；skipped 表示当前不参与全队屏障。
-  // disarm 只在终态且该机已报告 landed 时置位；complete 不等同于所有接触均成功的推测。
+  // disarm 在降落或终态收到新鲜着地反馈时置位；终态等待全队停机确认。
   bool paused = false, degraded = false, skipped = false, disarm = false, complete = false;
   std::string degraded_reason;
 };
@@ -106,6 +122,7 @@ class TeamMission {
   std::vector<TeamCommand> step(uint64_t sim_time_us, uint64_t wall_time_us);
   TeamPhase phase() const { return phase_; }
   int activeVehicle() const; // 接近/接触/后撤阶段返回轮次机号，其他阶段返回 -1。
+  bool turnExhausted(int vehicle) const; // 该机是否已从接触轮次中剔除（失效或接触超时）。
   bool paused() const { return false; }
   bool aborted() const { return aborted_; }
   bool partial() const { return !skipped_.empty(); }
@@ -116,6 +133,7 @@ class TeamMission {
   // 从有效估计首次离平台静置中心高度超过 3 cm 开始，到终态冻结；返回 s。
   double flightElapsedSeconds() const { return flight_start_?((flight_end_?flight_end_:clock_)-flight_start_)*1e-6:0; }
  private:
+  bool statusFresh(int id, uint64_t sim, uint64_t wall) const;
   bool validForBarrier(int id, uint64_t sim, uint64_t wall) const;
   bool near(int id, const TeamPoint& point, bool xy = true) const;
   bool barrier(bool condition, uint64_t now);
@@ -125,6 +143,8 @@ class TeamMission {
   TeamMissionConfig config_;
   std::vector<TeamVehicleStatus> status_;
   std::vector<bool> seen_, skipped_now_; // 是否收过首包、是否暂时排除在同步屏障之外。
+  // failed_ 保留轮次失败；skipped_now_ 控制路线屏障。所有成员仍须确认着地停机。
+  std::vector<bool> failed_;
   std::vector<uint64_t> received_, loss_start_;
   std::vector<TeamPoint> holds_; // 上次有效状态所在位置，单机失效时作为保持目标。
   TeamPhase phase_ = TeamPhase::WAIT_READY;

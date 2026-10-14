@@ -31,7 +31,8 @@ void fullMission(int count, bool fast=false) {
       auto&s=states[i];
       if(!commands.empty()){
         const auto&cmd=commands[i];s.x_m=cmd.target_x_m;s.y_m=cmd.target_y_m;s.z_m=cmd.target_z_m;s.yaw_rad=cmd.target_yaw_rad;
-        if(cmd.phase!=TeamPhase::WAIT_READY)s.armed=true;
+        if(cmd.phase!=TeamPhase::WAIT_READY&&!cmd.disarm)s.armed=true;
+        if(cmd.disarm)s.armed=false;
         if(cmd.phase==TeamPhase::CONTACT&&cmd.active_vehicle==i){
           s.x_m=c.target.x;s.y_m=c.target.y;s.z_m=c.target.z;++s.impact_seq;
         }

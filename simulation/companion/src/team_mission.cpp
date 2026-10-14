@@ -50,6 +50,13 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
   if(config_.completed_holding.empty())config_.completed_holding=config_.assembly;
   if(config_.completed_holding.size()!=n||!std::isfinite(config_.contact_exit_side))throw std::invalid_argument("退出集结点配置无效");
   for(auto&p:config_.completed_holding){if(!finite(p))throw std::invalid_argument("退出集结点无效");p.z=config_.cruise_z_m;}
+  if(config_.dive_attack){
+    if(!finite(config_.dive_entry)||
+       !std::isfinite(config_.dive_entry_tolerance_m)||config_.dive_entry_tolerance_m<=0||
+       !std::isfinite(config_.dive_entry_height_m)||config_.dive_entry_height_m<=0||
+       !std::isfinite(config_.dive_entry_yaw_tolerance_rad)||config_.dive_entry_yaw_tolerance_rad<=0)
+      throw std::invalid_argument("俯冲入口配置无效");
+  }
   for (const auto& p : config_.transit_waypoints) if (!finite(p)) throw std::invalid_argument("航路点无效");
   // 未给编队偏移时，以起飞点质心为原点，保留各机原有相对位置。
   if (!config_.explicit_formation_offsets) {
@@ -59,7 +66,7 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
   }
   if (config_.formation_offsets.size() != n) throw std::invalid_argument("编队偏移数量无效");
   for (const auto& p : config_.formation_offsets) if (!finite(p)) throw std::invalid_argument("编队偏移无效");
-  status_.resize(n); seen_.assign(n, false); skipped_now_.assign(n, false); received_.assign(n, 0); loss_start_.assign(n, 0); holds_.resize(n);
+  status_.resize(n); seen_.assign(n, false); skipped_now_.assign(n, false); failed_.assign(n, false); received_.assign(n, 0); loss_start_.assign(n, 0); holds_.resize(n);
   for (size_t i = 0; i < n; ++i) { holds_[i] = config_.homes[i]; holds_[i].z = config_.home_ground_z_m + config_.body_clearance_m; }
 }
 
@@ -70,7 +77,7 @@ bool TeamMission::updateStatus(const TeamVehicleStatus& s, uint64_t wall) {
   auto& old = status_[s.vehicle];
   if (seen_[s.vehicle] && (s.sim_time_us <= old.sim_time_us || s.impact_seq < old.impact_seq)) return false;
   old = s; seen_[s.vehicle] = true; received_[s.vehicle] = wall;
-  if (skipped_now_[s.vehicle] && s.xy_valid && s.z_valid && s.ready &&
+  if (skipped_now_[s.vehicle] && !failed_[s.vehicle] && s.xy_valid && s.z_valid && s.ready &&
       phase_!=TeamPhase::COMPLETE && phase_!=TeamPhase::ABORTED) {
     const auto slot=std::find(config_.order.begin(),config_.order.end(),s.vehicle)-config_.order.begin();
     skipped_now_[s.vehicle]=false;
@@ -83,11 +90,15 @@ bool TeamMission::updateStatus(const TeamVehicleStatus& s, uint64_t wall) {
   return true;
 }
 // 双时钟新鲜度检查：仿真时间验证测量年龄，现实单调时间验证是否还在收到包。
-bool TeamMission::validForBarrier(int id, uint64_t sim, uint64_t wall) const {
+bool TeamMission::statusFresh(int id, uint64_t sim, uint64_t wall) const {
   if (!seen_[id]) return false;
   const auto& s = status_[id];
-  return s.xy_valid && s.z_valid && s.ready && sim >= s.sim_time_us && sim-s.sim_time_us <= config_.freshness_us &&
-      wall >= received_[id] && wall-received_[id] <= config_.freshness_us &&
+  return sim >= s.sim_time_us && sim-s.sim_time_us <= config_.freshness_us &&
+      wall >= received_[id] && wall-received_[id] <= config_.freshness_us;
+}
+bool TeamMission::validForBarrier(int id, uint64_t sim, uint64_t wall) const {
+  const auto& s = status_[id];
+  return statusFresh(id,sim,wall) && s.xy_valid && s.z_valid && s.ready &&
       (phase_ == TeamPhase::WAIT_READY || phase_ == TeamPhase::TAKEOFF || phase_ == TeamPhase::LAND_ALL || phase_==TeamPhase::COMPLETE || phase_==TeamPhase::ABORTED || s.armed);
 }
 // “到点”同时看位置和速度，防止高速掠过被认为停稳。降落阶段还限制垂直速度。
@@ -105,7 +116,7 @@ void TeamMission::enter(TeamPhase p, uint64_t now) {
   phase_=p; phase_start_=now; stable_=false;
   if((p==TeamPhase::COMPLETE||p==TeamPhase::ABORTED)&&flight_start_)flight_end_=now;
   if (p==TeamPhase::CONTACT && activeVehicle()>=0) impact_baseline_=status_[activeVehicle()].impact_seq;
-  if (p==TeamPhase::RETREAT) retreat_assembly_=false;
+  if (p==TeamPhase::RETREAT) retreat_assembly_=config_.retreat_holding_direct;
   if (p==TeamPhase::RETURN_ALL || p==TeamPhase::ABORT_RETURN)
     return_index_=config_.transit_waypoints.empty()?-1:std::min(transit_index_-1,static_cast<int>(config_.transit_waypoints.size())-1);
 }
@@ -123,6 +134,10 @@ void TeamMission::skipUnrecoverable(uint64_t wall) {
 }
 void TeamMission::abort(uint64_t now, const char* r) { aborted_=true; reason_=r; enter(TeamPhase::ABORT_RETURN,now); }
 int TeamMission::activeVehicle() const { return (phase_==TeamPhase::APPROACH || phase_==TeamPhase::CONTACT || phase_==TeamPhase::RETREAT) && turn_ < static_cast<int>(config_.order.size()) ? config_.order[turn_] : -1; }
+// 轮次只越过失效机和接触超时失败机；失败机仍参与返航、降落屏障。
+bool TeamMission::turnExhausted(int vehicle) const {
+  return vehicle<0||static_cast<size_t>(vehicle)>=failed_.size()?true:(skipped_now_[vehicle]||failed_[vehicle]);
+}
 
 /**
  * @brief 一次任务调度：评估成员 → 推进状态 → 输出目标。
@@ -135,6 +150,20 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     if(validForBarrier(static_cast<int>(i),sim,wall)&&status_[i].armed&&status_[i].z_m>config_.home_ground_z_m+config_.body_clearance_m+.03){flight_start_=sim;break;}
   for (size_t i=0;i<status_.size();++i) { if (!validForBarrier(static_cast<int>(i),sim,wall)) { if (!loss_start_[i]) loss_start_[i]=wall; } else loss_start_[i]=0; }
   skipUnrecoverable(wall);
+  // 接触失败的成员仍可参与返航；无法继续飞行的成员退出路线屏障，独立恢复。
+  for (size_t i = 0; i < status_.size(); ++i) {
+    if (!status_[i].unrecoverable) continue;
+    // 待机、起飞、降落与终态里落地是正常状态，不能当失败。
+    if (phase_ == TeamPhase::WAIT_READY || phase_ == TeamPhase::TAKEOFF ||
+        phase_ == TeamPhase::LAND_ALL || phase_ == TeamPhase::COMPLETE ||
+        phase_ == TeamPhase::ABORTED) continue;
+    skipped_now_[i] = true;
+    if (failed_[i]) continue;
+    failed_[i] = true;
+    const int id = static_cast<int>(i);
+    if (std::find(skipped_.begin(), skipped_.end(), id) == skipped_.end()) skipped_.push_back(id);
+    reason_ = "成员已落地且无法复飞，任务以部分结果继续";
+  }
   const bool terminal=phase_==TeamPhase::COMPLETE||phase_==TeamPhase::ABORTED;
   // 2. 全队位置屏障跳过暂时失效成员，但不能让空队伍被当成全员到达。
   auto allNear=[&](bool home, bool landing=false){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=home?config_.homes[i]:config_.assembly[i];p.z=home?(landing?config_.home_ground_z_m+config_.body_clearance_m:config_.cruise_z_m):config_.cruise_z_m;if(!near(static_cast<int>(i),p,home&&landing?false:true))return false;}return any;};
@@ -146,9 +175,15 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   if (!terminal && !aborted_ && config_.stage_timeout_us && phase_!=TeamPhase::WAIT_READY && sim-phase_start_>=config_.stage_timeout_us) abort(sim,phase_==TeamPhase::CONTACT?"接触阶段超时":"阶段超时");
   // 3. 接触轮次越过失效机；如果当前机改变，需要切换接近阶段，不能沿用旧机的接触状态。
   const int previous_active=activeVehicle();
-  while (turn_ < static_cast<int>(config_.order.size()) && skipped_now_[config_.order[turn_]]) ++turn_;
+  while (turn_ < static_cast<int>(config_.order.size()) && turnExhausted(config_.order[turn_])) ++turn_;
   if(previous_active>=0&&previous_active!=activeVehicle()) {
     enter(turn_==static_cast<int>(config_.order.size())?TeamPhase::RETURN_ALL:TeamPhase::APPROACH,sim);
+  }
+  const bool all_unrecoverable=std::all_of(seen_.begin(),seen_.end(),[](bool value){return value;})&&
+      std::all_of(status_.begin(),status_.end(),[](const auto& state){return state.unrecoverable;});
+  if(!terminal&&all_unrecoverable&&phase_!=TeamPhase::WAIT_READY&&phase_!=TeamPhase::TAKEOFF){
+    aborted_=true;
+    if(phase_!=TeamPhase::LAND_ALL){reason_="全队无法继续任务，等待降落停机";enter(TeamPhase::LAND_ALL,sim);}
   }
   // 4. 每个 case 只负责阶段转移。目标点在下方统一生成，避免转移后仍发上阶段目标。
   if (!terminal) switch(phase_) {
@@ -159,9 +194,27 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     case TeamPhase::APPROACH: {
       const int a=activeVehicle();
       if(a<0||skipped_now_[a])break;
+      // 接近超时：入口是固定航点，飞不到就不该让整队一直等下去。
+      if(config_.approach_timeout_us&&sim-phase_start_>=config_.approach_timeout_us){
+        if(!failed_[a]){
+          failed_[a]=true;
+          if(std::find(skipped_.begin(),skipped_.end(),a)==skipped_.end())skipped_.push_back(a);
+          reason_="接近阶段超时，未到达俯冲入口";
+        }
+        while(turn_<static_cast<int>(config_.order.size())&&turnExhausted(config_.order[turn_]))++turn_;
+        enter(turn_==static_cast<int>(config_.order.size())?TeamPhase::RETURN_ALL:TeamPhase::APPROACH,sim);
+        break;
+      }
       const auto&s=status_[a];
       bool ok;
-      if(config_.visual_contact){
+      if(config_.dive_attack){
+        // 俯冲模式：入口是一个「门」而不是停点，飞过去就进接触阶段，避免在板前减速停住。
+        // 视觉提供落点；入口阶段只检查位置和航向，近距灯条可能离开视野。
+        ok=validForBarrier(a,sim,wall)&&
+           std::hypot(s.x_m-config_.dive_entry.x,s.y_m-config_.dive_entry.y)<=config_.dive_entry_tolerance_m&&
+           std::abs(s.z_m-config_.dive_entry.z)<=config_.dive_entry_height_m&&
+           std::abs(std::remainder(s.yaw_rad-config_.dive_entry.yaw,6.283185307))<=config_.dive_entry_yaw_tolerance_rad;
+      }else if(config_.visual_contact){
         // 视觉模式：除了图像锁定，还要求已经贴近到搜索距离内。
         // 否则从集结距离一锁定就进接触，最后几米全部交给视觉伺服爬行，
         // 而视觉伺服的横向纠偏会来回摆动，比任务位置环慢得多。
@@ -175,7 +228,22 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       break;
     }
     // 接触要有新的冲击序号，且位置/航向符合基地条件；仅距离近或别的机撞击不算。
-    case TeamPhase::CONTACT: { const int a=activeVehicle(); if(a>=0&&!skipped_now_[a]&&validForBarrier(a,sim,wall)&&status_[a].impact_seq>impact_baseline_){impact_baseline_=status_[a].impact_seq;const auto&s=status_[a];if(config_.visual_contact||(std::hypot(std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y),s.z_m-config_.target.z)<=.35&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.3)){completed_.push_back(a);enter(TeamPhase::RETREAT,sim);}} break; }
+    case TeamPhase::CONTACT: {
+      const int a=activeVehicle();
+      if(a<0)break;
+      // 接触超时：压力门限让力度不足的接触不再算成功，因此必须给接触阶段一个上限。
+      // 超时的机记入未完成并换下一架，不再让整队停在这一轮。
+      if(config_.contact_timeout_us&&sim-phase_start_>=config_.contact_timeout_us){
+        if(!failed_[a]){
+          failed_[a]=true;
+          if(std::find(skipped_.begin(),skipped_.end(),a)==skipped_.end())skipped_.push_back(a);
+          reason_="接触阶段超时，未取得达标撞击";
+        }
+        while(turn_<static_cast<int>(config_.order.size())&&turnExhausted(config_.order[turn_]))++turn_;
+        enter(turn_==static_cast<int>(config_.order.size())?TeamPhase::RETURN_ALL:TeamPhase::APPROACH,sim);
+        break;
+      }
+      if(a>=0&&!skipped_now_[a]&&validForBarrier(a,sim,wall)&&status_[a].impact_seq>impact_baseline_){impact_baseline_=status_[a].impact_seq;const auto&s=status_[a];if(config_.visual_contact||(std::hypot(std::hypot(s.x_m-config_.target.x,s.y_m-config_.target.y),s.z_m-config_.target.z)<=.35&&std::abs(std::remainder(s.yaw_rad-config_.approach.yaw,6.283185307))<=.3)){completed_.push_back(a);enter(TeamPhase::RETREAT,sim);}} break; }
     case TeamPhase::RETREAT: { const int a=activeVehicle();if(a<0){enter(TeamPhase::RETURN_ALL,sim);break;}
       // 流水接触：将位置投影到接触航向的前向/侧向，确认通道让出后启动下一架。
       if(config_.pipelined_contact){const auto&s=status_[a];const double dx=s.x_m-config_.approach.x,dy=s.y_m-config_.approach.y;
@@ -188,10 +256,13 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     case TeamPhase::RETURN_ALL: case TeamPhase::ABORT_RETURN: if(return_index_>=0){if(barrier(routeNear(return_index_),sim)){--return_index_;stable_=false;phase_start_=sim;}}else if(barrier(allNear(true),sim))enter(TeamPhase::LAND_ALL,sim); break;
     default: break;
   }
-  // 5. 位置高度满足之外，还要求飞控明确报告 landed；低空悬停不是落地。
+  // 5. 路线屏障可以跳过失效成员，降落停机确认必须覆盖每个成员。
   if (phase_==TeamPhase::LAND_ALL) {
-    bool land=true; for(size_t i=0;i<status_.size();++i) if(!skipped_now_[i]) land&=status_[i].landed;
-    if (barrier(allNear(true,true)&&land,sim)) enter(aborted_||!skipped_.empty()?TeamPhase::ABORTED:TeamPhase::COMPLETE,sim);
+    bool stopped=true;
+    for(size_t i=0;i<status_.size();++i)
+      stopped=stopped&&statusFresh(static_cast<int>(i),sim,wall)&&status_[i].landed&&!status_[i].armed;
+    if(barrier(stopped&&(all_unrecoverable||allNear(true,true)),sim))
+      enter(aborted_||!skipped_.empty()?TeamPhase::ABORTED:TeamPhase::COMPLETE,sim);
   }
   // 6. 给每架选择目标：待机点、航路点、接触点、退出点或本机起飞点。
   std::vector<TeamCommand> out(status_.size()); ++sequence_;
@@ -216,7 +287,10 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     if(route_index>=0&&route_index<static_cast<int>(config_.transit_waypoints.size())){
       p=config_.transit_waypoints[route_index];p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;p.yaw=config_.homes[i].yaw;
     } else if(static_cast<int>(i)==c.active_vehicle) {
-      p=phase_==TeamPhase::RETREAT&&retreat_assembly_?config_.completed_holding[i]:config_.approach;
+      // 俯冲模式在接近阶段把目标换成高处的入口；退出阶段仍回到接触前的低点让出通道。
+      // 入口航点允许位置环减速完成爬升；目标设在入口之后会压缩可用爬升时间。
+      const TeamPoint&staging=(config_.dive_attack&&phase_!=TeamPhase::RETREAT)?config_.dive_entry:config_.approach;
+      p=phase_==TeamPhase::RETREAT&&retreat_assembly_?config_.completed_holding[i]:staging;
       if(phase_==TeamPhase::RETREAT&&config_.pipelined_contact&&!retreat_assembly_){p.x-=.45*std::cos(p.yaw);p.y-=.45*std::sin(p.yaw);}
     }
     // 下一架在侧方预备点等待，减少接近耗时；当前接触通道仍由 active_vehicle 独占。
@@ -232,7 +306,10 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     else if(seen_[i])holds_[i]={status_[i].x_m,status_[i].y_m,status_[i].z_m,status_[i].yaw_rad};
     c.target_x_m=p.x;c.target_y_m=p.y;c.target_z_m=p.z;c.target_yaw_rad=p.yaw;
     c.contact_speed_mps=(phase_==TeamPhase::CONTACT&&static_cast<int>(i)==c.active_vehicle&&!c.degraded)?config_.contact_speed_mps:0;
-    c.disarm=(phase_==TeamPhase::ABORTED||phase_==TeamPhase::COMPLETE)&&status_[i].landed;
+    auto home=config_.homes[i];home.z=config_.home_ground_z_m+config_.body_clearance_m;
+    const bool landing_disarm=phase_==TeamPhase::LAND_ALL&&(skipped_now_[i]||near(static_cast<int>(i),home,false));
+    c.disarm=(landing_disarm||phase_==TeamPhase::ABORTED||phase_==TeamPhase::COMPLETE)&&
+        statusFresh(static_cast<int>(i),sim,wall)&&status_[i].landed;
     c.complete=phase_==TeamPhase::COMPLETE;
   }
   return out;
