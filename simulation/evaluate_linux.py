@@ -157,6 +157,13 @@ def main():
             if home
             else None,
             "contacts": len(message.contact),
+            "collision_pairs": [
+                {"first": first, "second": second}
+                for first, second in sorted({
+                    (contact.collision1.name, contact.collision2.name)
+                    for contact in message.contact
+                })
+            ],
             "ground_contact": ground_contact,
         }
         with mutex:
