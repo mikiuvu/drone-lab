@@ -49,6 +49,7 @@ def summarize(run):
     attempts = []
     vehicles = []
     alignment = []
+    retries = []
     for spawn in config["spawns"]:
         vehicle = spawn["id"]
         log = rows(run / f"companion_{vehicle}.jsonl")
@@ -57,6 +58,11 @@ def summarize(run):
         hits = [row for row in pressure if row["vehicle"] == vehicle]
         stops = [row for row in log if row.get("kind") == "stop"]
         checks = [row for row in log if row.get("kind") == "dive_alignment"]
+        retries.append({"vehicle": vehicle,
+                        "misses": sum(row.get("kind") == "dive_miss" for row in log),
+                        "weak_contacts": sum(row.get("kind") == "weak_impact" for row in log),
+                        "entry_reacquisitions": [row for row in log if row.get("kind") == "dive_retry_entry"],
+                        "commit_gate_blocks": [row for row in log if row.get("kind") == "dive_commit_gate"]})
         if checks:
             cfg = mission["dive_attack"]
             alignment.append({"vehicle": vehicle, "checks": len(checks),
@@ -80,7 +86,9 @@ def summarize(run):
             item["forecast_error_mm"] = 1000 * (commit["aim_y_m"] - predicted_y) if predicted_y is not None else None
             if "self_y_m" in commit:
                 item["commit_state"] = {key: commit.get(key) for key in
-                    ("entry_alignment", "self_x_m", "self_y_m", "self_z_m", "self_vx_mps", "self_vy_mps", "track_y_m", "track_vy_mps", "track_valid")}
+                    ("entry_alignment", "self_x_m", "self_y_m", "self_z_m", "self_vx_mps", "self_vy_mps", "track_y_m", "track_vy_mps", "track_valid", "track_measured", "measurement_time_us", "commit_eligible")}
+                exposure = commit.get("measurement_time_us")
+                item["commit_observation_age_ms"] = (start - exposure) / 1000 if exposure is not None else None
             if commit.get("track_valid") and commit["aim_source"].startswith("linear"):
                 direct = commit["track_y_m"] + commit["track_vy_mps"] * commit["lead_s"]
                 width = mission["dive_attack"].get("aim_lateral_limit_m", .35)
@@ -109,7 +117,7 @@ def summarize(run):
             attempts.append(item)
     return {"run": str(run), "plane_x_m": plane_x,
             "terminal": {key: final.get(key) for key in ("phase", "sim_time_us", "completed", "skipped", "reason")},
-            "vehicles": vehicles, "attempts": attempts, "alignment": alignment}
+            "vehicles": vehicles, "attempts": attempts, "alignment": alignment, "retries": retries}
 
 
 def main():
