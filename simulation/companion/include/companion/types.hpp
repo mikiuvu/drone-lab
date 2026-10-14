@@ -252,7 +252,7 @@ struct PpmImage {
   uint64_t frame_seq{0};
 };
 
-/** @brief 四邻域亮像素连通区域；中心和包围盒单位 px，area 为亮像素数量。 */
+/** @brief 八邻域亮像素连通区域；中心和包围盒单位 px，area 为亮像素数量。 */
 struct BrightStrip {
   double center_x_px{0.0};
   double center_y_px{0.0};
@@ -276,6 +276,10 @@ struct ArmorObservation {
   BrightStrip left;
   BrightStrip right;
   bool image_clipped{false}; // 灯条触及图像边界，完整配对/测距不可用；跟踪器按失锁处理
+  int bright_pixels{0}, candidate_components{0}, accepted_strips{0}, tested_pairs{0};
+  int rejected_pair_aspect{0};
+  double max_observed_pair_aspect{0};
+  std::string rejection_reason{"invalid_image"};
 };
 
 /** @brief 灯条候选颜色；AnyBright 保持红、蓝和近白亮像素的兼容检测。 */
@@ -287,6 +291,7 @@ struct ArmorDetectionConfig {
   int min_blue_channel{160}; // B 通道下限，0..255
   double blue_over_red_ratio{1.4};
   double blue_over_green_ratio{1.4};
+  double max_pair_aspect{4.0}; // 图像中灯条间距/高度上限；倾斜板面由任务显式配置
 };
 
 /**

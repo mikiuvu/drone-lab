@@ -138,8 +138,33 @@ TeamMissionConfig readConfig(const std::string& path) {
   pointsById(m.at("assembly"),c.assembly,c.cruise_z_m);
   if(m.contains("completed_holding"))pointsById(m.at("completed_holding"),c.completed_holding,c.cruise_z_m);
   c.contact_exit_side=m.value("contact_exit_side",0.0);
+  c.retreat_holding_direct=m.value("retreat_holding_direct",false);
   c.approach = point(m.at("approach"),c.cruise_z_m);
   c.target = point(m.at("target"),c.approach.z);
+  // 俯冲入口：默认由目标点推出——正前方 entry_standoff_m、上方 entry_height_m。
+  // 也可以在地图里直接给 dive_entry 覆盖，便于现场改落点而不动代码。
+  if(m.contains("dive_attack")){
+    const auto&dive=m.at("dive_attack");
+    c.dive_attack=dive.value("enabled",false);
+    c.dive_entry=c.target;
+    c.dive_entry.x-=dive.value("entry_standoff_m",1.35);
+    c.dive_entry.z+=dive.value("entry_height_m",0.55);
+    c.dive_entry.yaw=c.approach.yaw;
+    if(m.contains("dive_entry"))c.dive_entry=point(m.at("dive_entry"),c.dive_entry.z);
+    if(dive.contains("entry_tolerance_m"))c.dive_entry_tolerance_m=number(dive,"entry_tolerance_m");
+    if(dive.contains("entry_height_tolerance_m"))c.dive_entry_height_m=number(dive,"entry_height_tolerance_m");
+    if(dive.contains("entry_yaw_tolerance_rad"))c.dive_entry_yaw_tolerance_rad=number(dive,"entry_yaw_tolerance_rad");
+    if(dive.contains("approach_timeout_s")){
+      const double seconds=number(dive,"approach_timeout_s");
+      if(seconds<0||seconds>3600)throw std::invalid_argument("接近阶段超时时间超出范围");
+      c.approach_timeout_us=static_cast<uint64_t>(seconds*1e6);
+    }
+  }
+  if(m.contains("contact_timeout_s")){
+    const double seconds=number(m,"contact_timeout_s");
+    if(seconds<0||seconds>3600)throw std::invalid_argument("接触阶段超时时间超出范围");
+    c.contact_timeout_us=static_cast<uint64_t>(seconds*1e6);
+  }
   const auto& order = m.at("order");
   if (!order.is_array() || order.size() != c.homes.size()) throw std::invalid_argument("接触顺序无效");
   c.order.clear();
@@ -176,6 +201,7 @@ TeamVehicleStatus readStatus(const char* data, int length) {
   s.xy_valid = s.xy_valid || s.flow_valid;
   s.z_valid = boolean(j,"z_valid"); s.ready = boolean(j,"ready"); s.armed = boolean(j,"armed");
   s.landed = j.contains("landed") ? boolean(j,"landed") : false;
+  s.unrecoverable = j.contains("unrecoverable") ? boolean(j,"unrecoverable") : false;
   s.xy_reason = j.contains("localization_mode") ? j.at("localization_mode").get<std::string>() :
       (j.contains("xy_reason") ? j.at("xy_reason").get<std::string>() : "");
   return s;

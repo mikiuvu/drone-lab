@@ -30,6 +30,7 @@
  */
 
 #include "companion/rm_auto_aim.hpp"
+#include "companion/color_threshold.hpp"
 
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
@@ -50,13 +51,15 @@ struct Light {
 };
 
 std::vector<Light> findLights(const PpmImage& image, bool trapezoid) {
-  cv::Mat mask(image.height, image.width, CV_8UC1, cv::Scalar(0));
+  cv::Mat mask(image.height, image.width, CV_8UC1);
+  static constexpr auto red=detail::colorThresholds(1.4);
+  static constexpr auto green=detail::colorThresholds(1.2);
   for (int y = 0; y < image.height; ++y) {
     auto* row = mask.ptr<uint8_t>(y);
     for (int x = 0; x < image.width; ++x) {
       const size_t p = (static_cast<size_t>(y) * image.width + x) * 3;
       const int r = image.rgb[p], g = image.rgb[p + 1], b = image.rgb[p + 2];
-      row[x] = b >= 120 && b > 1.4 * r && b > 1.2 * g ? 255 : 0;
+      row[x] = b >= 120 && b >= red[r] && b >= green[g] ? 255 : 0;
     }
   }
   std::vector<std::vector<cv::Point>> contours;

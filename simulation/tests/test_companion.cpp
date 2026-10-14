@@ -50,6 +50,21 @@ static void sensorAndVisionGates() {
   auto c=makeConfig(); auto ray=Estimator::tofRayBody(c.tof_mounts[0],3,3); assert(ray.x()>0&&ray.z()<0);
   PpmImage image; image.width=64; image.height=48; image.rgb.assign(64*48*3,0); CameraConfig camera; camera.fx_px=50; camera.cx_px=32; assert(!detectArmorStrips(image,camera).valid);
   const auto good=parseHeightAssistDatagram("{\"schema\":1,\"kind\":\"height_assist\",\"vehicle\":0,\"sim_time_us\":1,\"z_world_m\":2,\"source\":\"SIM_HEIGHT_ASSIST\"}",0); assert(good);
+  // 滑轨观测样本报文：跨机共享用的是原始观测，必须能原样往返，并挡住自己的回声、
+  // 截断报文和乱序样本（merge 是线性归并，时间轴乱了整条模板就废了）。
+  const std::vector<PeriodicSample> samples{{1000000,.1},{1050000,-.2},{1100000,.3}};
+  const auto text=serializePeriodicSamplesDatagram(samples,1);
+  const auto back=parsePeriodicSamplesDatagram(text,0);
+  assert(back&&back->size()==3&&std::abs((*back)[1].y+.2)<1e-9&&(*back)[2].stamp==1100000);
+  assert((*back)[0].source==1&&(*back)[2].source==1);
+  assert(!parsePeriodicSamplesDatagram(serializePeriodicSamplesDatagram(samples,-1),0));
+  assert(!parsePeriodicSamplesDatagram(serializePeriodicSamplesDatagram(samples,256),0));
+  assert(!parsePeriodicSamplesDatagram(R"({"schema":1,"kind":"periodic_samples","source":"ESTIMATE","vehicle":4294967297,"stamp_us":[1000000],"y_m":[0.1]})",0));
+  assert(!parsePeriodicSamplesDatagram(text,1));
+  assert(!parsePeriodicSamplesDatagram(text.substr(0,text.size()/2),0));
+  const std::vector<PeriodicSample> unordered{{1100000,.3},{1000000,.1}};
+  assert(!parsePeriodicSamplesDatagram(serializePeriodicSamplesDatagram(unordered,1),0));
+  assert(!parsePeriodicSamplesDatagram(serializePeriodicSamplesDatagram({},1),0));
 }
 
 static void mavlinkCoordinateRoundTrip() {

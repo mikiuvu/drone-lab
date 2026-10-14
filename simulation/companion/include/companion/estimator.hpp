@@ -106,12 +106,14 @@ class Estimator {
  private:
   // 单点残差为 m，雅可比列对应 [x,y,yaw]；normal 在三角网格观测中保存 ENU 面法向。
   struct LineObservation { double residual{0}; Eigen::RowVector3d jacobian{Eigen::RowVector3d::Zero()}; Eigen::Vector3d normal{Eigen::Vector3d::Zero()}; };
-  bool lineObservation(const TofFrame&, int, const Pose3&, LineObservation&) const;
-  bool terrainObservation(const TofFrame&, int, const Pose3&, LineObservation&) const;
+  bool lineObservation(const TofFrame&, int, const Pose3&, const Eigen::Matrix3d&, LineObservation&) const;
+  bool terrainObservation(const TofFrame&, int, const Pose3&, const Eigen::Matrix3d&, LineObservation&) const;
   // 通用 EKF 更新：H 为 M×7，残差为 M×1，测量噪声协方差为 M×M。
   void update(const Eigen::MatrixXd&, const Eigen::VectorXd&, const Eigen::MatrixXd&);
   bool fresh(uint64_t stamp, uint64_t timeout) const;
   EstimatorConfig config_;
+  // 安装外参在实例生命周期内固定；缓存三路 8×8 射线，匹配迭代中只更新机体姿态。
+  std::array<std::array<Eigen::Vector3d,kTofCellCount>,3> tof_rays_;
   Estimate state_;
   // 每个方向保留最新帧；已接收和已融合时间分开记录，允许等待互补几何但禁止重复计权。
   std::array<TofFrame,3> tof_cache_{};

@@ -49,7 +49,7 @@ class TerrainMap {
  */
   size_t triangleCount() const { return triangles_.size(); }
 /**
- * @brief 估算三个内部 vector 的容量占用字节数，不含对象本身及分配器开销。
+ * @brief 估算四个内部 vector 的容量占用字节数，不含对象本身及分配器开销。
  */
   size_t storageBytes() const;
 
@@ -61,6 +61,7 @@ class TerrainMap {
   };
   uint32_t build(uint32_t begin, uint32_t end);
   std::vector<Triangle> triangles_;
+  std::vector<double> parallel_thresholds_;  ///< 每面 1e-10*|e1|*|e2|，免去每次求交的重复开方。
   std::vector<uint32_t> order_;
   std::vector<Node> nodes_;
 };

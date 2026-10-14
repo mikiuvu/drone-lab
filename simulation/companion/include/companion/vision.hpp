@@ -12,6 +12,20 @@
 
 namespace companion {
 
+struct GuideObservation {
+  bool valid{false};
+  double x_px{0}, y_px{0};
+  int area{0}, candidates{0};
+};
+/** @brief 在预测图像位置附近寻找紧凑绿色亮斑；多候选时不擅自选择最大亮斑。 */
+GuideObservation detectGreenGuide(const PpmImage& image, double expected_x,
+                                  double expected_y, double radius_px);
+/** @brief 视线与已知固定滑轨 X 平面相交，再加绿灯到装甲中心的安装偏移。 */
+std::optional<Eigen::Vector3d> guideArmorPosition(
+    const GuideObservation& guide, const CameraConfig& camera,
+    const Pose3& pose, double camera_forward_m, double guide_plane_x_m,
+    const Eigen::Vector3d& guide_to_armor_world_m);
+
 /**
  * @brief 读取二进制 P6 PPM，并解析首个注释行中的帧序号和时间。
  * @param path 图像路径；仅接受 8 位通道、宽高各不超过 4096 的图像。

@@ -3,6 +3,7 @@
  * @brief PPM 帧读取、灯条连通域配对和视觉/航点控制意图生成。
  */
 #include "companion/vision.hpp"
+#include "companion/color_threshold.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -11,6 +12,7 @@
 #include <queue>
 #include <sstream>
 #include <stdexcept>
+#include <Eigen/Geometry>
 
 namespace companion {
 namespace {
@@ -41,21 +43,28 @@ bool readToken(std::istream& stream, std::string* token) {
   return !token->empty();
 }
 
-// 红/蓝通道突出或近白高亮像素可作为灯条候选；这里只做颜色筛选，形状和配对在后续判断。
-bool brightPixel(const PpmImage& image, int x, int y, const ArmorDetectionConfig& config) {
-  const size_t index = static_cast<size_t>((y * image.width + x) * 3);
-  const int r = image.rgb[index];
-  const int g = image.rgb[index + 1];
-  const int b = image.rgb[index + 2];
-  if (config.enemy_color == ArmorColor::Blue) {
-    return b >= config.min_blue_channel && b > r * config.blue_over_red_ratio &&
-           b > g * config.blue_over_green_ratio;
+// 每帧只做一次颜色分类；连通域扩展复用掩码，不重复读取 RGB 与计算比例。
+std::vector<uint8_t> brightMask(const PpmImage& image,const ArmorDetectionConfig& config){
+  std::vector<uint8_t> mask(static_cast<size_t>(image.width)*image.height);
+  if(config.enemy_color==ArmorColor::Blue){
+    const auto red=detail::colorThresholds(config.blue_over_red_ratio);
+    const auto green=detail::colorThresholds(config.blue_over_green_ratio);
+    for(size_t i=0;i<mask.size();++i){
+      const auto* rgb=image.rgb.data()+i*3;
+      mask[i]=rgb[2]>=config.min_blue_channel&&rgb[2]>=red[rgb[0]]&&rgb[2]>=green[rgb[1]];
+    }
+  }else{
+    static constexpr auto ratio14=detail::colorThresholds(1.4);
+    static constexpr auto ratio16=detail::colorThresholds(1.6);
+    for(size_t i=0;i<mask.size();++i){
+      const int r=image.rgb[i*3],g=image.rgb[i*3+1],b=image.rgb[i*3+2];
+      const int maximum=std::max({r,g,b}),minimum=std::min({r,g,b});
+      const bool red=r>=160&&r>=ratio16[g]&&r>=ratio14[b];
+      const bool blue=b>=160&&b>=ratio14[g]&&b>=ratio14[r];
+      mask[i]=red||blue||(maximum>=220&&maximum-minimum<=70);
+    }
   }
-  const int maximum = std::max({r, g, b});
-  const int minimum = std::min({r, g, b});
-  const bool red = r >= 160 && r > g * 1.6 && r > b * 1.4;
-  const bool blue = b >= 160 && b > g * 1.4 && b > r * 1.4;
-  return red || blue || (maximum >= 220 && maximum - minimum <= 70);
+  return mask;
 }
 
 double clamp(double value, double lower, double upper) {
@@ -115,9 +124,56 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
   return detectArmorStrips(image, config, ArmorDetectionConfig{});
 }
 
+GuideObservation detectGreenGuide(const PpmImage& image, double ex, double ey, double radius) {
+  GuideObservation result;
+  if(image.width<=0||image.height<=0||image.rgb.size()!=size_t(image.width)*image.height*3 ||
+     !std::isfinite(ex)||!std::isfinite(ey)||!std::isfinite(radius)||radius<=0)return result;
+  std::vector<unsigned char> seen(image.width*image.height,0);
+  auto green=[&](int x,int y){size_t k=(y*image.width+x)*3;
+    const int r=image.rgb[k],g=image.rgb[k+1],b=image.rgb[k+2];
+    return g>=100&&2*g>3*r&&2*g>3*b;};
+  for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x){
+    if(seen[y*image.width+x]||!green(x,y))continue;
+    std::queue<std::pair<int,int>> q;q.emplace(x,y);seen[y*image.width+x]=1;
+    int count=0,l=x,r=x,t=y,b=y;double sx=0,sy=0;
+    while(!q.empty()){
+      auto [cx,cy]=q.front();q.pop();++count;sx+=cx;sy+=cy;
+      l=std::min(l,cx);r=std::max(r,cx);t=std::min(t,cy);b=std::max(b,cy);
+      for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){
+        int nx=cx+dx,ny=cy+dy;
+        if(nx<0||ny<0||nx>=image.width||ny>=image.height)continue;
+        if(!seen[ny*image.width+nx]&&green(nx,ny)){seen[ny*image.width+nx]=1;q.emplace(nx,ny);}
+      }
+    }
+    double w=r-l+1,h=b-t+1,px=sx/count,py=sy/count;
+    if(count<4||l==0||t==0||r==image.width-1||b==image.height-1||
+       std::max(w,h)>4*std::min(w,h)||count/(w*h)<.3||std::hypot(px-ex,py-ey)>radius)continue;
+    ++result.candidates;result.x_px=px;result.y_px=py;result.area=count;
+  }
+  result.valid=result.candidates==1;
+  return result;
+}
+
+std::optional<Eigen::Vector3d> guideArmorPosition(const GuideObservation& guide,
+    const CameraConfig& camera,const Pose3& pose,double camera_forward,double plane_x,
+    const Eigen::Vector3d& offset){
+  if(!guide.valid||camera.fx_px<=0||camera.fy_px<=0||!offset.allFinite())return std::nullopt;
+  const Eigen::Matrix3d rotation=(Eigen::AngleAxisd(pose.yaw_rad,Eigen::Vector3d::UnitZ())*
+      Eigen::AngleAxisd(pose.pitch_rad,Eigen::Vector3d::UnitY())*
+      Eigen::AngleAxisd(pose.roll_rad,Eigen::Vector3d::UnitX())).toRotationMatrix();
+  Eigen::Vector3d origin=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+rotation*Eigen::Vector3d(camera_forward,0,0);
+  Eigen::Vector3d ray=rotation*Eigen::Vector3d(1,-(guide.x_px-camera.cx_px)/camera.fx_px,-(guide.y_px-camera.cy_px)/camera.fy_px);
+  if(std::abs(ray.x())<.1)return std::nullopt;
+  double depth=(plane_x-origin.x())/ray.x();
+  if(!std::isfinite(depth)||depth<.1||depth>8)return std::nullopt;
+  return origin+depth*ray+offset;
+}
+
 ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& config,
                                    const ArmorDetectionConfig& detection) {
   ArmorObservation result;
+  if (!std::isfinite(detection.max_pair_aspect) || detection.max_pair_aspect < 1.0)
+    throw std::invalid_argument("invalid armor pair aspect threshold");
   if (detection.enemy_color == ArmorColor::Blue &&
       (detection.min_blue_channel < 0 || detection.min_blue_channel > 255 ||
        !std::isfinite(detection.blue_over_red_ratio) || detection.blue_over_red_ratio <= 1.0 ||
@@ -128,18 +184,20 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
       image.rgb.size() != static_cast<size_t>(image.width) * image.height * 3) {
     return result;
   }
-  // 1. 用四邻域广度搜索合并亮像素，得到面积、中心及包围盒；尺寸门限剔除散点和横条。
-  std::vector<uint8_t> visited(static_cast<size_t>(image.width) * image.height, 0);
+  // 1. 八邻域保留远距离单像素宽斜灯条的连通性；四邻域会将其拆成多个散点。
+  // 掩码中 1 表示待遍历亮像素，入队后清零，无需另一份 visited 数组。
+  auto mask=brightMask(image,detection);
   std::vector<BrightStrip> components;
   const int min_area = std::max(4, image.width * image.height / 40000);
   for (int y = 0; y < image.height; ++y) {
     for (int x = 0; x < image.width; ++x) {
       const size_t seed = static_cast<size_t>(y * image.width + x);
-      if (visited[seed] != 0 || !brightPixel(image, x, y, detection)) continue;
+      if (!mask[seed]) continue;
       std::queue<std::pair<int, int>> pending;
       pending.emplace(x, y);
-      visited[seed] = 1;
+      mask[seed] = 0;
       BrightStrip component;
+      ++result.candidate_components;
       component.min_x = component.max_x = x;
       component.min_y = component.max_y = y;
       long long sum_x = 0;
@@ -160,14 +218,18 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
         component.max_x = std::max(component.max_x, cx);
         component.min_y = std::min(component.min_y, cy);
         component.max_y = std::max(component.max_y, cy);
-        for (const auto [nx, ny] : {std::pair<int, int>{cx - 1, cy},
+        for (const auto& [nx, ny] : {std::pair<int, int>{cx - 1, cy},
                                     std::pair<int, int>{cx + 1, cy},
                                     std::pair<int, int>{cx, cy - 1},
-                                    std::pair<int, int>{cx, cy + 1}}) {
+                                    std::pair<int, int>{cx, cy + 1},
+                                    std::pair<int, int>{cx - 1, cy - 1},
+                                    std::pair<int, int>{cx + 1, cy - 1},
+                                    std::pair<int, int>{cx - 1, cy + 1},
+                                    std::pair<int, int>{cx + 1, cy + 1}}) {
           if (nx < 0 || nx >= image.width || ny < 0 || ny >= image.height) continue;
           const size_t index = static_cast<size_t>(ny * image.width + nx);
-          if (visited[index] == 0 && brightPixel(image, nx, ny, detection)) {
-            visited[index] = 1;
+          if (mask[index]) {
+            mask[index] = 0;
             pending.emplace(nx, ny);
           }
         }
@@ -177,6 +239,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
       // height >= 1.2*width 会丢掉其中一根，components<2 就直接返回无效。
       // 用接触阶段的真实帧回放，配对成功率从 32.5% 升到 80%，与 PnP 链的约 85% 相当。
       const double mean_x = static_cast<double>(sum_x) / component.area;
+      result.bright_pixels += component.area;
       const double mean_y = static_cast<double>(sum_y) / component.area;
       const double var_x = static_cast<double>(sum_xx) / component.area - mean_x * mean_x;
       const double var_y = static_cast<double>(sum_yy) / component.area - mean_y * mean_y;
@@ -205,7 +268,12 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
       }
     }
   }
-  if (components.size() < 2) return result;
+  result.accepted_strips = static_cast<int>(components.size());
+  if (components.size() < 2) {
+    result.rejection_reason = result.bright_pixels == 0 ? "no_color_pixels" :
+        (result.image_clipped ? "clipped_strips" : "insufficient_strips");
+    return result;
+  }
 
   // 2. 比较灯条高度比例、纵向对齐及间距/高度比，选择面积较大且形状一致的配对。
   double best_score = -1.0;
@@ -225,8 +293,11 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
                                  std::max(height_left, height_right);
       const double width_limit = image.width * 0.75;
       const double pair_aspect=separation / (0.5*(height_left+height_right));
+      ++result.tested_pairs;
+      result.max_observed_pair_aspect = std::max(result.max_observed_pair_aspect, pair_aspect);
+      if (pair_aspect > detection.max_pair_aspect) ++result.rejected_pair_aspect;
       if (separation < 3.0 || separation > width_limit || height_ratio < 0.65 ||
-          y_alignment > 0.4 || pair_aspect<1.0 || pair_aspect>4.0) continue;
+          y_alignment > 0.4 || pair_aspect<1.0 || pair_aspect>detection.max_pair_aspect) continue;
       const double score = height_ratio * (1.0 - clamp(y_alignment, 0.0, 1.0)) *
                            std::sqrt(static_cast<double>(left.area * right.area));
       if (score > best_score) {
@@ -236,7 +307,11 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
       }
     }
   }
-  if (best_score <= 0.0) return result;
+  if (best_score <= 0.0) {
+    result.rejection_reason = result.rejected_pair_aspect == result.tested_pairs
+        ? "pair_aspect" : "pair_geometry";
+    return result;
+  }
   // 其他触边候选不影响当前完整配对；完整蓝色灯条对可重新建立观测。
   result.image_clipped = false;
 
@@ -261,6 +336,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
   result.confidence = std::min(hleft,hright)/std::max(hleft,hright) *
       (1.0-std::abs(best_left.center_y_px-best_right.center_y_px)/std::max(hleft,hright));
   result.valid = result.confidence >= 0.6;
+  result.rejection_reason = result.valid ? "accepted" : "pair_confidence";
   return result;
 }
 

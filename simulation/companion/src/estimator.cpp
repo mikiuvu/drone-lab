@@ -28,6 +28,8 @@ double huber(double e,double s) { const double a=std::abs(e)/s; return a<=2.5?1.
  */
 Estimator::Estimator(EstimatorConfig c):config_(std::move(c)) {
   if(config_.vehicle_id<0||config_.tof_sigma_m<=0||!config_.initial_covariance.allFinite()) throw std::invalid_argument("invalid estimator config");
+  for(int sensor=0;sensor<3;++sensor)for(int cell=0;cell<kTofCellCount;++cell)
+    tof_rays_[sensor][cell]=tofRayBody(config_.tof_mounts[sensor],cell/8,cell%8);
   reset();
 }
 void Estimator::reset(uint64_t now) {
@@ -108,18 +110,32 @@ FusionReport Estimator::fuseMapContact(uint64_t now,const Eigen::Vector3d& norma
   report.accepted=true;report.reason="known_surface_contact";return report;
 }
 Eigen::Vector3d Estimator::tofRayBody(const TofMount& m,int row,int col){double u=(col-3.5)/4.0*std::tan(m.horizontal_fov_rad/2),v=(row-3.5)/4.0*std::tan(m.vertical_fov_rad/2);return rotation(m.roll_rad,m.pitch_down_rad,m.yaw_rad)*Eigen::Vector3d(1,-u,-v);}
-bool Estimator::lineObservation(const TofFrame& f,int cell,const Pose3& pose,LineObservation& o) const {
+bool Estimator::lineObservation(const TofFrame& f,int cell,const Pose3& pose,const Eigen::Matrix3d& r,LineObservation& o) const {
   // 轴向深度经安装外参和机体姿态转成世界端点，匹配有限墙段并检查高度范围。
   // 点到线残差 n·(endpoint-start) 的导数为 [nx,ny,n·(-off_y,off_x)]。
-  if(f.sensor_index<0||f.sensor_index>=3||!f.valid[cell])return false;const auto&m=config_.tof_mounts[f.sensor_index];double d=f.distance_m[cell];if(!std::isfinite(d)||d<m.min_range_m||d>m.max_range_m)return false;auto r=rotation(pose.roll_rad,pose.pitch_rad,pose.yaw_rad);Eigen::Vector3d off=r*(m.translation_body_m+d*tofRayBody(m,cell/8,cell%8)), ep=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+off;if(ep.z()<config_.floor_z_m+.12)return false;double best=.6;bool found=false;for(const auto&w:config_.map_lines){Eigen::Vector2d line=w.end_m-w.start_m;double len=line.norm();if(len<1e-5||ep.z()<w.z_min_m||ep.z()>w.z_max_m)continue;Eigen::Vector2d t=line/len,n(-t.y(),t.x());double along=(ep.head<2>()-w.start_m).dot(t),res=n.dot(ep.head<2>()-w.start_m);if(along>=0&&along<=len&&std::abs(res)<best){best=std::abs(res);found=true;o.residual=res;o.jacobian<<n.x(),n.y(),n.dot(Eigen::Vector2d(-off.y(),off.x()));}}return found;
+  if(f.sensor_index<0||f.sensor_index>=3||!f.valid[cell])return false;
+  const auto&m=config_.tof_mounts[f.sensor_index];double d=f.distance_m[cell];
+  if(!std::isfinite(d)||d<m.min_range_m||d>m.max_range_m)return false;
+  Eigen::Vector3d off=r*(m.translation_body_m+d*tof_rays_[f.sensor_index][cell]);
+  const Eigen::Vector3d ep=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+off;
+  if(ep.z()<config_.floor_z_m+.12)return false;
+  double best=.6;bool found=false;
+  for(const auto&w:config_.map_lines){
+    const Eigen::Vector2d line=w.end_m-w.start_m;const double len=line.norm();
+    if(len<1e-5||ep.z()<w.z_min_m||ep.z()>w.z_max_m)continue;
+    const Eigen::Vector2d t=line/len,n(-t.y(),t.x());
+    const double along=(ep.head<2>()-w.start_m).dot(t),res=n.dot(ep.head<2>()-w.start_m);
+    if(along>=0&&along<=len&&std::abs(res)<best){best=std::abs(res);found=true;o.residual=res;o.jacobian<<n.x(),n.y(),n.dot(Eigen::Vector2d(-off.y(),off.x()));}
+  }
+  return found;
 }
-bool Estimator::terrainObservation(const TofFrame& f,int cell,const Pose3& pose,LineObservation& o) const {
+bool Estimator::terrainObservation(const TofFrame& f,int cell,const Pose3& pose,const Eigen::Matrix3d& r,LineObservation& o) const {
   if(!config_.terrain || f.sensor_index<0 || f.sensor_index>=3 || !f.valid[cell]) return false;
   const auto&m=config_.tof_mounts[f.sensor_index]; const double d=f.distance_m[cell];
   if(!std::isfinite(d)||d<m.min_range_m||d>m.max_range_m) return false;
   // 1. 保留未归一化射线，使 raycast 的参数仍与传感器轴向深度 d 一致。
-  const auto body_ray=tofRayBody(m,cell/8,cell%8);
-  const auto r=rotation(pose.roll_rad,pose.pitch_rad,pose.yaw_rad); const Eigen::Vector3d off=r*m.translation_body_m;
+  const auto& body_ray=tof_rays_[f.sensor_index][cell];
+  const Eigen::Vector3d off=r*m.translation_body_m;
   const Eigen::Vector3d ray=r*body_ray, origin=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+off;
   // 2. 地图射线找最近面，先筛轴向深度差，再用面法向得到点到面残差。
   TerrainMap::Hit hit; if(!config_.terrain->raycast(origin,ray,d+config_.terrain_range_gate_m,hit)) return false;
@@ -175,9 +191,10 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
       exposure_pose.x_m-=state_.velocity_enu_mps.x()*age;
       exposure_pose.y_m-=state_.velocity_enu_mps.y()*age;
       exposure_pose.z_m-=state_.velocity_enu_mps.z()*age;
+      const auto exposure_rotation=rotation(exposure_pose.roll_rad,exposure_pose.pitch_rad,exposure_pose.yaw_rad);
       for(int cell=0;cell<64;++cell) {
         LineObservation observation;
-        const bool observed=config_.terrain ? terrainObservation(cached,cell,exposure_pose,observation) : lineObservation(cached,cell,exposure_pose,observation);
+        const bool observed=config_.terrain ? terrainObservation(cached,cell,exposure_pose,exposure_rotation,observation) : lineObservation(cached,cell,exposure_pose,exposure_rotation,observation);
         if(!observed)continue;
         if(config_.terrain) {
           if(first_normal.squaredNorm()<0.5) first_normal=observation.normal;

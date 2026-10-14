@@ -16,7 +16,7 @@ namespace companion {
 namespace {
 constexpr size_t kMaxTriangles = 1000000;
 bool boxHit(const Eigen::Vector3f& low, const Eigen::Vector3f& high,
-            const Eigen::Vector3d& origin, const Eigen::Vector3d& ray,
+            const Eigen::Vector3d& origin, const Eigen::Vector3d& ray,const Eigen::Vector3d& inverse_ray,
             double far, double& near) {
   // Slab 方法：分别计算射线在三个轴向区间的进入/离开参数，取交集 [near,far]。
   // 与某轴平行时不能除以近零方向分量，只检查起点是否位于该轴区间内。
@@ -25,7 +25,7 @@ bool boxHit(const Eigen::Vector3f& low, const Eigen::Vector3f& high,
     if (std::abs(ray(a)) < 1e-12) {
       if (origin(a)<low(a)-1e-6 || origin(a)>high(a)+1e-6) return false;
     } else {
-      double lo=(low(a)-1e-6-origin(a))/ray(a), hi=(high(a)+1e-6-origin(a))/ray(a);
+      double lo=(low(a)-1e-6-origin(a))*inverse_ray(a), hi=(high(a)+1e-6-origin(a))*inverse_ray(a);
       if(lo>hi)std::swap(lo,hi);
       near=std::max(near,lo); far=std::min(far,hi);
       if(near>far)return false;
@@ -52,6 +52,12 @@ TerrainMap::TerrainMap(std::vector<Triangle> triangles) {
   std::vector<Triangle> reordered;reordered.reserve(triangles_.size());
   for(const auto index:order_)reordered.push_back(triangles_[index]);
   triangles_.swap(reordered);std::vector<uint32_t>().swap(order_);
+  parallel_thresholds_.reserve(triangles_.size());
+  for(const auto& triangle:triangles_){
+    const Eigen::Vector3d vertex=triangle[0].cast<double>();
+    const Eigen::Vector3d e1=triangle[1].cast<double>()-vertex,e2=triangle[2].cast<double>()-vertex;
+    parallel_thresholds_.push_back(1e-10*e1.norm()*e2.norm());
+  }
 }
 
 std::shared_ptr<const TerrainMap> TerrainMap::load(const std::filesystem::path& path) {
@@ -94,20 +100,30 @@ uint32_t TerrainMap::build(uint32_t begin,uint32_t end) {
 bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ray,
                          double max_depth,Hit& hit) const {
   if(!origin.allFinite()||!ray.allFinite()||!std::isfinite(max_depth)||max_depth<=0||ray.norm()<1e-9)return false;
-  std::array<uint32_t,64> stack{};size_t pending=1;stack[0]=0;
+  const double ray_norm=ray.norm();
+  Eigen::Vector3d inverse_ray=Eigen::Vector3d::Zero();
+  for(int axis=0;axis<3;++axis)if(std::abs(ray(axis))>=1e-12)inverse_ray(axis)=1/ray(axis);
+  double root_near;
+  if(!boxHit(nodes_[0].low,nodes_[0].high,origin,ray,inverse_ray,max_depth,root_near))return false;
+  struct Visit { uint32_t node; double near; };
+  std::array<Visit,64> stack{};size_t pending=1;stack[0]={0,root_near};
   int visits=0;bool found=false;double best=max_depth;
   while(pending) {
     // 超过资源上限时保守失败，未遍历完的结果不能证明是最近可见表面。
     if(++visits>1024)return false;
-    const auto& n=nodes_[stack[--pending]];double near;
-    if(!boxHit(n.low,n.high,origin,ray,best,near))continue;
+    const auto visit=stack[--pending];
+    // 入栈时已验证包围盒；最近命中缩短后，只需比较缓存的进入深度。
+    if(visit.near>best)continue;
+    const auto& n=nodes_[visit.node];
     if(!n.count) {
       double a,b;const auto& l=nodes_[n.left];const auto& r=nodes_[n.right];
-      const bool hl=boxHit(l.low,l.high,origin,ray,best,a),hr=boxHit(r.low,r.high,origin,ray,best,b);
+      const bool hl=boxHit(l.low,l.high,origin,ray,inverse_ray,best,a),hr=boxHit(r.low,r.high,origin,ray,inverse_ray,best,b);
       if(pending+2>stack.size())return false;
       // 栈后进先出，较近子树最后压入、最先处理；best 随命中缩短，可提前剪枝远处节点。
-      if(hl&&hr){stack[pending++]=a<b?n.right:n.left;stack[pending++]=a<b?n.left:n.right;}
-      else if(hl)stack[pending++]=n.left;else if(hr)stack[pending++]=n.right;
+      if(hl&&hr){
+        if(a<b){stack[pending++]={n.right,b};stack[pending++]={n.left,a};}
+        else{stack[pending++]={n.left,a};stack[pending++]={n.right,b};}
+      }else if(hl)stack[pending++]={n.left,a};else if(hr)stack[pending++]={n.right,b};
       continue;
     }
     for(uint32_t i=n.begin;i<n.begin+n.count;++i) {
@@ -116,16 +132,22 @@ bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ra
       // Möller–Trumbore 求解 origin+d*ray=v+u*e1+w*e2；u,w 是重心坐标，d 是射线参数。
       // det 接近零表示射线与面近乎平行；u≥0、w≥0、u+w≤1 才落在三角形内。
       const Eigen::Vector3d p=ray.cross(e2);const double det=e1.dot(p);
-      if(std::abs(det)<1e-10*e1.norm()*e2.norm()*ray.norm())continue;
-      const Eigen::Vector3d s=origin-v,q=s.cross(e1);
-      const double u=s.dot(p)/det,w=ray.dot(q)/det,d=e2.dot(q)/det;
-      if(u< -1e-7||w< -1e-7||u+w>1+1e-7||d<1e-6||d>best)continue;
+      if(std::abs(det)<parallel_thresholds_[i]*ray_norm)continue;
+      const Eigen::Vector3d s=origin-v;
+      const double inverse_det=1/det;
+      const double u=s.dot(p)*inverse_det;
+      if(u< -1e-7)continue;
+      const Eigen::Vector3d q=s.cross(e1);
+      const double w=ray.dot(q)*inverse_det;
+      if(w< -1e-7||u+w>1+1e-7)continue;
+      const double d=e2.dot(q)*inverse_det;
+      if(d<1e-6||d>best)continue;
       best=d;found=true;hit.depth_m=d;hit.point=origin+d*ray;hit.normal=e1.cross(e2).normalized();
     }
   }
   return found;
 }
 size_t TerrainMap::storageBytes() const {
-  return triangles_.capacity()*sizeof(Triangle)+order_.capacity()*sizeof(uint32_t)+nodes_.capacity()*sizeof(Node);
+  return triangles_.capacity()*sizeof(Triangle)+order_.capacity()*sizeof(uint32_t)+nodes_.capacity()*sizeof(Node)+parallel_thresholds_.capacity()*sizeof(double);
 }
 }

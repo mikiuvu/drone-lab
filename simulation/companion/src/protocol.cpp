@@ -209,6 +209,63 @@ std::optional<PeerEstimate> parsePeerEstimateDatagram(const std::string& payload
   }
 }
 
+std::optional<std::vector<PeriodicSample>> parsePeriodicSamplesDatagram(
+    const std::string& payload, int expected_vehicle) {
+  try {
+    const json value = json::parse(payload);
+    // 上限按 1 Hz 广播 60 s 窗口的 50 Hz 采样留足余量，同时挡住畸形报文。
+    constexpr std::size_t kMaxSamples = 512;
+    if (!schema1(value) || value.value("kind", "") != "periodic_samples" ||
+        value.value("source", "") != "ESTIMATE" ||
+        !value.contains("vehicle") || !value["vehicle"].is_number_integer() ||
+        value["vehicle"]<0 || value["vehicle"]>255 ||
+        value.value("vehicle", -1) == expected_vehicle ||
+        !value.contains("stamp_us") || !value["stamp_us"].is_array() ||
+        !value.contains("y_m") || !value["y_m"].is_array() ||
+        value["stamp_us"].size() != value["y_m"].size() ||
+        value["stamp_us"].empty() || value["stamp_us"].size() > kMaxSamples) {
+      return std::nullopt;
+    }
+    std::vector<PeriodicSample> result;
+    result.reserve(value["stamp_us"].size());
+    uint64_t previous = 0;
+    for (std::size_t i = 0; i < value["stamp_us"].size(); ++i) {
+      const json& stamp = value["stamp_us"][i];
+      const json& y = value["y_m"][i];
+      if (!stamp.is_number_unsigned() || !y.is_number() ||
+          !std::isfinite(y.get<double>())) {
+        return std::nullopt;
+      }
+      const uint64_t time = stamp.get<uint64_t>();
+      // 样本必须严格升序：merge 是线性归并，无序输入会打乱时间轴。
+      if (!time || time <= previous) return std::nullopt;
+      previous = time;
+      result.push_back(PeriodicSample{time, y.get<double>(),value["vehicle"].get<int>()});
+    }
+    return result;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::string serializePeriodicSamplesDatagram(const std::vector<PeriodicSample>& samples,
+                                             int vehicle) {
+  json stamps = json::array();
+  json values = json::array();
+  for (const auto& sample : samples) {
+    stamps.push_back(sample.stamp);
+    values.push_back(sample.y);
+  }
+  return json{{"schema", 1},
+              {"kind", "periodic_samples"},
+              {"source", "ESTIMATE"},
+              {"vehicle", vehicle},
+              {"count", samples.size()},
+              {"stamp_us", stamps},
+              {"y_m", values}}
+      .dump();
+}
+
 std::string serializeEstimateDatagram(const Estimate& estimate) {
   json value = {
       {"schema", 1},

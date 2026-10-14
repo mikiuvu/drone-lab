@@ -3,6 +3,7 @@
  * @brief 合成 RGB 灯条和相机观测的颜色、运动、时效及失锁回归测试。
  */
 #include "companion/vision.hpp"
+#include "companion/color_threshold.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -15,6 +16,16 @@ namespace {
 // 使用运行时检查，使 Release 构建也执行全部测试条件。
 void require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
+}
+
+void colorThresholdEquivalence(){
+  for(double ratio:{1.0000000000000002,1.2,1.4,1.5,1.6,2.0,2.75,256.0,1e300}){
+    const auto thresholds=detail::colorThresholds(ratio);
+    for(int other=0;other<256;++other)for(int channel=0;channel<256;++channel)
+      require((channel>ratio*other)==(channel>=thresholds[other]),"byte ratio classification matches floating reference");
+  }
+  for(int other=0;other<256;++other)for(int channel=0;channel<256;++channel)
+    require((channel>1.5*other)==(2*channel>3*other),"green integer ratio is exact");
 }
 
 PpmImage image() {
@@ -189,7 +200,52 @@ void nearFieldClipping() {
 
 int main() {
   try {
+    {
+      auto frame = image();
+      strip(frame, 40, 40, 49, 0, 8, 255);
+      strip(frame, 86, 40, 49, 0, 8, 255);
+      ArmorDetectionConfig blue;
+      blue.enemy_color = ArmorColor::Blue;
+      auto rejected = detectArmorStrips(frame, camera(), blue);
+      require(!rejected.valid && rejected.rejection_reason == "pair_aspect",
+              "inclined panel rejected by legacy aspect limit");
+      require(rejected.accepted_strips == 2 && rejected.bright_pixels == 60,
+              "color and component stages preserve both lights");
+      blue.max_pair_aspect = 6.0;
+      auto accepted = detectArmorStrips(frame, camera(), blue);
+      require(accepted.valid && accepted.range_valid, "inclined panel pair accepted");
+      require(std::abs(accepted.centroid_x_px - 64) < 1e-9, "inclined pair center");
+      require(std::abs(accepted.range_m - .135 * 100 / 46) < 1e-9, "inclined pair range");
+    }
     colorAndPixelGeometry();
+    {
+      auto frame=image();
+      for(int y=47;y<=53;++y)for(int x=77;x<=83;++x)
+        if((x-80)*(x-80)+(y-50)*(y-50)<=9)frame.rgb[(y*160+x)*3+1]=255;
+      auto guide=detectGreenGuide(frame,80,50,20);
+      require(guide.valid && guide.candidates==1,"green guide located");
+      Pose3 pose;pose.x_m=1;pose.y_m=2;pose.z_m=3;
+      const Eigen::Vector3d offset(.08,0,.08);
+      auto point=guideArmorPosition(guide,camera(),pose,.052,4,offset);
+      require(point && (*point-Eigen::Vector3d(4.08,2,3.08)).norm()<1e-9,
+              "guide offset targets armor rather than green light");
+      for(int y=47;y<=53;++y)for(int x=90;x<=96;++x)
+        if((x-93)*(x-93)+(y-50)*(y-50)<=9)frame.rgb[(y*160+x)*3+1]=255;
+      require(!detectGreenGuide(frame,80,50,20).valid,"ambiguous green guides rejected");
+      require(!detectGreenGuide(frame,10,10,10).valid,"green outside expected region rejected");
+    }
+    {
+      auto frame = image();
+      for (int y=40; y<52; ++y) for (int base : {40, 65}) {
+        const int x=base+(y-40)/2;
+        frame.rgb[(y*frame.width+x)*3+2]=255;
+      }
+      ArmorDetectionConfig blue; blue.enemy_color=ArmorColor::Blue;
+      const auto found=detectArmorStrips(frame,camera(),blue);
+      require(found.valid && found.accepted_strips==2,
+              "one-pixel diagonal lights stay connected");
+    }
+    colorThresholdEquivalence();
     lateralMotionAndLimits();
     pixelMotion();
     freshnessAndRecovery();
