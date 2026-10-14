@@ -167,9 +167,9 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   const bool terminal=phase_==TeamPhase::COMPLETE||phase_==TeamPhase::ABORTED;
   // 2. 全队位置屏障跳过暂时失效成员，但不能让空队伍被当成全员到达。
   auto allNear=[&](bool home, bool landing=false){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=home?config_.homes[i]:config_.assembly[i];p.z=home?(landing?config_.home_ground_z_m+config_.body_clearance_m:config_.cruise_z_m):config_.cruise_z_m;if(!near(static_cast<int>(i),p,home&&landing?false:true))return false;}return any;};
-  // 路线模式可选择停点或穿越。穿越使用较大的路线位置/速度容差，但返航归位仍需停稳。
+  // 去程可穿越航点；返航各段先收敛位置和速度，避免带着侧向速度切角。
   auto routeNear=[&](int k){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=config_.transit_waypoints[k];p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;
-    if(!config_.fly_through_route){if(!near(static_cast<int>(i),p))return false;}
+    if(!config_.fly_through_route||phase_!=TeamPhase::TRANSIT){if(!near(static_cast<int>(i),p))return false;}
     else {const auto&s=status_[i];if(!validForBarrier(static_cast<int>(i),sim,wall)||std::hypot(s.x_m-p.x,s.y_m-p.y)>config_.route_tolerance_m||std::abs(s.z_m-p.z)>.12||std::hypot(s.vx_mps,s.vy_mps)>config_.route_speed_tolerance_mps)return false;}
   }return any;};
   if (!terminal && !aborted_ && config_.stage_timeout_us && phase_!=TeamPhase::WAIT_READY && sim-phase_start_>=config_.stage_timeout_us) {

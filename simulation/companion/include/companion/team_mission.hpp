@@ -43,7 +43,7 @@ struct TeamMissionConfig {
   std::vector<int> order{0, 1, 2, 3};
   double contact_speed_mps = .2, return_tolerance_m = .10; // 接触速度 m/s；到点 XY 容差 m。
   double route_tolerance_m = .10, route_speed_tolerance_mps = .30;
-  bool fly_through_route = false; // true 允许通过航点时保持运动，不要求先降至 0.30 m/s。
+  bool fly_through_route = false; // true 允许去程穿越航点；返航路线仍要求速度降至 0.30 m/s。
   bool pipelined_contact = false; // true 在前机让出通道后切换轮次，不必等其完全停稳。
   bool visual_contact = false; // 相机闭环接触；地图点只负责到达搜索区。
   // 视觉模式下进入接触阶段前，本机到目标点必须小于该距离，单位 m。
