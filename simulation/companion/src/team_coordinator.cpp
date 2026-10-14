@@ -331,6 +331,10 @@ int main(int argc, char** argv) {
         const auto& status = mission.statuses()[id];
         vehicles.push_back({{"vehicle",id},{"seen",static_cast<bool>(seen[id])},
             {"fresh",seen[id] && wall-received[id] <= 1000000 && sim-stamps[id] <= 1000000},
+            {"state_time_us",status.sim_time_us},
+            {"x_m",status.x_m},{"y_m",status.y_m},{"z_m",status.z_m},
+            {"vx_mps",status.vx_mps},{"vy_mps",status.vy_mps},{"vz_mps",status.vz_mps},
+            {"armed",status.armed},{"landed",status.landed},{"unrecoverable",status.unrecoverable},
             {"ready",status.ready},{"xy_valid",status.xy_valid},{"z_valid",status.z_valid},
             {"degraded",c.degraded},{"degraded_reason",c.degraded_reason},{"skipped",c.skipped}});
       }
