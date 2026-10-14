@@ -3,7 +3,64 @@
 #include <Eigen/Core>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <optional>
 namespace companion {
+/** @brief 沿滑轨作限速线性预测，可按已知半行程反射；输入和输出为世界 Y，单位 m。
+ * @param reflection_half_width 半行程；0 表示不预测边界反向。horizon 单位 s。
+ */
+inline std::optional<double> predictRailLateral(double position,double velocity,double horizon,
+    double center,double speed_limit,double reflection_half_width=0){
+  if(!std::isfinite(position)||!std::isfinite(velocity)||!std::isfinite(horizon)||
+     !std::isfinite(center)||!std::isfinite(speed_limit)||!std::isfinite(reflection_half_width)||
+     horizon<0||speed_limit<=0||reflection_half_width<0)return std::nullopt;
+  double initial=position;
+  if(reflection_half_width>0){
+    if(!std::isfinite(center-reflection_half_width)||!std::isfinite(center+reflection_half_width))return std::nullopt;
+    initial=std::clamp(initial,center-reflection_half_width,center+reflection_half_width);
+  }
+  const double projected=initial+std::clamp(velocity,-speed_limit,speed_limit)*horizon;
+  if(!std::isfinite(projected))return std::nullopt;
+  if(reflection_half_width==0)return projected;
+  const double span=2*reflection_half_width,period=2*span,lower=center-reflection_half_width;
+  if(!std::isfinite(period)||!std::isfinite(projected-lower))return std::nullopt;
+  double phase=std::fmod(projected-lower,period);
+  if(phase<0)phase+=period;
+  return lower+(phase<=span?phase:period-phase);
+}
+/** @brief 已知当前沿目标方向速度时，按恒加速度、随后限速估计到达时间，单位 s。
+ * @param distance 沿该方向的剩余距离，m；initial_speed 允许为负，m/s。
+ */
+inline std::optional<double> estimateArrivalTime(double distance,double initial_speed,double speed_limit,double acceleration){
+  if(!std::isfinite(distance)||!std::isfinite(initial_speed)||!std::isfinite(speed_limit)||
+      !std::isfinite(acceleration)||distance<0||speed_limit<=0||acceleration<=0)return std::nullopt;
+  if(distance==0)return 0.0;
+  const double initial=std::clamp(initial_speed,-speed_limit,speed_limit);
+  const double ramp=(speed_limit-initial)/acceleration;
+  const double ramp_distance=(initial+speed_limit)*.5*ramp;
+  if(!std::isfinite(ramp)||!std::isfinite(ramp_distance))return std::nullopt;
+  if(distance>=ramp_distance){
+    const double time=ramp+(distance-ramp_distance)/speed_limit;
+    return std::isfinite(time)?std::optional<double>(time):std::nullopt;
+  }
+  const double root=std::sqrt(initial*initial+2*acceleration*distance);
+  if(!std::isfinite(root))return std::nullopt;
+  const double time=initial>=0?2*distance/(initial+root):(root-initial)/acceleration;
+  return std::isfinite(time)?std::optional<double>(time):std::nullopt;
+}
+
+/** @brief 对新的独立曝光修正瞄准 Y；陈旧、未来及重复曝光不改变目标。
+ * @param max_rate 横向瞄准点最大修正速度，m/s；0 表示保持原瞄准点。
+ */
+inline bool correctLateralAim(double& aim,uint64_t& last_exposure,double candidate,
+    uint64_t exposure,uint64_t now,double max_rate,double max_age_s=.15){
+  if(!std::isfinite(aim)||!std::isfinite(candidate)||!std::isfinite(max_rate)||max_rate<=0||
+     !std::isfinite(max_age_s)||max_age_s<=0||!exposure||exposure>now||
+     exposure<=last_exposure||(now-exposure)*1e-6>max_age_s)return false;
+  const double dt=std::min(max_age_s,last_exposure?(exposure-last_exposure)*1e-6:(now-exposure)*1e-6);
+  const double correction=std::clamp(candidate-aim,-max_rate*dt,max_rate*dt);
+  aim+=correction;last_exposure=exposure;return true;
+}
 struct InterceptPlan {
   bool valid{false}, reachable{false};
   double arrival_s{0};
