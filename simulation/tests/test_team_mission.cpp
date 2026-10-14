@@ -9,7 +9,7 @@ void check(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
 TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
-                         bool direct_retreat = false) {
+                         bool direct_retreat = false, uint64_t stage_timeout = 0) {
   TeamMissionConfig c; c.stable_us = 200000;
   for (int i = 0; i < 4; ++i) {
     c.homes[i] = {double(i)-1.5,0,.5125,0};
@@ -29,6 +29,7 @@ TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0,
     c.approach_timeout_us = 5000000;
   }
   c.retreat_holding_direct = direct_retreat;
+  c.stage_timeout_us = stage_timeout;
   return c;
 }
 struct Fixture {
@@ -37,8 +38,8 @@ struct Fixture {
   uint64_t now = 1000000, wall = 1000000;
   std::vector<TeamCommand> commands{4};
   explicit Fixture(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
-                   bool direct_retreat = false)
-      : c(config(transit, visual_entry_range, dive, direct_retreat)), mission(c) {
+                   bool direct_retreat = false, uint64_t stage_timeout = 0)
+      : c(config(transit, visual_entry_range, dive, direct_retreat, stage_timeout)), mission(c) {
     for (int i = 0; i < 4; ++i) {
       states[i].vehicle = i; states[i].xy_valid = states[i].z_valid = states[i].ready = true;
       set(i,c.homes[i]);
@@ -428,6 +429,26 @@ void partialLandingWaitsForSkippedMember() {
   f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"跳过成员停机后未进入失败终态");
   for(const auto& command:f.commands)check(!command.complete&&command.disarm,"部分终态命令错误");
 }
+void landingTimeoutKeepsLandingCommands() {
+  Fixture f(false,-1,false,false,2000000);f.contact();
+  for(int active=0;active<4;++active){
+    if(active){f.set(active,f.c.approach);f.settle();}
+    f.set(active,f.c.target);++f.states[active].impact_seq;f.tick();
+    f.set(active,f.c.approach);f.settle();
+    f.set(active,f.c.assembly[active]);f.settle();
+  }
+  check(f.mission.phase()==TeamPhase::RETURN_ALL,"降落超时用例未返航");
+  for(int i=0;i<4;++i){auto point=f.c.homes[i];point.z=f.c.cruise_z_m;f.set(i,point);}
+  f.settle();check(f.mission.phase()==TeamPhase::LAND_ALL,"降落超时用例未进入降落阶段");
+  f.follow();f.tick(-1,3000000);
+  check(f.mission.phase()==TeamPhase::LAND_ALL&&f.mission.aborted(),"降落超时回到返航或提前结束");
+  for(const auto& command:f.commands)check(command.phase==TeamPhase::LAND_ALL&&!command.complete&&!command.disarm,"未着地时降落命令错误");
+  for(auto& state:f.states)state.landed=true;
+  f.settle();
+  for(const auto& command:f.commands)check(command.disarm&&!command.complete,"降落超时后未请求停机");
+  for(auto& state:f.states)state.armed=false;
+  f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"超时降落停机后没有确认终态");
+}
 int main() {
   try {
     barriers(); physicalContactAndTimeout(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
@@ -437,6 +458,7 @@ int main() {
     landedVehicleFailsImmediately(); landedDuringTakeoffIsNotFailure();
     allUnrecoverableWaitsForFreshLandingAndDisarm();
     partialLandingWaitsForSkippedMember();
+    landingTimeoutKeepsLandingCommands();
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -172,7 +172,10 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     if(!config_.fly_through_route){if(!near(static_cast<int>(i),p))return false;}
     else {const auto&s=status_[i];if(!validForBarrier(static_cast<int>(i),sim,wall)||std::hypot(s.x_m-p.x,s.y_m-p.y)>config_.route_tolerance_m||std::abs(s.z_m-p.z)>.12||std::hypot(s.vx_mps,s.vy_mps)>config_.route_speed_tolerance_mps)return false;}
   }return any;};
-  if (!terminal && !aborted_ && config_.stage_timeout_us && phase_!=TeamPhase::WAIT_READY && sim-phase_start_>=config_.stage_timeout_us) abort(sim,phase_==TeamPhase::CONTACT?"接触阶段超时":"阶段超时");
+  if (!terminal && !aborted_ && config_.stage_timeout_us && phase_!=TeamPhase::WAIT_READY && sim-phase_start_>=config_.stage_timeout_us) {
+    if(phase_==TeamPhase::LAND_ALL){aborted_=true;reason_="降落阶段超时，等待着地停机反馈";}
+    else abort(sim,phase_==TeamPhase::CONTACT?"接触阶段超时":"阶段超时");
+  }
   // 3. 接触轮次越过失效机；如果当前机改变，需要切换接近阶段，不能沿用旧机的接触状态。
   const int previous_active=activeVehicle();
   while (turn_ < static_cast<int>(config_.order.size()) && turnExhausted(config_.order[turn_])) ++turn_;
