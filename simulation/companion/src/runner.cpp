@@ -191,6 +191,8 @@ int main(int argc,char**argv){try{
   const double dive_impact_speed=dive.value("impact_speed_mps",3.0);
   const double dive_min_forward=dive.value("min_forward_speed_mps",1.2);
   const double dive_commit_range=dive.value("commit_range_m",0.9);
+  const bool dive_plane_retreat=dive.value("passed_plane_retreat_enabled",false);
+  const double dive_exit_margin=dive.value("exit_margin_m",0.25);
   const double dive_descent_limit=dive.value("descent_limit_mps",1.5);
   const double dive_lateral_limit=dive.value("lateral_limit_mps",1.5);
   const double dive_predict_horizon=dive.value("predict_horizon_s",0.6);
@@ -236,6 +238,8 @@ int main(int argc,char**argv){try{
      !std::isfinite(dive_aim_correction_rate)||dive_aim_correction_rate<0)
     throw std::runtime_error("invalid dive arrival acceleration or aim correction rate");
   if(dive_weak_limit<0||dive_weak_limit>64)throw std::runtime_error("invalid team_mission.dive_attack.max_weak_contacts");
+  if(!std::isfinite(dive_exit_margin)||dive_exit_margin<0||dive_exit_margin>5)
+    throw std::runtime_error("invalid team_mission.dive_attack.exit_margin_m");
   for(const auto& value:{dive_linear_speed_limit,dive_alignment_horizon,dive_alignment_tolerance,dive_alignment_speed})
     if(!std::isfinite(value)||value<=0)throw std::runtime_error("invalid dive linear prediction or entry alignment");
   if(!std::isfinite(dive_reflection_half_width)||dive_reflection_half_width<0||dive_reflection_half_width>dive_aim_lateral_limit)
@@ -729,13 +733,19 @@ int main(int argc,char**argv){try{
             if(horizontal>cap)intention.velocity_flu_mps.head<2>()*=cap/horizontal;
             intention.yaw_rate_ref_rad_s=std::clamp(companion::wrapAngle(heading-e.pose.yaw_rad)*team_settings.value("yaw_gain",.8),-yaw_limit,yaw_limit);
           }
-          // 终端段按世界系落点推进；视觉离开视野后仍保持前向速度，接触或超时后退出。
+          // 终端段按世界系落点推进；接触、过板或超时后退出。
           if(dive_enabled&&intention.mode=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle){
             const Eigen::Vector3d self(e.pose.x_m,e.pose.y_m,e.pose.z_m);
             const double heading=team_command.at("target_yaw_rad").get<double>();
-            // 终端段超时而未产生有效接触时，回到入口重新接近。
-            if(dive_committed&&sim_us>dive_commit_us+static_cast<uint64_t>(dive_timeout_s*1e6)){
-              ++weak_seq;emit({{"kind","dive_miss"},{"sim_time_us",sim_us},{"weak_seq",weak_seq},{"limit",dive_weak_limit}});
+            const bool passed_plane=dive_committed&&dive_plane_retreat&&team_ready&&
+                companion::passedTargetPlane(self,dive_aim,heading,dive_exit_margin);
+            const bool contact_confirmed=last_impact_us&&last_impact_us>=dive_commit_us;
+            const bool unconfirmed_pass=passed_plane&&!contact_confirmed;
+            // 已越过板面且未确认接触时及时退避，时间上限覆盖位置估计不可用的情况。
+            if(dive_committed&&(unconfirmed_pass||sim_us>dive_commit_us+static_cast<uint64_t>(dive_timeout_s*1e6))){
+              ++weak_seq;emit({{"kind","dive_miss"},{"sim_time_us",sim_us},{"weak_seq",weak_seq},{"limit",dive_weak_limit},
+                  {"reason",unconfirmed_pass?"passed_plane":"timeout"},{"elapsed_s",(sim_us-dive_commit_us)*1e-6},
+                  {"forward_overrun_m",(self.x()-dive_aim.x())*std::cos(heading)+(self.y()-dive_aim.y())*std::sin(heading)}});
               dive_committed=false;
               dive_retry_entry=true;
               dive_alignment_since_us=0;
