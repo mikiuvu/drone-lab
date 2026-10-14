@@ -4,6 +4,14 @@
 #include <limits>
 int main(){
  const Eigen::Vector3d approach(10.7,0,2.075),armor(11.584,.1,1.525);
+ assert(!companion::passedTargetPlane({11.7,0,2},armor,0,.25));
+ assert(companion::passedTargetPlane({11.9,0,2},armor,0,.25));
+ assert(!companion::passedTargetPlane({.25,0,0},Eigen::Vector3d::Zero(),0,.25));
+ assert(companion::passedTargetPlane({0,.3,0},Eigen::Vector3d::Zero(),1.5707963267948966,.25));
+ assert(!companion::passedTargetPlane({.5,0,0},Eigen::Vector3d::Zero(),1.5707963267948966,.25));
+ assert(!companion::passedTargetPlane(approach,armor,0,-.1));
+ assert(!companion::passedTargetPlane(approach,armor,std::numeric_limits<double>::quiet_NaN(),.25));
+ assert(!companion::passedTargetPlane({std::numeric_limits<double>::max(),0,0},{-std::numeric_limits<double>::max(),0,0},0,.25));
  assert(companion::diveCommitEligible(approach,{1.9,0,0},armor,0,0,2.075,1000000,1150000));
  assert(!companion::diveCommitEligible(approach,{-1.64,0,0},armor,0,0,2.075,1000000,1100000));
  assert(!companion::diveCommitEligible({12.458,0,2.075},{-3.55,0,0},armor,0,0,2.075,1000000,1100000));

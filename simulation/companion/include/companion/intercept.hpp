@@ -6,6 +6,15 @@
 #include <cstdint>
 #include <optional>
 namespace companion {
+/** @brief 本机沿任务航向超过目标平面的裕量后返回 true；位置及裕量单位 m。 */
+inline bool passedTargetPlane(const Eigen::Vector3d& self,const Eigen::Vector3d& target,
+    double heading,double margin){
+  if(!self.allFinite()||!target.allFinite()||!std::isfinite(heading)||
+     !std::isfinite(margin)||margin<0)return false;
+  const Eigen::Vector3d forward(std::cos(heading),std::sin(heading),0);
+  const double distance=(self-target).dot(forward);
+  return std::isfinite(distance)&&distance>margin;
+}
 /** @brief 提交俯冲前核验独立曝光、入口高度、航向和前向运动；世界坐标单位 m、m/s。
  * @note 允许前向速度 −0.05 m/s 的静止估计误差；目标须位于航向前方至少 50 mm。
  */
