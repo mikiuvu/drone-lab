@@ -648,7 +648,7 @@ int main(int argc,char**argv){try{
         // 阶段指令过期时保留计时器，等待有效指令后再检查持续时间。
         if(command_fresh){
           const std::string phase_now=team_command.value("phase","");
-          const bool airborne_phase=phase_now=="TRANSIT"||phase_now=="ASSEMBLE"||phase_now=="APPROACH"||phase_now=="CONTACT"||phase_now=="RETREAT"||phase_now=="RETURN_ALL";
+          const bool airborne_phase=phase_now=="TRANSIT"||phase_now=="ASSEMBLE"||phase_now=="APPROACH"||phase_now=="CONTACT"||phase_now=="RETREAT"||phase_now=="RETURN_ALL"||phase_now=="ABORT_RETURN";
           const double ground_ceiling=team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.15;
           // 估计高度补充飞控着地标志，以覆盖机体压在结构件上的情况。
           const bool down=flight.landed||(e.z_valid&&e.pose.z_m<ground_ceiling);
@@ -984,7 +984,7 @@ int main(int argc,char**argv){try{
         sendMav(mav,msg,o.remote);
       }
       // 10. 命令请求至少间隔 1 s；持续发送参考与请求解锁是不同职责。落地确认后才解除武装。
-      if(o.offboard&&team_enabled&&unrecoverable&&flight.armed&&target_sys&&flight.heartbeat_fresh&&(flight.landed||(!flight.auto_land&&!flight.failsafe_active))&&std::chrono::duration<double>(now-last_command).count()>1){
+      if(o.offboard&&team_enabled&&unrecoverable&&flight.armed&&target_sys&&flight.heartbeat_fresh&&(flight.landed||!flight.auto_land)&&std::chrono::duration<double>(now-last_command).count()>1){
         if(flight.landed)command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,0,0);
         else command(mav,o.remote,target_sys,target_comp,MAV_CMD_NAV_LAND,0,0);
         emit({{"kind","command_request"},{"command",flight.landed?"DISARM":"LAND"},{"sim_time_us",sim_us},{"reason","unrecoverable"}});

@@ -133,19 +133,13 @@ class FlightFeedbackIOTest(unittest.TestCase):
             self.send_heartbeat(armed=True, system_status=5, main_mode=2)
             time.sleep(0.05)
         rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
-        self.assertFalse(any(row.get("kind") == "command_request" for row in rows))
+        requests = [row["command"] for row in rows if row.get("kind") == "command_request"]
+        self.assertTrue(requests)
+        self.assertEqual(set(requests), {"LAND"})
         self.send_heartbeat(armed=True, main_mode=2)
         row = self.receive_status(lambda row: row.get("native_failsafe_active") is False)
         self.assertTrue(row["unrecoverable"])
         self.assertTrue(row["native_failsafe_latched"])
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
-            if any(row.get("kind") == "command_request" and row.get("command") == "LAND" for row in rows):
-                break
-            time.sleep(0.02)
-        else:
-            self.fail("Landing request missing after native failsafe cleared")
 
     def test_disarmed_preflight_warning_does_not_latch_task_failure(self):
         self.grounded()
@@ -153,6 +147,27 @@ class FlightFeedbackIOTest(unittest.TestCase):
         row = self.receive_status(lambda row: row.get("native_failsafe_active") is True)
         self.assertFalse(row["unrecoverable"])
         self.assertFalse(row["native_failsafe_latched"])
+
+    def test_grounded_member_in_abort_return_enters_native_recovery(self):
+        for index in range(32):
+            stamp = 1000000 + index * 50000
+            self.send_heartbeat(armed=True)
+            self.send_landed()
+            height = {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
+                      "vehicle": 240, "sim_time_us": stamp, "z_world_m": 0.516}
+            self.mav.sendto(json.dumps(height).encode("utf-8"), ("127.0.0.1", 16240))
+            command = {"kind": "team_command", "vehicle": 240, "sequence": index + 1,
+                       "sim_time_us": stamp, "phase": "ABORT_RETURN", "disarm": False,
+                       "target_x_m": 2, "target_y_m": 0, "target_z_m": 1.5,
+                       "target_yaw_rad": 0, "contact_speed_mps": 0}
+            self.mav.sendto(json.dumps(command).encode("utf-8"), ("127.0.0.1", 18240))
+            time.sleep(0.04)
+        row = self.receive_status(lambda row: row["unrecoverable"], timeout=0.5)
+        self.assertFalse(row["native_failsafe_latched"])
+        rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
+        event = next(row for row in rows if row.get("kind") == "unrecoverable")
+        self.assertEqual(event["phase"], "ABORT_RETURN")
+        self.assertTrue(event["down"])
 
     def test_other_vehicle_and_component_cannot_replace_feedback(self):
         self.grounded()
