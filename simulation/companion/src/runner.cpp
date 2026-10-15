@@ -55,6 +55,7 @@ using Clock=std::chrono::steady_clock;
 volatile std::sig_atomic_t running=1;
 void stop(int){running=0;}
 double age(Clock::time_point t){return std::chrono::duration<double>(Clock::now()-t).count();}
+uint64_t wallUs(Clock::time_point t){return std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count();}
 /** @brief DRONE_PROFILE_RUNTIME=1 时记录已解锁循环的阶段耗时和对应线程 CPU 时间。 */
 struct RuntimeProfile {
   enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, LogFlush, Count };
@@ -603,6 +604,8 @@ int main(int argc,char**argv){try{
     auto now=Clock::now();if(std::chrono::duration<double>(now-last_heartbeat).count()>=1){mavlink_message_t msg;mavlink_msg_heartbeat_pack(200,191,&msg,MAV_TYPE_ONBOARD_CONTROLLER,MAV_AUTOPILOT_INVALID,0,0,MAV_STATE_ACTIVE);sendMav(mav,msg,o.remote);last_heartbeat=now;}
     // 7. 按现实时间的 20 ms 槽位发布；仿真时间取测量时戳，晚到时跳过积压槽位。
     const bool navigation_due=std::chrono::duration<double>(now-last_publish).count()>=.02;
+    const auto navigation_wall_us=runtime_profile.enabled?wallUs(now):0;
+    uint64_t setpoint_submit_wall_us=0;
     if(navigation_due){
       const auto slots=std::chrono::duration_cast<std::chrono::milliseconds>(now-last_publish).count()/20;
       last_publish+=std::chrono::milliseconds(slots*20);estimator.advanceTo(sim_us);auto e=estimator.estimate();
@@ -1126,7 +1129,10 @@ int main(int argc,char**argv){try{
           // 位掩码忽略位置/加速度/yaw，只使用速度和偏航角速度；FLU 的 Y/Z 在此反号。
           mavlink_msg_set_position_target_local_ned_pack(200,191,&msg,static_cast<uint32_t>(sim_us/1000),target_sys,target_comp,MAV_FRAME_BODY_NED,1|2|4|64|128|256|1024,0,0,0,v.x(),-v.y(),-v.z(),0,0,0,0,-intention.yaw_rate_ref_rad_s);
         }
-        if(sendMav(mav,msg,o.remote))native_feedback.setpointSent(Clock::now());
+        if(sendMav(mav,msg,o.remote)){
+          const auto submitted=Clock::now();native_feedback.setpointSent(submitted);
+          if(runtime_profile.enabled)setpoint_submit_wall_us=wallUs(submitted);
+        }
       }
       // 10. 命令请求至少间隔 1 s；持续发送参考与请求解锁是不同职责。落地确认后才解除武装。
       if(o.offboard&&team_enabled&&unrecoverable&&flight.armed&&target_sys&&flight.heartbeat_fresh&&(flight.landed||!flight.auto_land)&&std::chrono::duration<double>(now-last_command).count()>1){
@@ -1139,6 +1145,11 @@ int main(int argc,char**argv){try{
       const bool initial_takeoff=!team_enabled||team_command.value("mission_phase",team_command.value("phase",""))=="TAKEOFF";
       if(o.offboard&&o.arm&&!unrecoverable&&!team_restart_blocked&&(flight.armed||initial_takeoff)&&intention.safe_to_arm&&!team_disarm&&!team_complete&&(!team_enabled||intention.mode!="WAIT_READY")&&age(start)>2&&std::chrono::duration<double>(now-last_command).count()>1){if(!flight.offboard){command(mav,o.remote,target_sys,target_comp,MAV_CMD_DO_SET_MODE,1,6);emit({{"kind","command_request"},{"command","OFFBOARD"},{"sim_time_us",sim_us}});}else if(!flight.armed&&flight.landed){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,1,0);emit({{"kind","command_request"},{"command","ARM"},{"sim_time_us",sim_us}});}last_command=now;}
     }
+    if(navigation_due&&runtime_profile.enabled&&flight.armed&&flight.heartbeat_fresh)
+      emit({{"kind","navigation_timing"},{"sim_time_us",sim_us},{"navigation_wall_us",navigation_wall_us},
+          {"setpoint_submit_wall_us",setpoint_submit_wall_us?json(setpoint_submit_wall_us):json(nullptr)},
+          {"offboard_active",flight.offboard},{"auto_land_active",flight.auto_land},{"unrecoverable",unrecoverable},
+          {"setpoint_gap_latched",native_feedback.state(Clock::now()).setpoint_gap_latched}});
     // 只在导航发布后启动一帧融合，给计算留出完整的 20 ms 槽位。
     if(navigation_due)if(auto frame=tof_queue.take())
       if(!team_enabled||!sensor_disturbance()||frame->sim_time_us>sensor_disturbance()+400000){
