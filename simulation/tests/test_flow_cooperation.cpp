@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <Eigen/Geometry>
+#include <Eigen/Eigenvalues>
 
 #include "companion/estimator.hpp"
 #include "companion/protocol.hpp"
@@ -63,6 +65,66 @@ void structuralReferencePropagation() {
   assert(!leader.fuseTof(empty).accepted);
   assert((leader.estimate().covariance-before).norm()<1e-12);
   assert(!leader.fuseTof(frame).accepted);
+}
+
+void flowYawLinearization() {
+  using namespace companion;
+  for (const double yaw : {-2.8, -.4, .4, 2.8}) {
+    auto c = config(30);
+    c.initial_pose.yaw_rad = yaw;
+    c.initial_pose.roll_rad = .2;
+    c.initial_pose.pitch_rad = -.15;
+    c.initial_covariance *= .0001;
+    c.initial_covariance(3,3) = .04;
+    Estimator estimator(c);
+    ImuSample imu;
+    imu.sim_time_us = 1000000;
+    imu.attitude_valid = true;
+    imu.roll_flu_rad = .2;
+    imu.pitch_flu_rad = -.15;
+    imu.yaw_enu_rad = yaw;
+    imu.acceleration_valid = true;
+    imu.acceleration_enu_mps2 = {10, 3, 2};
+    estimator.predict(imu);
+    estimator.advanceTo(1100000);
+    const auto before = estimator.estimate();
+    const auto bodyVelocity = [&](double heading, const Eigen::Vector3d& velocity) -> Eigen::Vector2d {
+      const Eigen::Matrix3d r = (Eigen::AngleAxisd(heading, Eigen::Vector3d::UnitZ()) *
+          Eigen::AngleAxisd(before.pose.pitch_rad, Eigen::Vector3d::UnitY()) *
+          Eigen::AngleAxisd(before.pose.roll_rad, Eigen::Vector3d::UnitX())).toRotationMatrix();
+      return (r.transpose() * velocity).head<2>();
+    };
+    Eigen::Matrix<double,2,7> jacobian = Eigen::Matrix<double,2,7>::Zero();
+    constexpr double step = 1e-6;
+    jacobian.col(3) = (bodyVelocity(yaw + step, before.velocity_enu_mps) -
+                       bodyVelocity(yaw - step, before.velocity_enu_mps)) / (2 * step);
+    for (int axis = 0; axis < 3; ++axis) {
+      Eigen::Vector3d delta = Eigen::Vector3d::Zero();
+      delta(axis) = step;
+      jacobian.col(4 + axis) = (bodyVelocity(yaw, before.velocity_enu_mps + delta) -
+                               bodyVelocity(yaw, before.velocity_enu_mps - delta)) / (2 * step);
+    }
+    // 世界航向和速度共同旋转，不应改变机体系速度观测。
+    Eigen::Matrix<double,7,1> gauge = Eigen::Matrix<double,7,1>::Zero();
+    gauge(3) = 1;
+    gauge(4) = -before.velocity_enu_mps.y();
+    gauge(5) = before.velocity_enu_mps.x();
+    assert((jacobian * gauge).norm() < 1e-8);
+    const Eigen::Vector2d measured = bodyVelocity(yaw - .12, before.velocity_enu_mps);
+    const Eigen::Matrix2d noise = Eigen::Matrix2d::Identity() * .0004 / .95;
+    const Eigen::Matrix<double,7,2> gain = before.covariance * jacobian.transpose() *
+        (jacobian * before.covariance * jacobian.transpose() + noise).inverse();
+    const Eigen::Matrix<double,7,1> correction = gain * (measured - bodyVelocity(yaw, before.velocity_enu_mps));
+    const Eigen::Matrix<double,7,7> a = Eigen::Matrix<double,7,7>::Identity() - gain * jacobian;
+    const Eigen::Matrix<double,7,7> expected_covariance = a * before.covariance * a.transpose() + gain * noise * gain.transpose();
+    assert(estimator.fuseOpticalFlow({1100000, measured.x(), measured.y(), .95, .0004}).accepted);
+    const auto after = estimator.estimate();
+    assert(std::abs(wrapAngle(after.pose.yaw_rad - yaw) - correction(3)) < 1e-8);
+    assert((after.covariance - expected_covariance).norm() < 1e-8);
+    assert(std::abs(wrapAngle(after.pose.yaw_rad - (yaw - .12))) < .09);
+    assert((after.covariance - after.covariance.transpose()).norm() < 1e-12);
+    assert((Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double,7,7>>(after.covariance).eigenvalues().minCoeff() >= -1e-12));
+  }
 }
 }
 
@@ -146,5 +208,6 @@ int main() {
     assert(estimate.reference_origin==0&&estimate.xy_peer_valid);
   }
   structuralReferencePropagation();
+  flowYawLinearization();
   return 0;
 }

@@ -296,8 +296,9 @@ FusionReport Estimator::fuseOpticalFlow(const FlowSample& sample) {
   const Eigen::Vector2d measured(sample.vx_body_mps,sample.vy_body_mps);
   Eigen::Matrix<double,2,7> h=Eigen::Matrix<double,2,7>::Zero();
   // v_body_xy=(Rᵀ*v_enu).head<2>()；包含 roll/pitch 的旋转让 vz 也能影响机体 XY。
-  // 当前姿态作为已知量，H 只写速度列，未对 yaw 再求测量导数。
+  // yaw 是滤波状态；其导数为 Rᵀ*(vy,-vx,0)，保留航向与世界速度的不确定度耦合。
   h.block<2,3>(0,4)=r.transpose().topRows<2>();
+  h.block<2,1>(0,3)=(r.transpose()*Eigen::Vector3d(state_.velocity_enu_mps.y(),-state_.velocity_enu_mps.x(),0)).head<2>();
   const Eigen::Vector2d residual=measured-h.block<2,3>(0,4)*state_.velocity_enu_mps;
   // 较低质量增大方差、减小权重；光流提供速度约束，位置仍随积分漂移。
   Eigen::Matrix2d noise=Eigen::Matrix2d::Identity()*std::max(sample.variance_m2s2,1e-6)/sample.quality;
