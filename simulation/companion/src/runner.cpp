@@ -16,6 +16,7 @@
 #include "companion/vision_worker.hpp"
 #include "companion/latest_tof.hpp"
 #include "companion/vision_delay.hpp"
+#include "companion/flight_feedback.hpp"
 #ifdef COMPANION_WITH_OPENCV
 #include "companion/rm_auto_aim.hpp"
 #endif
@@ -311,7 +312,7 @@ int main(int argc,char**argv){try{
   if(team_enabled)team=std::make_unique<Udp>(18000+o.vehicle);
   // 首条任务指令到达前，空对象允许 value() 返回默认值；null 会抛出 type_error.306。
   json team_command=json::object();Clock::time_point team_rx{};uint64_t team_sequence=0,impact_seq=0,last_impact_us=0,contact_enter_us=0;
-  bool team_disarm=false,team_complete=false,team_landing_started=false,landed=false,landing_recorded=false;
+  bool team_disarm=false,team_complete=false,team_landing_started=false,landing_recorded=false;
   // 趴窝判定：任务要求在空中飞行的阶段里持续落地超过 stranded_s 即认定无法复飞。
   // 一旦置位就不再清除——落在基地结构上的机体不会自己飞起来，而反复置位/清除只会
   // 让协调器在「失败」和「恢复」之间抖动。
@@ -342,11 +343,12 @@ int main(int argc,char**argv){try{
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
   Eigen::Vector2d reliable_odometry_xy(config.initial_pose.x_m,config.initial_pose.y_m);
-  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;bool armed=false,mode_offboard=false,mode_auto_land=false;companion::ArmorObservation target;double roll=0,pitch=0,yaw=0;bool attitude=false;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},hb_rx{},bias_start{};uint64_t first_imu=0,first_imu_sim=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
+  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double roll=0,pitch=0,yaw=0;bool attitude=false;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,first_imu_sim=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
   auto start=Clock::now(),last_publish=start,last_heartbeat=start,last_command=start;bool intervals_requested=false;std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
   auto fusion=[&](const companion::FusionReport&r,const char*kind,uint64_t stamp){emit({{"kind","fusion"},{"sensor_kind",kind},{"sim_time_us",stamp},{"accepted",r.accepted},{"gated",r.gated},{"stale",r.stale},{"degenerate",r.degenerate},{"inliers",r.inliers},{"reason",r.reason}});};
   // 单线程轮询：各通道每轮限制包数，避免繁忙通道使其他输入长期得不到处理。
   while(running && (o.duration==0||age(start)<o.duration)){
+    auto flight=native_feedback.state(Clock::now());
     // 2. 接收协调器目标；只接受递增 sequence，记录进入接触阶段的时刻。
     if(team)for(int n=0;n<32;++n){
       auto packet=team->receive();if(packet.empty())break;
@@ -398,18 +400,19 @@ int main(int argc,char**argv){try{
     for(int n=0;n<64;++n){auto bytes=mav.receive();if(bytes.empty())break;static mavlink_message_t msg{};static mavlink_status_t status{};for(unsigned char byte:bytes)if(mavlink_parse_char(MAVLINK_COMM_0,byte,&msg,&status)){
       if(msg.msgid==MAVLINK_MSG_ID_HEARTBEAT){
         mavlink_heartbeat_t h;mavlink_msg_heartbeat_decode(&msg,&h);
-        if(h.autopilot==MAV_AUTOPILOT_PX4){
-          target_sys=msg.sysid;target_comp=msg.compid;armed=h.base_mode&MAV_MODE_FLAG_SAFETY_ARMED;
+        if(h.autopilot==MAV_AUTOPILOT_PX4&&msg.sysid!=0&&msg.compid==MAV_COMP_ID_AUTOPILOT1&&
+            (!target_sys||(msg.sysid==target_sys&&msg.compid==target_comp))){
+          target_sys=msg.sysid;target_comp=msg.compid;
           const unsigned main_mode=(h.custom_mode>>16)&255,sub_mode=(h.custom_mode>>24)&255;
-          mode_offboard=main_mode==6;
           // PX4 custom_mode：主模式 AUTO=4，子模式 LAND=6。
-          mode_auto_land=main_mode==4&&sub_mode==6;
-          hb_rx=Clock::now();
+          native_feedback.heartbeat(Clock::now(),h.base_mode&MAV_MODE_FLAG_SAFETY_ARMED,
+              main_mode==6,main_mode==4&&sub_mode==6);
+          flight=native_feedback.state(Clock::now());
         }
       }
-      if(target_sys==0||msg.sysid!=target_sys)continue;
+      if(target_sys==0||msg.sysid!=target_sys||msg.compid!=target_comp)continue;
       if(msg.msgid==MAVLINK_MSG_ID_ATTITUDE){mavlink_attitude_t a;mavlink_msg_attitude_decode(&msg,&a);if(std::isfinite(a.roll)&&std::isfinite(a.pitch)&&std::isfinite(a.yaw)){roll=a.roll;pitch=a.pitch;yaw=a.yaw;attitude=true;attitude_rx=Clock::now();}}
-      else if(msg.msgid==MAVLINK_MSG_ID_EXTENDED_SYS_STATE){mavlink_extended_sys_state_t state;mavlink_msg_extended_sys_state_decode(&msg,&state);landed=state.landed_state==MAV_LANDED_STATE_ON_GROUND;}
+      else if(msg.msgid==MAVLINK_MSG_ID_EXTENDED_SYS_STATE){mavlink_extended_sys_state_t state;mavlink_msg_extended_sys_state_decode(&msg,&state);native_feedback.landed(Clock::now(),state.landed_state==MAV_LANDED_STATE_ON_GROUND);flight=native_feedback.state(Clock::now());}
       else if(msg.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
         mavlink_highres_imu_t i; mavlink_msg_highres_imu_decode(&msg,&i);
         // PX4 initializes and may reset its compass/yaw during early startup.
@@ -431,7 +434,7 @@ int main(int argc,char**argv){try{
         Eigen::Vector3d raw_linear=rotation(roll,-pitch,acceleration_yaw)*specific_flu+Eigen::Vector3d(0,0,-9.80665);
         // 冲击识别：必须是当前撞击机、接近基地、超过阶段切换屏蔽期并出现减速度。
         // 这仍是传感器判断；Gazebo 接触日志由独立评估器核验，未作为这里的输入。
-        if(team_enabled&&team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&armed&&sim_us>last_impact_us+1000000&&sim_us>contact_enter_us+150000){
+        if(team_enabled&&team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&flight.armed&&sim_us>last_impact_us+1000000&&sim_us>contact_enter_us+150000){
           const auto estimate=estimator.estimate();
           const double tx=team_settings.value("target",json::object()).value("x",0.0),ty=team_settings.value("target",json::object()).value("y",0.0);
           const double heading=team_settings.value("approach",json::object()).value("yaw",0.0);
@@ -443,16 +446,16 @@ int main(int argc,char**argv){try{
           if(!visual_contact&&close_to_target&&impulse>(visual_contact?8.0:team_settings.value("impact_acceleration_mps2",2.0))){++impact_seq;last_impact_us=sim_us;if(!visual_contact)estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
         }
         // 未解锁静置期间统计加速度偏置；样本数量和经过时间同时满足才认为可用。
-        if(!bias_ready&&!armed&&age(bias_start)<2.0&&raw_linear.allFinite()&&raw_linear.norm()<40){
+        if(!bias_ready&&!flight.armed&&flight.landed&&age(bias_start)<2.0&&raw_linear.allFinite()&&raw_linear.norm()<40){
           bias_sum+=raw_linear; ++bias_samples; imu_linear_bias=bias_sum/static_cast<double>(bias_samples);
           if(bias_samples>=80&&age(bias_start)>.8) bias_ready=true;
         }
         sample.acceleration_enu_mps2=raw_linear-(bias_ready?imu_linear_bias:Eigen::Vector3d::Zero());
         sample.acceleration_valid=bias_ready&&(i.fields_updated&7)==7&&sample.acceleration_enu_mps2.allFinite()&&sample.acceleration_enu_mps2.norm()<15;
         sample.pressure_valid=i.fields_updated&(1<<9); sample.absolute_pressure_hpa=i.abs_pressure;
-        if(!armed||(team_enabled&&last_impact_us&&sim_us<last_impact_us+400000))sample.acceleration_valid=false;
+        if(!flight.armed||(team_enabled&&last_impact_us&&sim_us<last_impact_us+400000))sample.acceleration_valid=false;
         estimator.predict(sample); estimator.fuseBaroPressure(sample);
-        if(!armed&&std::abs(estimator.estimate().pose.z_m-team_settings.value("home_ground_z_m",config.initial_pose.z_m-.0375)-team_settings.value("body_clearance_m",.0125))<.08)estimator.resetInertialVelocityWhileLanded(sample.sim_time_us);
+        if(!flight.armed&&flight.landed&&std::abs(estimator.estimate().pose.z_m-team_settings.value("home_ground_z_m",config.initial_pose.z_m-.0375)-team_settings.value("body_clearance_m",.0125))<.08)estimator.resetInertialVelocityWhileLanded(sample.sim_time_us);
         imu_rx=Clock::now();
       }      else if(msg.msgid==MAVLINK_MSG_ID_COMMAND_ACK){mavlink_command_ack_t a;mavlink_msg_command_ack_decode(&msg,&a);emit({{"kind","command_ack"},{"command",a.command},{"result",a.result},{"sim_time_us",sim_us}});}
       // No positions, GPS, simulator states, or PX4 velocity estimates are consumed.
@@ -619,7 +622,8 @@ int main(int argc,char**argv){try{
 #endif
       if(armor_enabled&&!visual_contact&&o.vehicle!=o.mission_vehicle)target.valid=false;
       std::vector<companion::PeerEstimate>p;for(auto&entry:peer_cache)p.push_back(entry.second);const bool schedule_active=sim_us>=static_cast<uint64_t>(start_delay_s*1e6);auto intention=companion::makeControlIntention(sim_us,e,target,camera,p,schedule_active?config.safe_waypoints:std::vector<companion::Pose2>{},&waypoint_index,config.waypoint_radius_m,armor_enabled&&schedule_active);if(!schedule_active){intention.mode="HOLD_DELAY";intention.velocity_flu_mps.setZero();intention.target_valid=false;intention.waypoint_valid=false;}
-      const bool live=sim_us&&age(obs_rx)<1.0&&age(imu_rx)<.5&&age(hb_rx)<3&&age(attitude_rx)<.5;intention.safe_to_arm=intention.safe_to_arm&&live;
+      flight=native_feedback.state(Clock::now());
+      const bool live=sim_us&&age(obs_rx)<1.0&&age(imu_rx)<.5&&flight.heartbeat_fresh&&age(attitude_rx)<.5;intention.safe_to_arm=intention.safe_to_arm&&live;
       if(live&&e.z_valid&&!team_enabled){
         if(e.pose.z_m<o.takeoff_height-.15){intention.mode="TAKEOFF";intention.velocity_flu_mps.head<2>().setZero();intention.velocity_flu_mps.z()=std::clamp((o.takeoff_height-e.pose.z_m)*.7,0.,.6);}
         else if(!intention.target_valid)intention.velocity_flu_mps.z()=std::clamp((o.takeoff_height-e.pose.z_m)*.7,-.4,.4);
@@ -640,7 +644,7 @@ int main(int argc,char**argv){try{
           const bool airborne_phase=phase_now=="TRANSIT"||phase_now=="ASSEMBLE"||phase_now=="APPROACH"||phase_now=="CONTACT"||phase_now=="RETREAT"||phase_now=="RETURN_ALL";
           const double ground_ceiling=team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.15;
           // 估计高度补充飞控着地标志，以覆盖机体压在结构件上的情况。
-          const bool down=landed||(e.z_valid&&e.pose.z_m<ground_ceiling);
+          const bool down=flight.landed||(e.z_valid&&e.pose.z_m<ground_ceiling);
           // 目标仍远而水平速度持续接近零，覆盖高于地面门限的结构卡住情况。
           const double dx=team_command.value("target_x_m",e.pose.x_m)-e.pose.x_m;
           const double dy=team_command.value("target_y_m",e.pose.y_m)-e.pose.y_m;
@@ -662,10 +666,10 @@ int main(int argc,char**argv){try{
           double max_speed=team_settings.value("cruise_speed_mps",.35);if(!e.xy_valid)max_speed=std::min(max_speed,.12);
           double horizontal=desired.head<2>().norm();if(horizontal>max_speed)desired.head<2>()*=max_speed/horizontal;
           desired.z()=std::clamp(desired.z(),-team_settings.value("descent_speed_mps",.20),team_settings.value("climb_speed_mps",.35));
-          if(intention.mode=="LAND_ALL")desired.z()=landed?0.0:-team_settings.value("landing_speed_mps",.12);
+          if(intention.mode=="LAND_ALL")desired.z()=flight.landed?0.0:-team_settings.value("landing_speed_mps",.12);
           const bool touchdown_zone=intention.mode=="LAND_ALL"&&e.pose.z_m<team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.03;
           if(touchdown_zone)desired.head<2>().setZero();
-          if(touchdown_zone&&!landed)desired.z()=-team_settings.value("touchdown_descent_mps",team_settings.value("landing_speed_mps",.12));
+          if(touchdown_zone&&!flight.landed)desired.z()=-team_settings.value("touchdown_descent_mps",team_settings.value("landing_speed_mps",.12));
           // 接触阶段用固定航向速度推进，防止位置环在到达接近点时提前停止。
           if(!visual_contact&&intention.mode=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle){
             const double heading=team_command.at("target_yaw_rad").get<double>();
@@ -751,7 +755,7 @@ int main(int argc,char**argv){try{
               dive_alignment_since_us=0;
               ++weak_contacts;weak_until_us=sim_us+static_cast<uint64_t>(dive_weak_retreat_s*1e6);
             }
-            if(dive_retry_entry&&sim_us>=weak_until_us&&weak_contacts<=dive_weak_limit&&armed&&team_ready&&
+            if(dive_retry_entry&&sim_us>=weak_until_us&&weak_contacts<=dive_weak_limit&&flight.armed&&team_ready&&
                 (self-dive_entry).head<2>().norm()<=dive.value("entry_tolerance_m",.2)&&
                 std::abs(self.z()-dive_entry.z())<=dive.value("entry_height_tolerance_m",.12)&&
                 e.velocity_enu_mps.norm()<=.3&&
@@ -817,7 +821,7 @@ int main(int argc,char**argv){try{
                 const Eigen::Vector3d aim(anchor.x(),clamped,anchor.z());
                 dive_aim=aim;
                 const bool prediction_usable=(periodic_valid||linear_valid)&&dive_track.measured;
-                const bool commit_eligible=armed&&team_ready&&prediction_usable&&
+                const bool commit_eligible=flight.armed&&team_ready&&prediction_usable&&
                     companion::diveCommitEligible(self,e.velocity_enu_mps,aim,e.pose.yaw_rad,heading,
                         dive_entry.z(),dive_track.measurement_time_us,sim_us,
                         dive.value("entry_height_tolerance_m",.12),dive.value("entry_yaw_tolerance_rad",.35));
@@ -911,11 +915,11 @@ int main(int argc,char**argv){try{
           if(unrecoverable){intention.mode="RECOVER_LAND";intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;intention.target_valid=false;}
           if(intention.mode=="WAIT_READY"||intention.mode=="HOLD"||(last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_settle_s",.4)*1e6))||team_disarm||team_complete){intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
         }
-        team->send(json{{"schema",1},{"kind","team_status"},{"vehicle",o.vehicle},{"sim_time_us",sim_us},{"x_m",e.pose.x_m},{"y_m",e.pose.y_m},{"z_m",e.pose.z_m},{"yaw_rad",e.pose.yaw_rad},{"vx_mps",e.velocity_enu_mps.x()},{"vy_mps",e.velocity_enu_mps.y()},{"vz_mps",e.velocity_enu_mps.z()},{"xy_valid",e.xy_valid||e.flow_valid},{"z_valid",e.z_valid},{"ready",team_ready},{"xy_reason",e.localization_mode},{"flow_valid",e.flow_valid},{"visual_ready",visual_ready},{"position_confidence",e.position_confidence},{"armed",armed},{"landed",landed},{"unrecoverable",unrecoverable},{"impact_seq",impact_seq}}.dump(),18100);
+        team->send(json{{"schema",1},{"kind","team_status"},{"vehicle",o.vehicle},{"sim_time_us",sim_us},{"x_m",e.pose.x_m},{"y_m",e.pose.y_m},{"z_m",e.pose.z_m},{"yaw_rad",e.pose.yaw_rad},{"vx_mps",e.velocity_enu_mps.x()},{"vy_mps",e.velocity_enu_mps.y()},{"vz_mps",e.velocity_enu_mps.z()},{"xy_valid",e.xy_valid||e.flow_valid},{"z_valid",e.z_valid},{"ready",team_ready},{"xy_reason",e.localization_mode},{"flow_valid",e.flow_valid},{"visual_ready",visual_ready},{"position_confidence",e.position_confidence},{"armed",flight.armed},{"landed",flight.landed},{"heartbeat_fresh",flight.heartbeat_fresh},{"landed_fresh",flight.landed_fresh},{"unrecoverable",unrecoverable},{"impact_seq",impact_seq}}.dump(),18100);
       }
-      if(team_enabled&&landed&&!landing_recorded&&(team_command.value("phase","")=="LAND_ALL"||team_complete)){emit({{"kind","contact_final"},{"sim_time_us",sim_us},{"landed",true},{"phase","LANDED"}});landing_recorded=true;}
+      if(team_enabled&&flight.landed&&!landing_recorded&&(team_command.value("phase","")=="LAND_ALL"||team_complete)){emit({{"kind","contact_final"},{"sim_time_us",sim_us},{"landed",true},{"phase","LANDED"}});landing_recorded=true;}
       if(unrecoverable)intention.safe_to_arm=false;
-      if(!intention.safe_to_arm){intention.mode=unrecoverable?"RECOVER_LAND":(armed?"RECOVER_ODOMETRY":"WAIT_SENSORS");intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
+      if(!intention.safe_to_arm){intention.mode=unrecoverable?"RECOVER_LAND":(flight.armed?"RECOVER_ODOMETRY":"WAIT_SENSORS");intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
       auto message=companion::serializeEstimateDatagram(e);for(int i:vehicle_ids)if(i!=o.vehicle)peers.send(message,17000+i);log<<message<<'\n';
       // 本机的滑轨观测按 2 Hz 广播给队友：滑轨全周期 5.6 s，学成一个模型需要两个以上
       // 完整周期（>11 s）的连续观测，而单机一次回合的视觉窗最长只有 9–10 s，自己凑不满。
@@ -934,15 +938,15 @@ int main(int argc,char**argv){try{
           // 广播日志保留周期、解释度与模板误差，供质量核验。
           emit({{"kind","periodic_broadcast"},{"sim_time_us",sim_us},{"samples",samples.size()},{"span_s",periodic_motion.window_span()},{"ready",periodic_motion.ready()},{"period_s",periodic_motion.period_estimate()},{"explained",periodic_motion.explained()},{"template_error_m",periodic_motion.template_error()}});
         }
-      }auto control=json::parse(companion::serializeControlDatagram(intention));control["armed"]=armed;control["offboard_active"]=mode_offboard;control["auto_land_active"]=mode_auto_land;control["imu_bias_ready"]=bias_ready;control["imu_bias_samples"]=bias_samples;emit(control);
+      }auto control=json::parse(companion::serializeControlDatagram(intention));control["armed"]=flight.armed;control["landed"]=flight.landed;control["heartbeat_fresh"]=flight.heartbeat_fresh;control["landed_fresh"]=flight.landed_fresh;control["offboard_active"]=flight.offboard;control["auto_land_active"]=flight.auto_land;control["imu_bias_ready"]=bias_ready;control["imu_bias_samples"]=bias_samples;emit(control);
       if(target_sys&&live&&e.z_valid)odometry(mav,o.remote,e,reliable_odometry_xy);
       // 9. 常规发送速度参考；碰撞恢复、定位失效保持或着地低推力阶段改发姿态参考。
       if(o.offboard&&target_sys&&live&&!unrecoverable){
         mavlink_message_t msg;
-        const bool impact_recovery=team_enabled&&armed&&last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_recovery_s",0.0)*1e6);
-        const bool touchdown=team_enabled&&armed&&team_command.value("phase","")=="LAND_ALL"&&team_settings.contains("touchdown_thrust")&&e.z_valid&&
+        const bool impact_recovery=team_enabled&&flight.armed&&last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_recovery_s",0.0)*1e6);
+        const bool touchdown=team_enabled&&flight.armed&&team_command.value("phase","")=="LAND_ALL"&&team_settings.contains("touchdown_thrust")&&e.z_valid&&
             e.pose.z_m<team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.015&&std::abs(e.velocity_enu_mps.z())<.25;
-        const bool attitude_hold=team_enabled&&armed&&((!e.xy_valid&&!e.flow_valid)||impact_recovery||touchdown);
+        const bool attitude_hold=team_enabled&&flight.armed&&((!e.xy_valid&&!e.flow_valid)||impact_recovery||touchdown);
         if(attitude_hold){
           const Eigen::Vector3d body_velocity=rotation(0,0,-e.pose.yaw_rad)*e.velocity_enu_mps;
           double recovery_roll=0.0;
@@ -973,14 +977,14 @@ int main(int argc,char**argv){try{
         sendMav(mav,msg,o.remote);
       }
       // 10. 命令请求至少间隔 1 s；持续发送参考与请求解锁是不同职责。落地确认后才解除武装。
-      if(o.offboard&&team_enabled&&unrecoverable&&armed&&target_sys&&live&&(landed||!mode_auto_land)&&std::chrono::duration<double>(now-last_command).count()>1){
-        if(landed)command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,0,0);
+      if(o.offboard&&team_enabled&&unrecoverable&&flight.armed&&target_sys&&flight.heartbeat_fresh&&(flight.landed||!flight.auto_land)&&std::chrono::duration<double>(now-last_command).count()>1){
+        if(flight.landed)command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,0,0);
         else command(mav,o.remote,target_sys,target_comp,MAV_CMD_NAV_LAND,0,0);
-        emit({{"kind","command_request"},{"command",landed?"DISARM":"LAND"},{"sim_time_us",sim_us},{"reason","unrecoverable"}});
+        emit({{"kind","command_request"},{"command",flight.landed?"DISARM":"LAND"},{"sim_time_us",sim_us},{"reason","unrecoverable"}});
         last_command=now;
       }
-      if(team_enabled&&team_disarm&&armed&&std::chrono::duration<double>(now-last_command).count()>1){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,0,0);last_command=now;}
-      if(o.offboard&&o.arm&&!unrecoverable&&!team_landing_started&&intention.safe_to_arm&&!team_disarm&&!team_complete&&(!team_enabled||intention.mode!="WAIT_READY")&&age(start)>2&&std::chrono::duration<double>(now-last_command).count()>1){if(!mode_offboard){command(mav,o.remote,target_sys,target_comp,MAV_CMD_DO_SET_MODE,1,6);emit({{"kind","command_request"},{"command","OFFBOARD"},{"sim_time_us",sim_us}});}else if(!armed){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,1,0);emit({{"kind","command_request"},{"command","ARM"},{"sim_time_us",sim_us}});}last_command=now;}
+      if(o.offboard&&team_enabled&&team_disarm&&flight.armed&&target_sys&&flight.heartbeat_fresh&&flight.landed&&std::chrono::duration<double>(now-last_command).count()>1){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,0,0);emit({{"kind","command_request"},{"command","DISARM"},{"sim_time_us",sim_us},{"reason","team_disarm"}});last_command=now;}
+      if(o.offboard&&o.arm&&!unrecoverable&&!team_landing_started&&intention.safe_to_arm&&!team_disarm&&!team_complete&&(!team_enabled||intention.mode!="WAIT_READY")&&age(start)>2&&std::chrono::duration<double>(now-last_command).count()>1){if(!flight.offboard){command(mav,o.remote,target_sys,target_comp,MAV_CMD_DO_SET_MODE,1,6);emit({{"kind","command_request"},{"command","OFFBOARD"},{"sim_time_us",sim_us}});}else if(!flight.armed&&flight.landed){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,1,0);emit({{"kind","command_request"},{"command","ARM"},{"sim_time_us",sim_us}});}last_command=now;}
     }
     // 只在导航发布后启动一帧融合，给计算留出完整的 20 ms 槽位。
     if(navigation_due)if(auto frame=tof_queue.take())
@@ -989,7 +993,8 @@ int main(int argc,char**argv){try{
     std::this_thread::sleep_until(std::min(Clock::now()+std::chrono::milliseconds(2),
         last_publish+std::chrono::milliseconds(20)));
   }
-  emit({{"kind","stop"},{"sim_time_us",sim_us},{"armed_at_stop",armed},{"peer_send_drops",peers.send_drops},{"peer_last_errno",peers.last_send_errno},{"mav_send_drops",mav.send_drops},{"mav_last_errno",mav.last_send_errno}});return 0;
+  const auto final_feedback=native_feedback.state(Clock::now());
+  emit({{"kind","stop"},{"sim_time_us",sim_us},{"armed_at_stop",final_feedback.armed},{"heartbeat_fresh",final_feedback.heartbeat_fresh},{"landed_fresh",final_feedback.landed_fresh},{"peer_send_drops",peers.send_drops},{"peer_last_errno",peers.last_send_errno},{"mav_send_drops",mav.send_drops},{"mav_last_errno",mav.last_send_errno}});return 0;
 }catch(const std::exception&e){std::cerr<<"companion: "<<e.what()<<'\n';return 2;}}
 
 
