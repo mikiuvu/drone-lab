@@ -3,6 +3,40 @@
 #include <stdexcept>
 
 int main(){
+  companion::ArmorTracker scalar,matrix;
+  for(uint64_t i=1;i<=12;++i){
+    const Eigen::Vector3d point(11,.01*i,1.4);
+    assert(scalar.observe(i*50000,point,.0009)==matrix.observe(i*50000,point,Eigen::Matrix3d::Identity()*.0009));
+  }
+  assert((scalar.at(600000).position-matrix.at(600000).position).norm()<1e-12);
+  assert((scalar.at(600000).velocity-matrix.at(600000).velocity).norm()<1e-12);
+  companion::ArmorTracker anisotropic,correlated;
+  for(uint64_t stamp:{1000000,1050000}){
+    assert(anisotropic.observe(stamp,Eigen::Vector3d::Zero()));
+    assert(correlated.observe(stamp,Eigen::Vector3d::Zero()));
+  }
+  Eigen::Matrix3d noise=Eigen::Matrix3d::Identity()*1e-6;noise(1,1)=100;
+  assert(anisotropic.observe(1100000,{.1,.1,0},noise));
+  const auto weighted=anisotropic.at(1100000);
+  assert(weighted.valid&&weighted.position.x()>.05&&std::abs(weighted.position.y())<.005);
+  noise=Eigen::Matrix3d::Identity()*.001;noise(0,1)=noise(1,0)=.0008;
+  assert(correlated.observe(1100000,{.1,0,0},noise));
+  assert(correlated.at(1100000).position.y()<-.001);
+  for(int invalid=0;invalid<5;++invalid){
+    noise=Eigen::Matrix3d::Identity()*.001;
+    if(invalid==0)noise(0,0)=std::numeric_limits<double>::quiet_NaN();
+    if(invalid==1)noise(0,1)=.01;
+    if(invalid==2)noise(0,0)=-.001;
+    if(invalid==3)noise(0,0)=0;
+    if(invalid==4)noise(0,1)=noise(1,0)=.002;
+    assert(!correlated.observe(1150000,{.1,0,0},noise));
+  }
+  assert(correlated.observe(1150000,{.1,0,0},Eigen::Matrix3d::Identity()*.001));
+  companion::ArmorTracker numeric;
+  const Eigen::Matrix3d huge=Eigen::Matrix3d::Identity()*std::numeric_limits<double>::max();
+  assert(numeric.observe(1000000,Eigen::Vector3d::Zero(),huge));
+  assert(!numeric.observe(1050000,Eigen::Vector3d::Zero(),huge));
+  assert(numeric.observe(1050000,Eigen::Vector3d::Zero(),Eigen::Matrix3d::Identity()*.001));
   for(double noise:{0.0,-1.0,std::numeric_limits<double>::infinity()}){
     bool rejected=false;try{companion::ArmorTracker invalid(noise,.04);}catch(const std::invalid_argument&){rejected=true;}
     assert(rejected);

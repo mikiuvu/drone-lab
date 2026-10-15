@@ -34,24 +34,38 @@ class ArmorTracker {
   }
   /** @brief 新曝光时刻的世界位置；先传播再用创新距离关联，同一帧不重复计入。 */
   bool observe(uint64_t stamp, const Eigen::Vector3d& point, double variance=.0009) {
-    if(!stamp||stamp<=last_frame_||!point.allFinite()||!std::isfinite(variance)||variance<=0)return false;
+    if(!std::isfinite(variance)||variance<=0)return false;
+    return observe(stamp,point,Eigen::Matrix3d::Identity()*variance);
+  }
+  /** @brief 世界位置及其完整观测协方差 m²；矩阵须有限、对称且正定。 */
+  bool observe(uint64_t stamp,const Eigen::Vector3d& point,const Eigen::Matrix3d& covariance){
+    if(!stamp||stamp<=last_frame_||!point.allFinite()||!covariance.allFinite())return false;
+    const double scale=covariance.cwiseAbs().maxCoeff();
+    if(scale>0&&(covariance/scale-covariance.transpose()/scale).cwiseAbs().maxCoeff()>1e-12)return false;
+    const Eigen::Matrix3d noise=.5*covariance+.5*covariance.transpose();
+    if(Eigen::LLT<Eigen::Matrix3d>(noise).info()!=Eigen::Success)return false;
     if(!last_good_||stamp-last_good_>500000){
-      state_.setZero();state_.head<3>()=point;cov_.setIdentity();cov_.topLeftCorner<3,3>()*=variance;
+      state_.setZero();state_.head<3>()=point;cov_.setIdentity();cov_.topLeftCorner<3,3>()=noise;
       cov_.bottomRightCorner<3,3>()*=initial_velocity_variance_;
       clock_=last_frame_=last_good_=stamp;last_point_=point;hits_=1;return true;
     }
-    predict(stamp);last_frame_=stamp;
+    if(!predict(stamp))return false;
     const Eigen::Vector3d residual=point-state_.head<3>();
-    if(residual.norm()>.6)return false;
+    if(residual.norm()>.6){last_frame_=stamp;return false;}
     Eigen::Matrix<double,3,6> h=Eigen::Matrix<double,3,6>::Zero();h.leftCols<3>().setIdentity();
-    const Eigen::Matrix3d noise=Eigen::Matrix3d::Identity()*variance;
     const Eigen::Matrix3d innovation=h*cov_*h.transpose()+noise;
-    const Eigen::Matrix<double,6,3> gain=cov_*h.transpose()*innovation.ldlt().solve(Eigen::Matrix3d::Identity());
-    state_+=gain*residual;
+    if(!innovation.allFinite())return false;
+    const Eigen::LDLT<Eigen::Matrix3d> factor(innovation);
+    if(factor.info()!=Eigen::Success||!factor.isPositive())return false;
+    const Eigen::Matrix<double,6,3> gain=cov_*h.transpose()*factor.solve(Eigen::Matrix3d::Identity());
+    const Eigen::Matrix<double,6,1> updated=state_+gain*residual;
     const auto a=(Eigen::Matrix<double,6,6>::Identity()-gain*h).eval();
-    cov_=a*cov_*a.transpose()+gain*noise*gain.transpose();
+    Eigen::Matrix<double,6,6> updated_covariance=a*cov_*a.transpose()+gain*noise*gain.transpose();
+    updated_covariance=(.5*updated_covariance+.5*updated_covariance.transpose()).eval();
+    if(!gain.allFinite()||!updated.allFinite()||!updated_covariance.allFinite())return false;
+    state_=updated;cov_=updated_covariance;
     for(int i=3;i<6;++i)state_(i)=std::max(-1.0,std::min(1.0,state_(i)));
-    last_good_=stamp;last_point_=point;++hits_;return true;
+    last_frame_=last_good_=stamp;last_point_=point;++hits_;return true;
   }
 
   /** @brief 对当前时刻作有界预测，不修改滤波时钟，允许随后融合延迟到达的曝光帧。 */
@@ -67,12 +81,15 @@ class ArmorTracker {
     result.velocity=state_.tail<3>();return result;
   }
  private:
-  void predict(uint64_t now) {
+  bool predict(uint64_t now) {
     const double dt=(now-clock_)*1e-6;
     Eigen::Matrix<double,6,6> f=Eigen::Matrix<double,6,6>::Identity();f.topRightCorner<3,3>()=Eigen::Matrix3d::Identity()*dt;
     Eigen::Matrix<double,6,6> q=Eigen::Matrix<double,6,6>::Zero();
     for(int i=0;i<3;++i){q(i,i)=dt*dt*dt/3;q(i+3,i+3)=dt;q(i,i+3)=q(i+3,i)=dt*dt/2;}
-    state_=f*state_;cov_=f*cov_*f.transpose()+q*process_noise_density_;clock_=now;
+    const Eigen::Matrix<double,6,1> predicted=f*state_;
+    const Eigen::Matrix<double,6,6> covariance=f*cov_*f.transpose()+q*process_noise_density_;
+    if(!predicted.allFinite()||!covariance.allFinite())return false;
+    state_=predicted;cov_=covariance;clock_=now;return true;
   }
   Eigen::Matrix<double,6,1> state_{Eigen::Matrix<double,6,1>::Zero()};
   Eigen::Matrix<double,6,6> cov_{Eigen::Matrix<double,6,6>::Identity()};

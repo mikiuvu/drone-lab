@@ -13,9 +13,16 @@
 #include <sstream>
 #include <stdexcept>
 #include <Eigen/Geometry>
+#include <Eigen/Cholesky>
 
 namespace companion {
 namespace {
+
+bool finitePose(const Pose3& pose){
+  for(double value:{pose.x_m,pose.y_m,pose.z_m,pose.roll_rad,pose.pitch_rad,pose.yaw_rad})
+    if(!std::isfinite(value))return false;
+  return true;
+}
 
 /**
  * @brief 读取 PPM 头部的一个非空白字段，跳过字段前的 # 注释行。
@@ -154,10 +161,29 @@ GuideObservation detectGreenGuide(const PpmImage& image, double ex, double ey, d
   return result;
 }
 
-std::optional<Eigen::Vector3d> guideArmorPosition(const GuideObservation& guide,
+std::optional<WorldPointProjection> cameraPointProjection(const Eigen::Vector3d& point_camera,
+    const Pose3& pose,double camera_forward){
+  if(!point_camera.allFinite()||!finitePose(pose)||!std::isfinite(camera_forward))return std::nullopt;
+  const Eigen::Matrix3d rotation=(Eigen::AngleAxisd(pose.yaw_rad,Eigen::Vector3d::UnitZ())*
+      Eigen::AngleAxisd(pose.pitch_rad,Eigen::Vector3d::UnitY())*
+      Eigen::AngleAxisd(pose.roll_rad,Eigen::Vector3d::UnitX())).toRotationMatrix();
+  const Eigen::Vector3d displacement=rotation*Eigen::Vector3d(point_camera.z()+camera_forward,
+      -point_camera.x(),-point_camera.y());
+  WorldPointProjection result;
+  result.position=Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)+displacement;
+  result.pose_jacobian.leftCols<3>().setIdentity();
+  result.pose_jacobian.col(3)=Eigen::Vector3d::UnitZ().cross(displacement);
+  if(!result.position.allFinite()||!result.pose_jacobian.allFinite())return std::nullopt;
+  return result;
+}
+
+std::optional<WorldPointProjection> guideArmorProjection(const GuideObservation& guide,
     const CameraConfig& camera,const Pose3& pose,double camera_forward,double plane_x,
     const Eigen::Vector3d& offset){
-  if(!guide.valid||camera.fx_px<=0||camera.fy_px<=0||!offset.allFinite())return std::nullopt;
+  if(!guide.valid||!finitePose(pose)||!offset.allFinite()||!std::isfinite(camera_forward)||!std::isfinite(plane_x))return std::nullopt;
+  for(double value:{guide.x_px,guide.y_px,camera.fx_px,camera.fy_px,camera.cx_px,camera.cy_px})
+    if(!std::isfinite(value))return std::nullopt;
+  if(camera.fx_px<=0||camera.fy_px<=0)return std::nullopt;
   const Eigen::Matrix3d rotation=(Eigen::AngleAxisd(pose.yaw_rad,Eigen::Vector3d::UnitZ())*
       Eigen::AngleAxisd(pose.pitch_rad,Eigen::Vector3d::UnitY())*
       Eigen::AngleAxisd(pose.roll_rad,Eigen::Vector3d::UnitX())).toRotationMatrix();
@@ -166,7 +192,36 @@ std::optional<Eigen::Vector3d> guideArmorPosition(const GuideObservation& guide,
   if(std::abs(ray.x())<.1)return std::nullopt;
   double depth=(plane_x-origin.x())/ray.x();
   if(!std::isfinite(depth)||depth<.1||depth>8)return std::nullopt;
-  return origin+depth*ray+offset;
+  WorldPointProjection result;
+  result.position=origin+depth*ray+offset;
+  const Eigen::Matrix3d plane_projection=Eigen::Matrix3d::Identity()-ray*Eigen::Vector3d::UnitX().transpose()/ray.x();
+  result.pose_jacobian.leftCols<3>()=plane_projection;
+  result.pose_jacobian.col(3)=plane_projection*Eigen::Vector3d::UnitZ().cross(
+      result.position-Eigen::Vector3d(pose.x_m,pose.y_m,pose.z_m)-offset);
+  if(!result.position.allFinite()||!result.pose_jacobian.allFinite())return std::nullopt;
+  return result;
+}
+
+std::optional<Eigen::Vector3d> guideArmorPosition(const GuideObservation& guide,
+    const CameraConfig& camera,const Pose3& pose,double camera_forward,double plane_x,
+    const Eigen::Vector3d& offset){
+  const auto result=guideArmorProjection(guide,camera,pose,camera_forward,plane_x,offset);
+  if(!result)return std::nullopt;
+  return result->position;
+}
+
+std::optional<Eigen::Matrix3d> worldObservationCovariance(const Eigen::Matrix<double,3,4>& jacobian,
+    const Eigen::Matrix4d& pose_covariance,double visual_variance){
+  if(!jacobian.allFinite()||!pose_covariance.allFinite()||!std::isfinite(visual_variance)||visual_variance<=0)return std::nullopt;
+  const double scale=pose_covariance.cwiseAbs().maxCoeff();
+  if(scale>0&&(pose_covariance/scale-pose_covariance.transpose()/scale).cwiseAbs().maxCoeff()>1e-12)return std::nullopt;
+  const Eigen::Matrix4d symmetric=.5*pose_covariance+.5*pose_covariance.transpose();
+  const Eigen::LDLT<Eigen::Matrix4d> factor(symmetric);
+  if(factor.info()!=Eigen::Success||!factor.isPositive())return std::nullopt;
+  Eigen::Matrix3d covariance=jacobian*symmetric*jacobian.transpose()+Eigen::Matrix3d::Identity()*visual_variance;
+  covariance=(.5*covariance+.5*covariance.transpose()).eval();
+  if(!covariance.allFinite()||Eigen::LLT<Eigen::Matrix3d>(covariance).info()!=Eigen::Success)return std::nullopt;
+  return covariance;
 }
 
 ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& config,

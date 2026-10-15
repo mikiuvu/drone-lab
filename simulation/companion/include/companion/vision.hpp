@@ -17,6 +17,22 @@ struct GuideObservation {
   double x_px{0}, y_px{0};
   int area{0}, candidates{0};
 };
+/** @brief 世界点 m 及其对曝光状态 [x,y,z,yaw] 的 3×4 雅可比。 */
+struct WorldPointProjection {
+  Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+  Eigen::Matrix<double,3,4> pose_jacobian{Eigen::Matrix<double,3,4>::Zero()};
+};
+/** @brief 相机右/下/前坐标旋转平移到 ENU，包含前向安装偏移，长度单位 m。 */
+std::optional<WorldPointProjection> cameraPointProjection(
+    const Eigen::Vector3d& point_camera_m,const Pose3& pose,double camera_forward_m);
+/** @brief 绿色引导的平面求交及曝光状态雅可比；安装偏移视为固定标定量。 */
+std::optional<WorldPointProjection> guideArmorProjection(
+    const GuideObservation& guide,const CameraConfig& camera,const Pose3& pose,
+    double camera_forward_m,double guide_plane_x_m,const Eigen::Vector3d& guide_to_armor_world_m);
+/** @brief 传播曝光状态协方差，叠加正的各向同性视觉基准方差 m²；非法矩阵返回无效。 */
+std::optional<Eigen::Matrix3d> worldObservationCovariance(
+    const Eigen::Matrix<double,3,4>& pose_jacobian,const Eigen::Matrix4d& pose_covariance,
+    double visual_variance_m2);
 /** @brief 在预测图像位置附近寻找紧凑绿色亮斑；多候选时不擅自选择最大亮斑。 */
 GuideObservation detectGreenGuide(const PpmImage& image, double expected_x,
                                   double expected_y, double radius_px);

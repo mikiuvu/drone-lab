@@ -196,6 +196,74 @@ void nearFieldClipping() {
   require(!tracker.update(1250000, {}, 0).tracking_valid, "near loss waits for recognition");
   require(tracker.update(1300000, observation(0.0, 0.2), 1300000).target_valid, "near reacquisition");
 }
+
+template<class Projection>
+void checkProjectionUncertainty(const Pose3& pose,Projection project){
+  const auto reference=project(pose);
+  require(bool(reference),"projection fixture valid");
+  const double step=1e-6;
+  for(int axis=0;axis<4;++axis){
+    auto high=pose,low=pose;
+    double* high_values[]={&high.x_m,&high.y_m,&high.z_m,&high.yaw_rad};
+    double* low_values[]={&low.x_m,&low.y_m,&low.z_m,&low.yaw_rad};
+    *high_values[axis]+=step;*low_values[axis]-=step;
+    const auto a=project(high),b=project(low);
+    require(a&&b,"finite difference projections valid");
+    require(((a->position-b->position)/(2*step)-reference->pose_jacobian.col(axis)).norm()<5e-8,
+        "exposure pose Jacobian matches finite differences");
+  }
+  Eigen::Matrix4d basis;
+  basis<<.2,0,0,0, .04,.15,0,0, .02,-.03,.08,0, -.02,.015,.01,.06;
+  const auto propagated=worldObservationCovariance(reference->pose_jacobian,basis*basis.transpose(),.0009);
+  require(bool(propagated),"correlated exposure covariance accepted");
+  Eigen::Matrix3d numerical=Eigen::Matrix3d::Identity()*.0009;
+  for(int axis=0;axis<4;++axis){
+    auto high=pose,low=pose;
+    double* high_values[]={&high.x_m,&high.y_m,&high.z_m,&high.yaw_rad};
+    double* low_values[]={&low.x_m,&low.y_m,&low.z_m,&low.yaw_rad};
+    for(int row=0;row<4;++row){*high_values[row]+=step*basis(row,axis);*low_values[row]-=step*basis(row,axis);}
+    const auto a=project(high),b=project(low);
+    require(a&&b,"correlated perturbations valid");
+    const Eigen::Vector3d delta=(a->position-b->position)/(2*step);
+    numerical+=delta*delta.transpose();
+  }
+  require((numerical-*propagated).norm()<1e-8,"full covariance matches independent geometric perturbations");
+}
+
+void projectionCovariance(){
+  GuideObservation guide;guide.valid=true;guide.x_px=90;guide.y_px=45;
+  const Eigen::Vector3d offset(.08,.02,.08);
+  for(double yaw:{-.8,.35,1.2}){
+    Pose3 pose{1,2,3,.1,-.2,yaw};
+    const auto pnp=[&](const Pose3& p){return cameraPointProjection({.2,-.1,2.3},p,.052);};
+    const auto green=[&](const Pose3& p){return guideArmorProjection(guide,camera(),p,.052,3,offset);};
+    checkProjectionUncertainty(pose,pnp);checkProjectionUncertainty(pose,green);
+    const auto projection=green(pose);const auto legacy=guideArmorPosition(guide,camera(),pose,.052,3,offset);
+    require(projection&&legacy&&(projection->position-*legacy).norm()<1e-12,"green point compatibility");
+    require(projection->pose_jacobian.row(0).norm()<1e-12,"fixed plane removes own-position X sensitivity");
+    const auto noise=worldObservationCovariance(projection->pose_jacobian,Eigen::Matrix4d::Identity()*.04,.0064);
+    require(noise&&std::abs((*noise)(0,0)-.0064)<1e-12,"plane X preserves only base visual noise");
+  }
+  const auto projection=cameraPointProjection({0,0,2},Pose3{},.052);
+  require(bool(projection),"camera projection valid");
+  const auto exact=worldObservationCovariance(projection->pose_jacobian,Eigen::Matrix4d::Zero(),.0009);
+  require(exact&&(*exact-Eigen::Matrix3d::Identity()*.0009).norm()<1e-12,"exact fixture pose preserves visual variance");
+  Eigen::Matrix4d covariance=Eigen::Matrix4d::Zero();covariance(1,1)=.04;
+  require(bool(worldObservationCovariance(projection->pose_jacobian,covariance,.0009)),"semidefinite pose covariance accepted");
+  covariance(0,0)=-.01;
+  require(!worldObservationCovariance(projection->pose_jacobian,covariance,.0009),"negative covariance rejected");
+  covariance=Eigen::Matrix4d::Identity();covariance(0,1)=.01;
+  require(!worldObservationCovariance(projection->pose_jacobian,covariance,.0009),"asymmetric covariance rejected");
+  covariance=Eigen::Matrix4d::Identity();covariance(0,0)=std::numeric_limits<double>::quiet_NaN();
+  require(!worldObservationCovariance(projection->pose_jacobian,covariance,.0009),"nonfinite covariance rejected");
+  require(!worldObservationCovariance(projection->pose_jacobian,Eigen::Matrix4d::Identity(),0),"nonpositive visual noise rejected");
+  const Eigen::Matrix<double,3,4> overflowing=Eigen::Matrix<double,3,4>::Constant(std::numeric_limits<double>::max());
+  require(!worldObservationCovariance(overflowing,Eigen::Matrix4d::Identity(),.0009),"overflowing propagation rejected");
+  auto pose=Pose3{};pose.yaw_rad=std::numeric_limits<double>::quiet_NaN();
+  require(!cameraPointProjection({0,0,2},pose,.052),"nonfinite exposure pose rejected");
+  pose.yaw_rad=kPi/2;guide.x_px=camera().cx_px;
+  require(!guideArmorProjection(guide,camera(),pose,.052,3,offset),"parallel guide ray rejected");
+}
 }
 
 int main() {
@@ -218,6 +286,7 @@ int main() {
       require(std::abs(accepted.range_m - .135 * 100 / 46) < 1e-9, "inclined pair range");
     }
     colorAndPixelGeometry();
+    projectionCovariance();
     {
       auto frame=image();
       for(int y=47;y<=53;++y)for(int x=77;x<=83;++x)
