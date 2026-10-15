@@ -140,4 +140,29 @@ void visionRequired() {
   assert(mission.phase()==TeamPhase::RETREAT&&mission.completed().size()==1);
 }
 
-int main(){for(int n:{1,4,6,12}){fullMission(n);fullMission(n,true);}individualDegradation();returnRouteRequiresPositionAndSpeedSettling();missingVehicleAndRecovery();visionRequired();}
+void abortKeepsGroundedMembersStopped() {
+  auto c=config(2);c.transit_waypoints.clear();c.stable_us=100000;c.stage_timeout_us=500000;
+  TeamMission mission(c);std::vector<TeamVehicleStatus> states(2);
+  for(int i=0;i<2;++i){auto&s=states[i];s.vehicle=i;s.ready=s.xy_valid=s.z_valid=true;
+    s.x_m=c.homes[i].x;s.y_m=c.homes[i].y;s.z_m=i==0?c.home_ground_z_m+c.body_clearance_m:c.cruise_z_m;
+    s.armed=i==1;s.landed=i==0;}
+  uint64_t now=0;std::vector<TeamCommand> commands;
+  auto tick=[&](){now+=50000;for(auto&s:states){s.sim_time_us=now;assert(mission.updateStatus(s,now));}commands=mission.step(now,now);};
+  for(int n=0;n<40&&mission.phase()!=TeamPhase::LAND_ALL;++n)tick();
+  assert(mission.phase()==TeamPhase::LAND_ALL&&"grounded member blocks abort return");
+  assert(commands[0].skipped&&mission.partial());
+  // 停机反馈必须同时包含着地；只有解除武装不能完成终态。
+  states[1].armed=false;states[1].landed=false;
+  for(int n=0;n<5;++n){tick();assert(mission.phase()==TeamPhase::LAND_ALL);}
+  states[1].landed=true;
+  for(int n=0;n<5;++n)tick();
+  assert(mission.phase()==TeamPhase::ABORTED);
+
+  TeamMission emptyFlight(c);now=0;
+  for(auto&s:states){s.armed=false;s.landed=true;s.z_m=c.home_ground_z_m+c.body_clearance_m;}
+  for(int n=0;n<40&&emptyFlight.phase()!=TeamPhase::ABORTED;++n){now+=50000;
+    for(auto&s:states){s.sim_time_us=now;assert(emptyFlight.updateStatus(s,now));}emptyFlight.step(now,now);}
+  assert(emptyFlight.phase()==TeamPhase::ABORTED);
+}
+
+int main(){for(int n:{1,4,6,12}){fullMission(n);fullMission(n,true);}individualDegradation();returnRouteRequiresPositionAndSpeedSettling();missingVehicleAndRecovery();visionRequired();abortKeepsGroundedMembersStopped();}

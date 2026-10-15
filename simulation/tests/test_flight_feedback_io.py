@@ -16,6 +16,12 @@ BINARY = Path(os.environ.get(
     "DRONE_COMPANION_BIN", "/home/devcontainers/drone-sim/build-companion/drone_companion_runner"))
 
 
+def recorded_rows(path):
+    data = path.read_text(encoding="utf-8")
+    complete = data[:data.rfind("\n") + 1]
+    return [json.loads(line) for line in complete.splitlines()]
+
+
 def mavlink_packet(message_id, payload, crc_extra, system=1, component=1):
     header = bytes((len(payload), 0, system, component, message_id))
     checksum = 0xFFFF
@@ -50,7 +56,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.errors = (self.root / "stderr.log").open("w", encoding="utf-8")
         self.addCleanup(self.errors.close)
         self.process = subprocess.Popen([
-            str(BINARY), "--offboard", "--vehicle", "240", "--map", str(self.root / "map.json"),
+            str(BINARY), "--offboard", "--arm", "--vehicle", "240", "--map", str(self.root / "map.json"),
             "--config", str(self.root / "config.json"), "--runtime", str(self.root),
             "--mavlink-local-port", str(self.runner_port),
             "--mavlink-remote-port", str(self.mav.getsockname()[1]),
@@ -133,7 +139,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
         while time.monotonic() < deadline:
             self.send_heartbeat(armed=True, system_status=5, main_mode=2)
             time.sleep(0.05)
-        rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
+        rows = recorded_rows(self.root / "companion_240.jsonl")
         requests = [row["command"] for row in rows if row.get("kind") == "command_request"]
         self.assertTrue(requests)
         self.assertEqual(set(requests), {"LAND"})
@@ -186,7 +192,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
             time.sleep(0.04)
         row = self.receive_status(lambda row: row["unrecoverable"], timeout=0.5)
         self.assertFalse(row["native_failsafe_latched"])
-        rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
+        rows = recorded_rows(self.root / "companion_240.jsonl")
         event = next(row for row in rows if row.get("kind") == "unrecoverable")
         self.assertEqual(event["phase"], "ABORT_RETURN")
         self.assertTrue(event["down"])
@@ -242,6 +248,51 @@ class FlightFeedbackIOTest(unittest.TestCase):
         command["sequence"] = 2
         self.mav.sendto(json.dumps(command).encode("utf-8"), ("127.0.0.1", 18240))
         self.assertEqual(self.disarm_requests(0.7, send_ground=True), [(0.0, 0.0)])
+
+    def test_abort_mission_while_holding_stops_arm_retries(self):
+        started = time.monotonic()
+        sequence = 0
+
+        def pump(phase):
+            nonlocal sequence
+            sequence += 1
+            stamp = 1000000 + int((time.monotonic() - started) * 1e6)
+            self.send_heartbeat()
+            self.send_landed()
+            attitude = struct.pack("<Iffffff", stamp // 1000, 0, 0, 0, 0, 0, 0)
+            self.mav.sendto(mavlink_packet(30, attitude, 39), ("127.0.0.1", self.runner_port))
+            imu = struct.pack("<Q13fH", stamp, 0, 0, -9.80665, 0, 0, 0, 0, 0, 0, 1013.25, 0, 0, 20, 0xFFFF)
+            self.mav.sendto(mavlink_packet(105, imu, 93), ("127.0.0.1", self.runner_port))
+            for sample in [
+                {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
+                 "vehicle": 240, "sim_time_us": stamp, "z_world_m": 0.516},
+                {"schema": 1, "kind": "optical_flow", "vehicle": 240, "sim_time_us": stamp,
+                 "vx_body_mps": 0, "vy_body_mps": 0, "quality": 1, "variance_m2s2": 0.001}]:
+                self.mav.sendto(json.dumps(sample).encode("utf-8"), ("127.0.0.1", 16240))
+            command = {"kind": "team_command", "vehicle": 240, "sequence": sequence,
+                       "sim_time_us": stamp, "phase": "TAKEOFF" if phase == "TAKEOFF" else "HOLD",
+                       "mission_phase": phase, "disarm": False,
+                       "target_x_m": 0, "target_y_m": 0, "target_z_m": 1.5,
+                       "target_yaw_rad": 0, "contact_speed_mps": 0}
+            self.mav.sendto(json.dumps(command).encode("utf-8"), ("127.0.0.1", 18240))
+            time.sleep(0.02)
+
+        path = self.root / "companion_240.jsonl"
+        while time.monotonic() - started < 11:
+            pump("TAKEOFF")
+            rows = recorded_rows(path)
+            arms = [row for row in rows if row.get("kind") == "command_request" and row.get("command") == "ARM"]
+            if arms:
+                break
+        else:
+            self.fail("Mock sensor stream never became ready for an arm request")
+        baseline = len(arms)
+        deadline = time.monotonic() + 1.4
+        while time.monotonic() < deadline:
+            pump("ABORT_RETURN")
+        rows = recorded_rows(path)
+        arms = [row for row in rows if row.get("kind") == "command_request" and row.get("command") == "ARM"]
+        self.assertEqual(len(arms), baseline)
 
 
 if __name__ == "__main__":

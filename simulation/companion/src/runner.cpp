@@ -312,7 +312,7 @@ int main(int argc,char**argv){try{
   if(team_enabled)team=std::make_unique<Udp>(18000+o.vehicle);
   // 首条任务指令到达前，空对象允许 value() 返回默认值；null 会抛出 type_error.306。
   json team_command=json::object();Clock::time_point team_rx{};uint64_t team_sequence=0,impact_seq=0,last_impact_us=0,contact_enter_us=0;
-  bool team_disarm=false,team_complete=false,team_landing_started=false,landing_recorded=false;
+  bool team_disarm=false,team_complete=false,team_restart_blocked=false,landing_recorded=false;
   // 趴窝判定：任务要求在空中飞行的阶段里持续落地超过 stranded_s 即认定无法复飞。
   // 一旦置位就不再清除——落在基地结构上的机体不会自己飞起来，而反复置位/清除只会
   // 让协调器在「失败」和「恢复」之间抖动。
@@ -358,9 +358,9 @@ int main(int argc,char**argv){try{
         bool finite=true;for(const char*key:{"target_x_m","target_y_m","target_z_m","target_yaw_rad","contact_speed_mps"})finite=finite&&cmd.contains(key)&&cmd.at(key).is_number()&&std::isfinite(cmd.at(key).get<double>());
         if(!finite)continue;
         if(cmd.value("phase","")=="CONTACT"&&team_command.value("phase","")!="CONTACT"){contact_enter_us=cmd.at("sim_time_us").get<uint64_t>();dive_committed=false;dive_retry_entry=false;dive_commit_us=0;dive_alignment_since_us=0;last_alignment_report_us=0;last_commit_gate_report_us=0;weak_contacts=0;weak_until_us=0;dive_aim_source.clear();}
-        // 降落开始后禁止复飞；后续阶段变化或状态超时不能撤销这一条件。
-        const auto next_phase=cmd.value("phase","");
-        if(next_phase=="LAND_ALL"||next_phase=="COMPLETE"||next_phase=="ABORTED")team_landing_started=true;
+        // 返航或降落后禁止解锁及重新接管；HOLD 仍须检查全队阶段。
+        for(const auto& phase:{cmd.value("phase",std::string{}),cmd.value("mission_phase",std::string{})})
+          if(phase=="RETURN_ALL"||phase=="ABORT_RETURN"||phase=="LAND_ALL"||phase=="COMPLETE"||phase=="ABORTED")team_restart_blocked=true;
         team_command=std::move(cmd);team_sequence=sequence;team_rx=Clock::now();
       }catch(const std::exception&){}
     }
@@ -464,7 +464,7 @@ int main(int argc,char**argv){try{
     // 已解锁失效保护或心跳断续均终止任务；排队的健康心跳不能恢复原任务。
     flight=native_feedback.state(Clock::now());
     if((flight.failsafe_latched||flight.heartbeat_gap_latched)&&!unrecoverable){
-      unrecoverable=true;team_landing_started=true;
+      unrecoverable=true;team_restart_blocked=true;
       emit({{"kind","unrecoverable"},{"sim_time_us",sim_us},{"phase",team_command.value("phase","")},
             {"reason",flight.failsafe_latched?"PX4_FAILSAFE":"HEARTBEAT_GAP"},
             {"native_failsafe_latched",flight.failsafe_latched},{"heartbeat_gap_latched",flight.heartbeat_gap_latched}});
@@ -993,7 +993,8 @@ int main(int argc,char**argv){try{
         last_command=now;
       }
       if(o.offboard&&team_enabled&&team_disarm&&flight.armed&&target_sys&&flight.heartbeat_fresh&&flight.landed&&std::chrono::duration<double>(now-last_command).count()>1){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,0,0);emit({{"kind","command_request"},{"command","DISARM"},{"sim_time_us",sim_us},{"reason","team_disarm"}});last_command=now;}
-      if(o.offboard&&o.arm&&!unrecoverable&&!team_landing_started&&intention.safe_to_arm&&!team_disarm&&!team_complete&&(!team_enabled||intention.mode!="WAIT_READY")&&age(start)>2&&std::chrono::duration<double>(now-last_command).count()>1){if(!flight.offboard){command(mav,o.remote,target_sys,target_comp,MAV_CMD_DO_SET_MODE,1,6);emit({{"kind","command_request"},{"command","OFFBOARD"},{"sim_time_us",sim_us}});}else if(!flight.armed&&flight.landed){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,1,0);emit({{"kind","command_request"},{"command","ARM"},{"sim_time_us",sim_us}});}last_command=now;}
+      const bool initial_takeoff=!team_enabled||team_command.value("mission_phase",team_command.value("phase",""))=="TAKEOFF";
+      if(o.offboard&&o.arm&&!unrecoverable&&!team_restart_blocked&&(flight.armed||initial_takeoff)&&intention.safe_to_arm&&!team_disarm&&!team_complete&&(!team_enabled||intention.mode!="WAIT_READY")&&age(start)>2&&std::chrono::duration<double>(now-last_command).count()>1){if(!flight.offboard){command(mav,o.remote,target_sys,target_comp,MAV_CMD_DO_SET_MODE,1,6);emit({{"kind","command_request"},{"command","OFFBOARD"},{"sim_time_us",sim_us}});}else if(!flight.armed&&flight.landed){command(mav,o.remote,target_sys,target_comp,MAV_CMD_COMPONENT_ARM_DISARM,1,0);emit({{"kind","command_request"},{"command","ARM"},{"sim_time_us",sim_us}});}last_command=now;}
     }
     // 只在导航发布后启动一帧融合，给计算留出完整的 20 ms 槽位。
     if(navigation_due)if(auto frame=tof_queue.take())

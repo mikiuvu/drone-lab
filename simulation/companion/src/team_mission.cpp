@@ -152,18 +152,24 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   skipUnrecoverable(wall);
   // 接触失败的成员仍可参与返航；无法继续飞行的成员退出路线屏障，独立恢复。
   for (size_t i = 0; i < status_.size(); ++i) {
-    if (!status_[i].unrecoverable) continue;
+    const bool stopped_return=(phase_==TeamPhase::RETURN_ALL||phase_==TeamPhase::ABORT_RETURN)&&
+        statusFresh(static_cast<int>(i),sim,wall)&&status_[i].landed&&!status_[i].armed;
+    if (!status_[i].unrecoverable&&!stopped_return) continue;
     // 待机、起飞、降落与终态里落地是正常状态，不能当失败。
     if (phase_ == TeamPhase::WAIT_READY || phase_ == TeamPhase::TAKEOFF ||
         phase_ == TeamPhase::LAND_ALL || phase_ == TeamPhase::COMPLETE ||
         phase_ == TeamPhase::ABORTED) continue;
     skipped_now_[i] = true;
+    if(stopped_return)aborted_=true;
     if (failed_[i]) continue;
     failed_[i] = true;
     const int id = static_cast<int>(i);
     if (std::find(skipped_.begin(), skipped_.end(), id) == skipped_.end()) skipped_.push_back(id);
-    reason_ = "成员已落地且无法复飞，任务以部分结果继续";
+    reason_ = stopped_return?"返航阶段成员已停机，保持地面等待":"成员已落地且无法复飞，任务以部分结果继续";
   }
+  bool all_stopped=true;
+  for(size_t i=0;i<status_.size();++i)
+    all_stopped=all_stopped&&statusFresh(static_cast<int>(i),sim,wall)&&status_[i].landed&&!status_[i].armed;
   const bool terminal=phase_==TeamPhase::COMPLETE||phase_==TeamPhase::ABORTED;
   // 2. 全队位置屏障跳过暂时失效成员，但不能让空队伍被当成全员到达。
   auto allNear=[&](bool home, bool landing=false){bool any=false;for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){any=true;auto p=home?config_.homes[i]:config_.assembly[i];p.z=home?(landing?config_.home_ground_z_m+config_.body_clearance_m:config_.cruise_z_m):config_.cruise_z_m;if(!near(static_cast<int>(i),p,home&&landing?false:true))return false;}return any;};
@@ -189,6 +195,9 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     if(phase_!=TeamPhase::LAND_ALL){reason_="全队无法继续任务，等待降落停机";enter(TeamPhase::LAND_ALL,sim);}
   }
   // 4. 每个 case 只负责阶段转移。目标点在下方统一生成，避免转移后仍发上阶段目标。
+  if((phase_==TeamPhase::RETURN_ALL||phase_==TeamPhase::ABORT_RETURN)&&all_stopped){
+    aborted_=true;enter(TeamPhase::LAND_ALL,sim);
+  }
   if (!terminal) switch(phase_) {
     case TeamPhase::WAIT_READY: { bool ok=true, any=false; for(size_t i=0;i<status_.size();++i) { ok&=skipped_now_[i]||validForBarrier(static_cast<int>(i),sim,wall); any|=!skipped_now_[i]&&validForBarrier(static_cast<int>(i),sim,wall); } if(barrier(ok&&any,sim))enter(TeamPhase::TAKEOFF,sim); break; }
     case TeamPhase::TAKEOFF: { bool ok=true; for(size_t i=0;i<status_.size();++i)if(!skipped_now_[i]){auto p=config_.homes[i];p.z=config_.cruise_z_m;ok&=status_[i].armed&&near(static_cast<int>(i),p,false);} if(barrier(ok,sim))enter(config_.transit_waypoints.empty()?TeamPhase::ASSEMBLE:TeamPhase::TRANSIT,sim); break; }
@@ -261,10 +270,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   }
   // 5. 路线屏障可以跳过失效成员，降落停机确认必须覆盖每个成员。
   if (phase_==TeamPhase::LAND_ALL) {
-    bool stopped=true;
-    for(size_t i=0;i<status_.size();++i)
-      stopped=stopped&&statusFresh(static_cast<int>(i),sim,wall)&&status_[i].landed&&!status_[i].armed;
-    if(barrier(stopped&&(all_unrecoverable||allNear(true,true)),sim))
+    if(barrier(all_stopped&&(aborted_||all_unrecoverable||allNear(true,true)),sim))
       enter(aborted_||!skipped_.empty()?TeamPhase::ABORTED:TeamPhase::COMPLETE,sim);
   }
   // 6. 给每架选择目标：待机点、航路点、接触点、退出点或本机起飞点。
