@@ -1,6 +1,7 @@
 """核对单实例 EKF2 回放所索引的传感器时间戳是否存在于 ULog。"""
 
 import argparse
+import bisect
 import hashlib
 import json
 import math
@@ -20,7 +21,7 @@ RELATIVE_TOPICS = {
 
 
 def audit(path, begin_s=0.0):
-    names = ['ekf2_timestamps', 'sensor_combined', *RELATIVE_TOPICS.values()]
+    names = ['ekf2_timestamps', 'sensor_combined', 'logger_status', *RELATIVE_TOPICS.values()]
     log = ULog(str(path), message_name_filter_list=names)
     groups = {}
     for data in log.data_list:
@@ -44,9 +45,18 @@ def audit(path, begin_s=0.0):
                 requests.append((int(stamp), int(stamp) // 100 + relative))
         if requests and (len(records) > 1 or records and records[0].multi_id != 0):
             raise ValueError(f'{topic} 包含非单实例输入，无法确定原生回放选择的实例')
-        available = set(int(t) // 100 for t in records[0].data['timestamp']) if records else set()
-        missing = [{'filter_time_us': stamp, 'requested_time_100us': target}
-                   for stamp, target in requests if target not in available]
+        logged_stamps = sorted(int(t) for t in records[0].data['timestamp']) if records else []
+        available = {stamp // 100 for stamp in logged_stamps}
+        missing = []
+        for stamp, target in requests:
+            if target in available:
+                continue
+            insertion = bisect.bisect_left(logged_stamps, target * 100)
+            missing.append({
+                'filter_time_us': stamp, 'requested_time_100us': target,
+                'nearest_logged_before_us': logged_stamps[insertion - 1] if insertion else None,
+                'nearest_logged_after_us': logged_stamps[insertion] if insertion < len(logged_stamps) else None,
+            })
         topics[topic] = {
             'logged_samples': len(records[0].data['timestamp']) if records else 0,
             'requested_total': len(requests),
@@ -59,12 +69,20 @@ def audit(path, begin_s=0.0):
     if not requested or not topics['sensor_combined']['requested_in_window']:
         raise ValueError('分析区间没有可检查的 IMU 输入请求')
     complete = all(item['missing_in_window'] == 0 for item in topics.values())
+    # dropout 统计写缓冲区溢出；message_gaps 统计全速话题的订阅跳号，二者独立。
+    logger_samples = [int(value) for item in groups.get('logger_status', []) if item.multi_id == 0
+                      for value in item.data.get('message_gaps', [])]
+    logger_diagnostics = {
+        'write_dropout_events': len(log.dropouts),
+        'write_dropout_duration_ms': sum(int(item.duration) for item in log.dropouts),
+        'full_log_message_gaps_max': max(logger_samples) if logger_samples else None,
+    }
     return {
         'input': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
         'sdlog_profile': log.initial_parameters.get('SDLOG_PROFILE'),
         'begin_s': begin_s, 'end_s': int(stamps[-1]) / 1e6,
         'check_scope': 'EKF2 timestamp-indexed sensors; excludes directly replayed status, landing and GPS',
-        'timestamp_inputs_complete': complete, 'topics': topics,
+        'timestamp_inputs_complete': complete, 'logger_diagnostics': logger_diagnostics, 'topics': topics,
     }
 
 
