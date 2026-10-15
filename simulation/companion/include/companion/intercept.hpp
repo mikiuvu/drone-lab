@@ -14,6 +14,22 @@ inline bool inertialContactCandidate(const Eigen::Vector3d& specific_force,
   const double force=specific_force.norm(),distance=target_displacement.norm();
   return std::isfinite(force)&&std::isfinite(distance)&&force>force_threshold&&distance<=proximity;
 }
+/** @brief 独立冲击样本保留首次时刻与峰值，等待压力确认；重复采样不延长等待。 */
+struct PendingInertialContact {
+  uint64_t since_us{0};
+  double peak_specific_force_mps2{0};
+  bool observe(uint64_t stamp,double force){
+    if(!stamp||!std::isfinite(force)||force<=0||(since_us&&stamp<since_us))return false;
+    const bool first=!since_us;
+    if(first)since_us=stamp;
+    peak_specific_force_mps2=std::max(peak_specific_force_mps2,force);
+    return first;
+  }
+  bool mature(uint64_t now,uint64_t delay_us) const {
+    return since_us&&now>=since_us&&now-since_us>=delay_us;
+  }
+  void clear(){since_us=0;peak_specific_force_mps2=0;}
+};
 /** @brief 按同一剩余时间缩放机体系位移，满足水平、侧向和垂向速度上限；单位 m、m/s。 */
 inline std::optional<Eigen::Vector3d> terminalVelocity(const Eigen::Vector3d& displacement,
     double horizontal_limit,double lateral_limit,double vertical_limit){

@@ -15,6 +15,18 @@ int main(){
  assert(!companion::inertialContactCandidate({30,0,0},{std::numeric_limits<double>::quiet_NaN(),0,0},20,.75));
  assert(!companion::inertialContactCandidate({std::numeric_limits<double>::max(),0,0},{0,0,0},20,.75));
  assert(!companion::inertialContactCandidate({30,0,0},{0,0,0},std::numeric_limits<double>::infinity(),.75));
+ companion::PendingInertialContact pending;
+ assert(!pending.mature(1000000,60000));
+ assert(!pending.observe(0,21));
+ assert(!pending.observe(1000000,std::numeric_limits<double>::quiet_NaN()));
+ assert(pending.observe(1000000,21));
+ assert(!pending.observe(1010000,23)&&pending.since_us==1000000&&pending.peak_specific_force_mps2==23);
+ assert(!pending.observe(999999,30)&&pending.peak_specific_force_mps2==23);
+ assert(!pending.mature(999999,60000)&&!pending.mature(1059999,60000));
+ assert(pending.mature(1060000,60000));
+ pending.clear();
+ assert(!pending.since_us&&pending.peak_specific_force_mps2==0&&!pending.mature(2000000,60000));
+ assert(pending.observe(2000000,24)&&!pending.mature(2059999,60000));
  for(double forward:{.15,.9,2.0})for(double lateral:{-.8,0.0,.3})for(double vertical:{-.55,0.0,.2}){
    const Eigen::Vector3d displacement(forward,lateral,vertical);
    const auto velocity=companion::terminalVelocity(displacement,3.0,1.5,1.5);
