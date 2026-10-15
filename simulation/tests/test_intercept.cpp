@@ -3,6 +3,24 @@
 #include <cassert>
 #include <limits>
 int main(){
+ for(double forward:{.15,.9,2.0})for(double lateral:{-.8,0.0,.3})for(double vertical:{-.55,0.0,.2}){
+   const Eigen::Vector3d displacement(forward,lateral,vertical);
+   const auto velocity=companion::terminalVelocity(displacement,3.0,1.5,1.5);
+   assert(velocity&&velocity->x()>0&&std::hypot(velocity->x(),velocity->y())<=3.0+1e-12);
+   assert(std::abs(velocity->y())<=1.5+1e-12&&std::abs(velocity->z())<=1.5+1e-12);
+   assert(std::abs(displacement.x()*velocity->y()-displacement.y()*velocity->x())<1e-12);
+   assert(std::abs(displacement.x()*velocity->z()-displacement.z()*velocity->x())<1e-12);
+ }
+ const auto coordinated=companion::terminalVelocity({.9,.1,-.55},3,1.5,1.5);
+ assert(coordinated&&std::abs(coordinated->z()+1.5)<1e-12&&coordinated->x()<3);
+ const auto too_close=companion::terminalVelocity({.15,.05,-.55},3,1.5,1.5);
+ assert(too_close&&too_close->x()<1.2);
+ assert(!companion::terminalVelocity({-.1,0,-.1},3,1.5,1.5));
+ assert(!companion::terminalVelocity({0,0,0},3,1.5,1.5));
+ assert(!companion::terminalVelocity({1,0,-.5},0,1.5,1.5));
+ assert(!companion::terminalVelocity({1,0,-.5},3,-1,1.5));
+ assert(!companion::terminalVelocity({1,0,-.5},3,1.5,std::numeric_limits<double>::quiet_NaN()));
+ assert(!companion::terminalVelocity({std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),0},3,1.5,1.5));
  assert(!companion::diveAttemptFitsWindow(35541000,36041000,1.2));
  assert(companion::diveAttemptFitsWindow(25061000,36041000,1.2));
  assert(!companion::diveAttemptFitsWindow(1000000,2220000,1.2));

@@ -6,6 +6,21 @@
 #include <cstdint>
 #include <optional>
 namespace companion {
+/** @brief 按同一剩余时间缩放机体系位移，满足水平、侧向和垂向速度上限；单位 m、m/s。 */
+inline std::optional<Eigen::Vector3d> terminalVelocity(const Eigen::Vector3d& displacement,
+    double horizontal_limit,double lateral_limit,double vertical_limit){
+  if(!displacement.allFinite()||displacement.x()<=0||!std::isfinite(horizontal_limit)||
+     !std::isfinite(lateral_limit)||!std::isfinite(vertical_limit)||horizontal_limit<=0||
+     lateral_limit<=0||vertical_limit<=0)return std::nullopt;
+  const double horizontal=std::hypot(displacement.x(),displacement.y());
+  if(!std::isfinite(horizontal)||horizontal<=1e-6)return std::nullopt;
+  double scale=horizontal_limit/horizontal;
+  if(std::abs(displacement.y())>0)scale=std::min(scale,lateral_limit/std::abs(displacement.y()));
+  if(std::abs(displacement.z())>0)scale=std::min(scale,vertical_limit/std::abs(displacement.z()));
+  const Eigen::Vector3d velocity=displacement*scale;
+  if(!std::isfinite(scale)||scale<=0||!velocity.allFinite())return std::nullopt;
+  return velocity;
+}
 /** @brief 剩余接触时窗须覆盖一次俯冲上限及 20 ms 导航周期；deadline=0 表示不限时。 */
 inline bool diveAttemptFitsWindow(uint64_t now,uint64_t deadline,double duration_s){
   if(!std::isfinite(duration_s)||duration_s<=0)return false;
