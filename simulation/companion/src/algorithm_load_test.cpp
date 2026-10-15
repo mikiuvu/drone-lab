@@ -232,6 +232,7 @@ class Workload {
         request.camera = camera_; request.detection.enemy_color = ArmorColor::Blue; request.detection.max_pair_aspect = 6;
         request.strip_height_m = .093427; request.bottom_separation_m = .108873;
         request.exposure_pose = config_.initial_pose; request.pose_valid = true;
+        request.exposure_covariance = config_.initial_covariance.topLeftCorner<4,4>();
         request.guide_mode = o_.guide_mode; request.guide_x_px = camera_.cx_px; request.guide_y_px = camera_.cy_px;
         request.guide_radius_px = 100; request.guide_center.x() = 11.58; request.camera_forward_m = .05;
         count("vision_submit", vision_.submit(std::move(request)));

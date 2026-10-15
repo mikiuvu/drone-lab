@@ -281,7 +281,7 @@ int main(int argc,char**argv){try{
   if(dive_enabled){periodic_motion.setHorizonCap(dive_predict_horizon);periodic_motion.setHorizonFraction(dive_predict_fraction);periodic_motion.setMinSpan(dive_learn_span);}
   std::deque<companion::Estimate> pose_history;
   uint64_t visual_pose_stamp=0;
-  struct DelayedPose {uint64_t stamp;Eigen::Vector3d world;bool valid;double error;bool green{false};};
+  struct DelayedPose {uint64_t stamp;Eigen::Vector3d world;bool valid;double error;bool green{false};Eigen::Matrix3d covariance{Eigen::Matrix3d::Zero()};};
   const double vision_delay_ms=team_settings.value("vision_delay_ms",0.0);
   if(!std::isfinite(vision_delay_ms)||vision_delay_ms<0||vision_delay_ms>2000)throw std::runtime_error("vision_delay_ms must be 0..2000");
   companion::VisionDelay<DelayedPose> vision_queue(static_cast<uint64_t>(vision_delay_ms*1000));
@@ -535,11 +535,14 @@ int main(int argc,char**argv){try{
             request.stamp=stamp;request.sequence=seq;
             request.image_path=(camera_dir/("camera_"+std::to_string(o.vehicle)+".ppm")).string();
             request.camera=camera;request.detection=detection;request.pnp=visual_contact;
+            request.pnp_variance_m2=visual_pose_variance;
             request.strip_height_m=team_settings.value("visual_strip_height_m",.055);
             request.bottom_separation_m=team_settings.value("visual_bottom_separation_m",0.0);
             if(!pose_history.empty()){
               auto nearest=std::min_element(pose_history.begin(),pose_history.end(),[&](const auto&a,const auto&b){return std::llabs(static_cast<int64_t>(a.sim_time_us)-static_cast<int64_t>(stamp))<std::llabs(static_cast<int64_t>(b.sim_time_us)-static_cast<int64_t>(stamp));});
-              if(std::llabs(static_cast<int64_t>(nearest->sim_time_us)-static_cast<int64_t>(stamp))<80000){request.exposure_pose=nearest->pose;request.pose_valid=true;}
+              if(std::llabs(static_cast<int64_t>(nearest->sim_time_us)-static_cast<int64_t>(stamp))<80000){
+                request.exposure_pose=nearest->pose;request.exposure_covariance=nearest->covariance.topLeftCorner<4,4>();request.pose_valid=true;
+              }
             }
             const auto guide_config=team_settings.value("green_guide",json::object());
             if(visual_contact&&request.pose_valid&&guide_config.value("enabled",false)){
@@ -578,16 +581,17 @@ int main(int argc,char**argv){try{
         if(vision_done&&vision_done->stamp!=visual_pose_stamp){
           visual_pose_stamp=vision_done->stamp;
           DelayedPose task{vision_done->stamp,vision_done->world,vision_done->world_valid,
-            vision_done->green?0.0:vision_done->pnp.reprojection_error_px,vision_done->green};
+            vision_done->green?0.0:vision_done->pnp.reprojection_error_px,vision_done->green,vision_done->world_covariance};
           if(vision_done->green_ran)emit({{"kind","green_guide"},{"sim_time_us",task.stamp},{"detected",vision_done->guide.valid},{"accepted",task.green},{"candidates",vision_done->guide.candidates},{"area_px",vision_done->guide.area}});
           vision_queue.submit(task,sim_us);
         }
         if(auto done=vision_queue.poll(sim_us)){
           emit({{"kind","vision_service"},{"sim_time_us",done->stamp},{"completed_sim_us",sim_us},{"frame_age_ms",(sim_us-done->stamp)*.001},{"valid",done->valid},{"received",vision_queue.received},{"completed",vision_queue.completed},{"dropped",vision_queue.dropped}});
-          const bool accepted=done->valid&&armor_track.observe(done->stamp,done->world,done->green?.0064:visual_pose_variance);
+          const bool accepted=done->valid&&armor_track.observe(done->stamp,done->world,done->covariance);
           if(dive_robust_linear&&accepted&&std::abs(done->world.y()-team_settings.at("target").value("y",0.0))<=dive_aim_lateral_limit+.08)
             rail_motion_fit.observe(done->stamp,done->world.y());
-          if(done->valid)emit({{"kind","visual_pose"},{"sim_time_us",done->stamp},{"completed_sim_us",sim_us},{"frame_age_ms",(sim_us-done->stamp)*.001},{"vision_delay_ms",vision_delay_ms},{"dropped",vision_queue.dropped},{"accepted",accepted},{"pnp",!done->green},{"measurement",done->green?"green_rail_plane":"blue_pnp"},{"x_m",done->world.x()},{"y_m",done->world.y()},{"z_m",done->world.z()},{"reprojection_error_px",done->error}});
+          if(done->valid)emit({{"kind","visual_pose"},{"sim_time_us",done->stamp},{"completed_sim_us",sim_us},{"frame_age_ms",(sim_us-done->stamp)*.001},{"vision_delay_ms",vision_delay_ms},{"dropped",vision_queue.dropped},{"accepted",accepted},{"pnp",!done->green},{"measurement",done->green?"green_rail_plane":"blue_pnp"},{"x_m",done->world.x()},{"y_m",done->world.y()},{"z_m",done->world.z()},{"reprojection_error_px",done->error},
+              {"observation_covariance",{done->covariance(0,0),done->covariance(0,1),done->covariance(0,2),done->covariance(1,0),done->covariance(1,1),done->covariance(1,2),done->covariance(2,0),done->covariance(2,1),done->covariance(2,2)}}});
         }
         auto tracked=armor_track.at(sim_us);
         dive_track=tracked;

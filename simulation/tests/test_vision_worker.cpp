@@ -21,6 +21,8 @@ VisionRequest request(uint64_t stamp) {
   r.detection.enemy_color = ArmorColor::Blue; r.detection.max_pair_aspect = 6;
   r.strip_height_m = .055; r.bottom_separation_m = 0;
   r.pose_valid = true; r.exposure_pose = {10.6, 0, 1.44, 0, 0, 0};
+  r.exposure_covariance.diagonal()<<.0004,.0025,.0009,.0001;
+  r.exposure_covariance(1,3)=r.exposure_covariance(3,1)=.0002;
 #ifndef COMPANION_WITH_OPENCV
   r.pnp = false;
 #endif
@@ -46,11 +48,13 @@ int main() {
   assert(a->pixel.range_m == b->pixel.range_m && b->pixel.range_m == reference.range_m);
   assert(a->pixel.centroid_x_px == b->pixel.centroid_x_px);
   assert((a->world - b->world).norm() < 1e-12);
+  assert((a->world_covariance-b->world_covariance).norm()<1e-12);
 #ifdef COMPANION_WITH_OPENCV
   const auto detected=detectRmArmor(*input.image,input.camera,input.strip_height_m,input.bottom_separation_m);
   const Eigen::Vector3d expected(input.exposure_pose.x_m+detected.position_camera_m.z()+input.camera_forward_m,
       input.exposure_pose.y_m-detected.position_camera_m.x(),input.exposure_pose.z_m-detected.position_camera_m.y());
   assert(detected.valid&&a->world_valid&&(a->world-expected).norm()<1e-12);
+  assert(a->world_covariance(1,1)>input.pnp_variance_m2+.0025);
 #endif
   assert(!synchronous.submit(input));
 
@@ -72,12 +76,18 @@ int main() {
   assert(synchronous.submit(green_request));auto green=wait(synchronous,green_request.stamp);
   assert(green->green_ran&&green->green&&green->world_valid&&!green->pnp.valid);
   assert(std::abs(green->world.x()-11.58)<1e-12&&std::abs(green->world.y())<.01);
+  assert(std::abs(green->world_covariance(0,0)-green_request.guide_variance_m2)<1e-12);
+  assert(green->world_covariance(1,1)>green_request.guide_variance_m2+.0025);
 
 #ifdef COMPANION_WITH_OPENCV
   next.stamp=green_request.stamp+1;next.guide_mode = GuideMode::Fallback;
   assert(synchronous.submit(next)); auto fallback = wait(synchronous, next.stamp);
   assert(fallback->pnp.valid && fallback->world_valid && !fallback->green_ran);
 #endif
+  auto invalid_covariance=green_request;invalid_covariance.stamp+=100;
+  invalid_covariance.exposure_covariance(0,0)=-1;
+  assert(synchronous.submit(invalid_covariance));auto bad_covariance=wait(synchronous,invalid_covariance.stamp);
+  assert(bad_covariance->frame_valid&&!bad_covariance->world_valid&&bad_covariance->error=="invalid_guide_world_uncertainty");
   // 连续输入不累积图像队列，最终仍可取得最新帧。
   uint64_t latest = input.stamp;
   for (int i = 1; i <= 100; ++i) {
@@ -87,6 +97,10 @@ int main() {
   }
   assert(wait(background, latest)->frame_valid);
   assert(background.stats().pending_replaced > 0);
+  auto copied=green_request;copied.stamp=latest+20000;
+  assert(background.submit(copied));copied.exposure_covariance.setZero();
+  const auto owned=wait(background,copied.stamp);
+  assert(owned->world_valid&&owned->green&&owned->world_covariance(1,1)>copied.guide_variance_m2+.0025);
 
   LatestTof queue;
   TofFrame frame; frame.sensor_index = 0; frame.sim_time_us = 10;

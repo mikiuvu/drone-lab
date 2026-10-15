@@ -17,6 +17,8 @@ struct VisionRequest {
   ArmorDetectionConfig detection;
   double strip_height_m{.055}, bottom_separation_m{0}, camera_forward_m{.052};
   Pose3 exposure_pose;
+  Eigen::Matrix4d exposure_covariance{Eigen::Matrix4d::Zero()}; // [x,y,z,yaw]；零矩阵用于精确位姿输入。
+  double pnp_variance_m2{.0009},guide_variance_m2{.0064};
   GuideMode guide_mode{GuideMode::Disabled};
   double guide_x_px{0}, guide_y_px{0}, guide_radius_px{0};
   Eigen::Vector3d guide_center{Eigen::Vector3d::Zero()}, guide_offset{Eigen::Vector3d::Zero()};
@@ -30,6 +32,7 @@ struct VisionResult {
   RmArmorDetection pnp;
   GuideObservation guide;
   Eigen::Vector3d world{Eigen::Vector3d::Zero()};
+  Eigen::Matrix3d world_covariance{Eigen::Matrix3d::Zero()}; // world_valid 时为完整世界位置观测协方差，m²。
   std::string error;
 };
 struct VisionStageStats {

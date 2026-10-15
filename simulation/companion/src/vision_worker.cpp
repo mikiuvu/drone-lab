@@ -48,14 +48,12 @@ Completed process(const VisionRequest& request) {
 #ifdef COMPANION_WITH_OPENCV
         out.pnp = detectRmArmor(*image, request.camera, request.strip_height_m, request.bottom_separation_m);
         if (out.pnp.valid && request.pose_valid) {
-          const auto& p = request.exposure_pose;
-          const Eigen::Matrix3d rotation = (Eigen::AngleAxisd(p.yaw_rad, Eigen::Vector3d::UnitZ()) *
-              Eigen::AngleAxisd(p.pitch_rad, Eigen::Vector3d::UnitY()) *
-              Eigen::AngleAxisd(p.roll_rad, Eigen::Vector3d::UnitX())).toRotationMatrix();
-          const Eigen::Vector3d body(out.pnp.position_camera_m.z() + request.camera_forward_m,
-              -out.pnp.position_camera_m.x(), -out.pnp.position_camera_m.y());
-          out.world = Eigen::Vector3d(p.x_m, p.y_m, p.z_m) + rotation * body;
-          out.world_valid = true;
+          const auto projection=cameraPointProjection(out.pnp.position_camera_m,request.exposure_pose,request.camera_forward_m);
+          const auto covariance=projection?worldObservationCovariance(projection->pose_jacobian,
+              request.exposure_covariance,request.pnp_variance_m2):std::nullopt;
+          if(projection&&covariance){
+            out.world=projection->position;out.world_covariance=*covariance;out.world_valid=true;
+          }else out.error="invalid_pnp_world_uncertainty";
         }
         return out.pnp.valid;
 #else
@@ -68,13 +66,16 @@ Completed process(const VisionRequest& request) {
         out.green_ran = true;
         const auto& guide_image = request.guide_image ? *request.guide_image : *image;
         out.guide = detectGreenGuide(guide_image, request.guide_x_px, request.guide_y_px, request.guide_radius_px);
-        const auto point = request.pose_valid ? guideArmorPosition(out.guide, request.camera,
+        const auto projection = request.pose_valid ? guideArmorProjection(out.guide, request.camera,
             request.exposure_pose, request.camera_forward_m, request.guide_center.x(), request.guide_offset) : std::nullopt;
-        const bool accepted = point && std::abs(point->y() - request.guide_center.y()) <= request.guide_y_gate_m &&
-            std::abs(point->z() - request.guide_center.z() - request.guide_offset.z()) < request.guide_z_gate_m;
+        const auto covariance=projection?worldObservationCovariance(projection->pose_jacobian,
+            request.exposure_covariance,request.guide_variance_m2):std::nullopt;
+        const bool accepted = projection && covariance && std::abs(projection->position.y() - request.guide_center.y()) <= request.guide_y_gate_m &&
+            std::abs(projection->position.z() - request.guide_center.z() - request.guide_offset.z()) < request.guide_z_gate_m;
         if (accepted && !out.world_valid) {
-          out.world = *point; out.world_valid = true; out.green = true;
+          out.world = projection->position; out.world_covariance=*covariance;out.world_valid = true; out.green = true;
         }
+        if(projection&&!covariance)out.error="invalid_guide_world_uncertainty";
         return accepted;
       });
     }
