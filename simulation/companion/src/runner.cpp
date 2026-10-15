@@ -58,7 +58,7 @@ double age(Clock::time_point t){return std::chrono::duration<double>(Clock::now(
 uint64_t wallUs(Clock::time_point t){return std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count();}
 /** @brief DRONE_PROFILE_RUNTIME=1 时记录已解锁循环的阶段耗时和对应线程 CPU 时间。 */
 struct RuntimeProfile {
-  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, LogFlush, Count };
+  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, LogFlush, CameraRequest, Count };
   struct Metric {
     uint64_t samples{0},over_100ms{0},max_wall_us{0},begin_sim_us{0},end_sim_us{0};
     std::optional<uint64_t> cpu_at_max_us;
@@ -91,7 +91,7 @@ struct RuntimeProfile {
   };
   Span measure(Stage stage,const uint64_t* sim){return Span(*this,stage,sim);}
   json report()const{
-    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"},{"log_flush"}};
+    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"},{"log_flush"},{"camera_request"}};
     json result=json::object();
     for(int i=0;i<Count;++i){const auto& m=metrics[i];
       result[names[i]]={{"samples",m.samples},{"over_100ms",m.over_100ms},{"max_wall_us",m.max_wall_us},
@@ -411,6 +411,8 @@ int main(int argc,char**argv){try{
   uint64_t max_attitude_extrapolation_us=0,max_attitude_interpolation_us=0;
   std::array<uint64_t,3> imu_attitude_counts{};
   auto start=Clock::now(),last_publish=start,last_heartbeat=start,last_command=start;bool intervals_requested=false;std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
+  auto next_camera_request=start+std::chrono::milliseconds(14);
+  uint64_t camera_request_attempt_wall_us=0;
   auto fusion=[&](const companion::FusionReport&r,const char*kind,uint64_t stamp){emit({{"kind","fusion"},{"sensor_kind",kind},{"sim_time_us",stamp},{"accepted",r.accepted},{"gated",r.gated},{"stale",r.stale},{"degenerate",r.degenerate},{"inliers",r.inliers},{"reason",r.reason}});};
   // 单线程轮询：各通道每轮限制包数，避免繁忙通道使其他输入长期得不到处理。
   while(running && (o.duration==0||age(start)<o.duration)){
@@ -602,6 +604,14 @@ int main(int argc,char**argv){try{
         emit({{"kind","periodic_shared"},{"sim_time_us",sim_us},{"samples",periodic_motion.sample_count()},{"merged",periodic_motion.merged_count()},{"span_s",periodic_motion.window_span()},{"period_s",periodic_motion.period_estimate()},{"learning_ms",periodic_motion.learningStats().last_ms}});
     }
     auto now=Clock::now();if(std::chrono::duration<double>(now-last_heartbeat).count()>=1){mavlink_message_t msg;mavlink_msg_heartbeat_pack(200,191,&msg,MAV_TYPE_ONBOARD_CONTROLLER,MAV_AUTOPILOT_INVALID,0,0,MAV_STATE_ACTIVE);sendMav(mav,msg,o.remote);last_heartbeat=now;}
+    // 在下一导航槽前 6 ms 请求元数据；迟到时只提交一次，跳过积压槽位。
+    if(now>=next_camera_request){
+      auto request_timing=runtime_profile.measure(RuntimeProfile::CameraRequest,&sim_us);
+      camera_source.request();
+      if(runtime_profile.enabled)camera_request_attempt_wall_us=wallUs(Clock::now());
+      const auto slots=std::chrono::duration_cast<std::chrono::milliseconds>(now-next_camera_request).count()/20+1;
+      next_camera_request+=std::chrono::milliseconds(slots*20);
+    }
     // 7. 按现实时间的 20 ms 槽位发布；仿真时间取测量时戳，晚到时跳过积压槽位。
     const bool navigation_due=std::chrono::duration<double>(now-last_publish).count()>=.02;
     const auto navigation_wall_us=runtime_profile.enabled?wallUs(now):0;
@@ -619,7 +629,6 @@ int main(int argc,char**argv){try{
       try {
         auto camera_timing=runtime_profile.measure(RuntimeProfile::Camera,&sim_us);
         if(auto meta=camera_source.poll())camera_metadata=std::move(meta);
-        camera_source.request();
         if(camera_metadata){
         const auto seq=camera_metadata->sequence,stamp=camera_metadata->stamp;
         if(armor_enabled||visual_contact){
@@ -1147,6 +1156,7 @@ int main(int argc,char**argv){try{
     }
     if(navigation_due&&runtime_profile.enabled&&flight.armed&&flight.heartbeat_fresh)
       emit({{"kind","navigation_timing"},{"sim_time_us",sim_us},{"navigation_wall_us",navigation_wall_us},
+          {"camera_request_attempt_wall_us",camera_request_attempt_wall_us?json(camera_request_attempt_wall_us):json(nullptr)},
           {"setpoint_submit_wall_us",setpoint_submit_wall_us?json(setpoint_submit_wall_us):json(nullptr)},
           {"offboard_active",flight.offboard},{"auto_land_active",flight.auto_land},{"unrecoverable",unrecoverable},
           {"setpoint_gap_latched",native_feedback.state(Clock::now()).setpoint_gap_latched}});
@@ -1159,8 +1169,8 @@ int main(int argc,char**argv){try{
     // 每个导航周期发送控制后刷新日志；流缓冲区满时仍会自动写出。
     if(navigation_due){auto log_timing=runtime_profile.measure(RuntimeProfile::LogFlush,&sim_us);log.flush();}
     {auto sleep_timing=runtime_profile.measure(RuntimeProfile::Sleep,&sim_us);
-    std::this_thread::sleep_until(std::min(Clock::now()+std::chrono::milliseconds(2),
-        last_publish+std::chrono::milliseconds(20)));}
+    std::this_thread::sleep_until(std::min({Clock::now()+std::chrono::milliseconds(2),
+        last_publish+std::chrono::milliseconds(20),next_camera_request}));}
   }
   const auto final_feedback=native_feedback.state(Clock::now());
   if(runtime_profile.enabled)emit({{"kind","runtime_profile"},{"sim_time_us",sim_us},{"stages",runtime_profile.report()}});
