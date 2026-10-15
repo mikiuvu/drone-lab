@@ -71,7 +71,7 @@ int main() {
   changed.setMinSpan(4);
   for (uint64_t stamp = 5000; stamp <= 5200000; stamp += 5000)
     assert(changed.observe(stamp, point(stamp)));
-  changed.service(5200000);
+  submit(changed,5200000,1);
   changed.setMinSpan(20);
   complete(changed, 5200000);
   assert(changed.learningStats().discarded == 1);
