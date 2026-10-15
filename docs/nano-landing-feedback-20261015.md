@@ -61,6 +61,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Landing delay analysis failed' }
 |---|---|---|
 | 默认地图完整任务 | `run_20261015_081355` | 1、2、3 号返航并原生确认着地停机；0 号出界后持续下降，180 s 上限处仍处于 LAND_ALL，全队恢复未通过 |
 | 起飞阶段超时后返航降落 | `run_20261015_081908` | 四机原生确认着地停机，18.961 s 进入 ABORTED，最终距起飞点水平误差为 0.0069–0.0650 m |
+| 心跳间隔锁存后的默认地图 | `run_20261015_084412` | 2 号未实际离地，47.981 s 起飞超时中止；48.981 s 中止返航贴地恢复生效，56.321 s 四机着地停机并进入 ABORTED |
 
 起降验证地图将 `stage_timeout_s` 设为 3，并清空 `transit_waypoints`，在起飞阶段触发中止。两组均未出现降落后的 ARM/OFFBOARD 请求；解除武装请求均对应同一控制周期内有效的原生着地反馈。默认地图三次返航航点切换满足收敛条件。
 
@@ -88,3 +89,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Landing delay analysis failed' }
 暂停注入记录位于 `build/nano-flight-feedback/{failsafe-landing,failsafe-landing-5s}/`；Nano 失效保护测试记录位于 `failsafe-board-tests/result.json`。
 
 心跳间隔锁存复测的源码快照、原生模式变化、反馈审计和着地停机校验位于 `build/nano-flight-feedback/gap-recovery-5s/`，Nano 记录位于 `gap-board-tests/result.json`。
+
+默认地图复测位于 `build/nano-flight-feedback/gap-default/`。原生日志记录了 2 号反复出现传感器 STALE；尚未确定未离地原因。这组通过全队停机校验，没有进入接触阶段。
