@@ -50,4 +50,16 @@ int main() {
   failure.landed(t + 4ms, true);
   assert(failure.state(t + 4ms).landed && failure.state(t + 4ms).failsafe_latched);
   assert(failure.state(t + 4s).failsafe_latched && !failure.state(t + 4s).failsafe_active);
+
+  companion::FlightFeedback gap;
+  gap.heartbeat(t, true, true, false);
+  assert(!gap.state(t + 2999ms).heartbeat_gap_latched);
+  assert(gap.state(t + 3s).heartbeat_gap_latched);
+  gap.heartbeat(t + 3100ms, false, false, true);
+  assert(gap.state(t + 3100ms).heartbeat_gap_latched);
+  assert(!gap.state(t + 3100ms).failsafe_latched);
+  companion::FlightFeedback preflight;
+  preflight.heartbeat(t, false, false, false);
+  preflight.heartbeat(t + 4s, false, false, false);
+  assert(!preflight.state(t + 4s).heartbeat_gap_latched);
 }

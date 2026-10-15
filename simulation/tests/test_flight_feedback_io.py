@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import socket
 import struct
 import subprocess
@@ -147,6 +148,27 @@ class FlightFeedbackIOTest(unittest.TestCase):
         row = self.receive_status(lambda row: row.get("native_failsafe_active") is True)
         self.assertFalse(row["unrecoverable"])
         self.assertFalse(row["native_failsafe_latched"])
+
+    def test_armed_feedback_gap_latches_even_when_queued_heartbeat_is_healthy(self):
+        self.grounded()
+        self.send_heartbeat(armed=True)
+        self.send_landed(on_ground=False)
+        self.receive_status(lambda row: row["armed"] and not row["landed"])
+        self.process.send_signal(signal.SIGSTOP)
+        try:
+            deadline = time.monotonic() + 3.2
+            while time.monotonic() < deadline:
+                self.send_heartbeat(armed=True)
+                time.sleep(0.1)
+        finally:
+            self.process.send_signal(signal.SIGCONT)
+        row = self.receive_status(lambda row: row["unrecoverable"], timeout=1)
+        self.assertTrue(row["heartbeat_gap_latched"])
+        self.assertFalse(row["native_failsafe_latched"])
+        self.send_heartbeat(armed=True)
+        row = self.receive_status(lambda row: row["heartbeat_fresh"])
+        self.assertTrue(row["unrecoverable"])
+        self.assertTrue(row["heartbeat_gap_latched"])
 
     def test_grounded_member_in_abort_return_enters_native_recovery(self):
         for index in range(32):
