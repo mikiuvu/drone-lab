@@ -63,7 +63,7 @@ def environment(dynamics="micro", horizontal=False):
 # @param contract 传感器契约；提供时加入 ToF 射线可视化插件。
 # @param tof_rays 为真时把射线可视化插件写入世界。
 # @return 世界名称和实际采用的配置；写入传感器插件、出生模型及可选起点标记。
-def prepare_world(output, map_path, config=None, contract=None, tof_rays=True):
+def prepare_world(output, map_path, config=None, contract=None, tof_rays=True, actuation_log=False):
     config = (
         configure_fleet(json.loads(map_path.read_text(encoding="utf-8")))
         if config is None
@@ -152,6 +152,14 @@ def prepare_world(output, map_path, config=None, contract=None, tof_rays=True):
         ET.SubElement(include, "pose").text = " ".join(
             str(spawn[k]) for k in ("x", "y", "z", "roll", "pitch", "yaw")
         )
+        if actuation_log:
+            recorder = ET.SubElement(include, "plugin", filename="libactuation_recorder.so",
+                                     name="drone_sim::ActuationRecorder")
+            ET.SubElement(recorder, "vehicle").text = str(i)
+            ET.SubElement(recorder, "publish_hz").text = "20"
+            ET.SubElement(recorder, "output").text = str(
+                (output.parent / f"actuation_{i}.jsonl").resolve()
+            )
         if "home_marker" in config:
             marker = config["home_marker"]
             model = ET.SubElement(world, "model", name=f"home_{i}")
@@ -432,6 +440,8 @@ def main():
         help="不在 Gazebo 中绘制各机三向 ToF 的 8×8 测距射线",
     )
     parser.add_argument("--dynamics", choices=["micro", "x500"], default="micro")
+    parser.add_argument("--actuation-log", action="store_true",
+                        help="记录现有转子关节速度和命令，用于执行链路诊断")
     parser.add_argument("--horizontal-tof", action="store_true")
     parser.add_argument("--vehicle-count", type=int)
     parser.add_argument("--vision-delay-ms", type=float, default=None)
@@ -495,6 +505,8 @@ def main():
     ):
         if not path.is_file():
             raise SystemExit("Missing build artifact: " + str(path))
+    if args.actuation_log and not (SENSORS / "libactuation_recorder.so").is_file():
+        raise SystemExit("Missing build artifact: " + str(SENSORS / "libactuation_recorder.so"))
     run_dir = ROOT / "runtime" / time.strftime("run_%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=False)
     # 每次运行独立分区，遗留窗口不会连接到新世界；所有子进程共享此环境。
@@ -542,6 +554,7 @@ def main():
         config,
         contract,
         tof_rays=not args.no_tof_rays,
+        actuation_log=args.actuation_log,
     )
     if args.mission == "team_contact" and "team_mission" not in config:
         raise SystemExit("Selected map has no team_mission configuration")
