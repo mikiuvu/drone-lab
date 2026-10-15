@@ -2,6 +2,7 @@
 #include <gz/plugin/Register.hh>
 #include <gz/sim/Model.hh>
 #include <gz/sim/System.hh>
+#include <gz/sim/components/Actuators.hh>
 #include <gz/sim/components/JointVelocity.hh>
 #include <gz/sim/components/JointVelocityCmd.hh>
 #include <nlohmann/json.hpp>
@@ -12,14 +13,19 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace drone_sim {
 
 class ActuationRecorder : public gz::sim::System,
                           public gz::sim::ISystemConfigure,
+                          public gz::sim::ISystemConfigurePriority,
+                          public gz::sim::ISystemPreUpdate,
                           public gz::sim::ISystemPostUpdate {
  public:
+  // 默认电机控制器优先级为 0；在其计算后、物理积分前读取现有命令。
+  gz::sim::System::PriorityType ConfigurePriority() override { return 1; }
   void Configure(const gz::sim::Entity &entity,
                  const std::shared_ptr<const sdf::Element> &config,
                  gz::sim::EntityComponentManager &ecm,
@@ -54,20 +60,44 @@ class ActuationRecorder : public gz::sim::System,
     model_name_ = model_.Name(ecm);
   }
 
+  void PreUpdate(const gz::sim::UpdateInfo &info,
+                 gz::sim::EntityComponentManager &ecm) override {
+    if (!due(info)) return;
+    const auto &read_only = std::as_const(ecm);
+    pre_commands_ = nlohmann::json::object();
+    for (const auto &name : names_) {
+      pre_commands_[name] = nullptr;
+      const auto entity = model_.JointByName(read_only, name);
+      if (entity != gz::sim::kNullEntity) {
+        if (const auto *command = read_only.Component<gz::sim::components::JointVelocityCmd>(entity))
+          pre_commands_[name] = command->Data();
+      }
+    }
+    pre_time_ = info.simTime;
+    pre_sampled_ = true;
+  }
+
   void PostUpdate(const gz::sim::UpdateInfo &info,
                   const gz::sim::EntityComponentManager &ecm) override {
-    if (!output_.is_open() || info.paused) return;
-    if (sampled_ && info.simTime >= previous_ && info.simTime - previous_ < period_) return;
+    if (!due(info)) return;
     previous_ = info.simTime;
     sampled_ = true;
     nlohmann::json row = {{"kind", "actuation_evaluation_only"}, {"source", "GAZEBO_ECM"},
         {"vehicle", vehicle_}, {"model", model_name_},
         {"sim_time_us", std::chrono::duration_cast<std::chrono::microseconds>(info.simTime).count()},
+        {"actuator_component_velocity_rad_s", nullptr},
         {"joints", nlohmann::json::object()}};
+    if (const auto *actuators = ecm.Component<gz::sim::components::Actuators>(model_.Entity())) {
+      const auto &velocity = actuators->Data().velocity();
+      row["actuator_component_velocity_rad_s"] = std::vector<double>(velocity.begin(), velocity.end());
+    }
     for (const auto &name : names_) {
       const auto entity = model_.JointByName(ecm, name);
       nlohmann::json joint = {{"present", entity != gz::sim::kNullEntity},
-          {"velocity_rad_s", nullptr}, {"velocity_command_rad_s", nullptr}};
+          {"velocity_rad_s", nullptr}, {"velocity_command_rad_s", nullptr},
+          {"pre_update_velocity_command_rad_s", nullptr}};
+      if (pre_sampled_ && pre_time_ == info.simTime)
+        joint["pre_update_velocity_command_rad_s"] = pre_commands_.at(name);
       // 缺失组件保留为 null；不创建组件，也不把命令回显当作物理速度。
       if (entity != gz::sim::kNullEntity) {
         if (const auto *velocity = ecm.Component<gz::sim::components::JointVelocity>(entity))
@@ -88,17 +118,25 @@ class ActuationRecorder : public gz::sim::System,
   }
 
  private:
+  bool due(const gz::sim::UpdateInfo &info) const {
+    return output_.is_open() && !info.paused &&
+        (!sampled_ || info.simTime < previous_ || info.simTime - previous_ >= period_);
+  }
   gz::sim::Model model_{gz::sim::kNullEntity};
   std::ofstream output_;
   std::string model_name_;
   std::vector<std::string> names_;
   int vehicle_{0};
   bool sampled_{false};
+  bool pre_sampled_{false};
+  nlohmann::json pre_commands_;
+  std::chrono::steady_clock::duration pre_time_{};
   std::chrono::steady_clock::duration previous_{}, period_{};
 };
 
 }  // namespace drone_sim
 
 GZ_ADD_PLUGIN(drone_sim::ActuationRecorder, gz::sim::System,
-              gz::sim::ISystemConfigure, gz::sim::ISystemPostUpdate)
+              gz::sim::ISystemConfigure, gz::sim::ISystemConfigurePriority,
+              gz::sim::ISystemPreUpdate, gz::sim::ISystemPostUpdate)
 GZ_ADD_PLUGIN_ALIAS(drone_sim::ActuationRecorder, "drone_sim::ActuationRecorder")

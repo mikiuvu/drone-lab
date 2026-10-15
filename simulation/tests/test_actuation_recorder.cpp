@@ -32,11 +32,14 @@ int main() {
   gz::sim::EventManager events;
   {
     drone_sim::ActuationRecorder recorder;
+    assert(recorder.ConfigurePriority() == 1);
     recorder.Configure(model, config, ecm, events);
     gz::sim::UpdateInfo info;
     info.paused = false;
     info.simTime = 1s;
+    recorder.PreUpdate(info, ecm);
     recorder.PostUpdate(info, ecm);
+    assert(!ecm.Component<gz::sim::components::Actuators>(model));
     assert(!ecm.Component<gz::sim::components::JointVelocity>(joint));
     assert(!ecm.Component<gz::sim::components::JointVelocityCmd>(joint));
     ecm.CreateComponent(joint, gz::sim::components::JointVelocity({12.3}));
@@ -44,8 +47,14 @@ int main() {
     info.simTime = 1010ms;
     recorder.PostUpdate(info, ecm);
     info.simTime = 1050ms;
+    recorder.PreUpdate(info, ecm);
+    ecm.SetComponentData<gz::sim::components::JointVelocityCmd>(joint, {0.0});
+    gz::msgs::Actuators actuators;
+    actuators.add_velocity(600);
+    ecm.CreateComponent(model, gz::sim::components::Actuators(actuators));
     recorder.PostUpdate(info, ecm);
-    assert(ecm.Component<gz::sim::components::JointVelocityCmd>(joint)->Data()[0] == 15.0);
+    assert(ecm.Component<gz::sim::components::JointVelocityCmd>(joint)->Data()[0] == 0.0);
+    assert(ecm.Component<gz::sim::components::Actuators>(model)->Data().velocity(0) == 600);
     ecm.SetComponentData<gz::sim::components::JointVelocity>(joint, {0.0});
     info.simTime = 1100ms;
     info.paused = true;
@@ -60,11 +69,16 @@ int main() {
   assert(rows.size() == 3);
   assert(rows[0]["joints"]["rotor_0_joint"]["velocity_rad_s"].is_null());
   assert(rows[0]["joints"]["rotor_0_joint"]["velocity_command_rad_s"].is_null());
+  assert(rows[0]["joints"]["rotor_0_joint"]["pre_update_velocity_command_rad_s"].is_null());
+  assert(rows[0]["actuator_component_velocity_rad_s"].is_null());
   assert(rows[0]["joints"]["rotor_1_joint"]["present"] == false);
   assert(rows[1]["sim_time_us"] == 1050000);
   assert(rows[1]["joints"]["rotor_0_joint"]["velocity_rad_s"][0] == 12.3);
-  assert(rows[1]["joints"]["rotor_0_joint"]["velocity_command_rad_s"][0] == 15.0);
+  assert(rows[1]["joints"]["rotor_0_joint"]["velocity_command_rad_s"][0] == 0.0);
+  assert(rows[1]["joints"]["rotor_0_joint"]["pre_update_velocity_command_rad_s"][0] == 15.0);
+  assert(rows[1]["actuator_component_velocity_rad_s"][0] == 600);
   assert(rows[2]["joints"]["rotor_0_joint"]["velocity_rad_s"][0] == 0.0);
+  assert(rows[2]["joints"]["rotor_0_joint"]["pre_update_velocity_command_rad_s"].is_null());
   bool rejected = false;
   try {
     drone_sim::ActuationRecorder duplicate;
