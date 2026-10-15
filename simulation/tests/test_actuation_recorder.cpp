@@ -47,6 +47,8 @@ int main() {
     info.simTime = 1010ms;
     recorder.PostUpdate(info, ecm);
     info.simTime = 1050ms;
+    ecm.CreateComponent(joint, gz::sim::components::JointForceCmd({2.0}));
+    ecm.CreateComponent(joint, gz::sim::components::JointVelocityReset({3.0}));
     recorder.PreUpdate(info, ecm);
     ecm.SetComponentData<gz::sim::components::JointVelocityCmd>(joint, {0.0});
     gz::msgs::Actuators actuators;
@@ -55,6 +57,8 @@ int main() {
     recorder.PostUpdate(info, ecm);
     assert(ecm.Component<gz::sim::components::JointVelocityCmd>(joint)->Data()[0] == 0.0);
     assert(ecm.Component<gz::sim::components::Actuators>(model)->Data().velocity(0) == 600);
+    assert(ecm.Component<gz::sim::components::JointForceCmd>(joint)->Data()[0] == 2.0);
+    assert(ecm.Component<gz::sim::components::JointVelocityReset>(joint)->Data()[0] == 3.0);
     ecm.SetComponentData<gz::sim::components::JointVelocity>(joint, {0.0});
     info.simTime = 1100ms;
     info.paused = true;
@@ -71,12 +75,16 @@ int main() {
   assert(rows[0]["joints"]["rotor_0_joint"]["velocity_command_rad_s"].is_null());
   assert(rows[0]["joints"]["rotor_0_joint"]["pre_update_velocity_command_rad_s"].is_null());
   assert(rows[0]["actuator_component_velocity_rad_s"].is_null());
+  assert(rows[0]["joints"]["rotor_0_joint"]["pre_update_force_command_nm"].is_null());
+  assert(rows[0]["joints"]["rotor_0_joint"]["pre_update_velocity_reset_rad_s"].is_null());
   assert(rows[0]["joints"]["rotor_1_joint"]["present"] == false);
   assert(rows[1]["sim_time_us"] == 1050000);
   assert(rows[1]["joints"]["rotor_0_joint"]["velocity_rad_s"][0] == 12.3);
   assert(rows[1]["joints"]["rotor_0_joint"]["velocity_command_rad_s"][0] == 0.0);
   assert(rows[1]["joints"]["rotor_0_joint"]["pre_update_velocity_command_rad_s"][0] == 15.0);
   assert(rows[1]["actuator_component_velocity_rad_s"][0] == 600);
+  assert(rows[1]["joints"]["rotor_0_joint"]["pre_update_force_command_nm"][0] == 2.0);
+  assert(rows[1]["joints"]["rotor_0_joint"]["pre_update_velocity_reset_rad_s"][0] == 3.0);
   assert(rows[2]["joints"]["rotor_0_joint"]["velocity_rad_s"][0] == 0.0);
   assert(rows[2]["joints"]["rotor_0_joint"]["pre_update_velocity_command_rad_s"].is_null());
   bool rejected = false;

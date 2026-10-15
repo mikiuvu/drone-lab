@@ -5,6 +5,8 @@
 #include <gz/sim/components/Actuators.hh>
 #include <gz/sim/components/JointVelocity.hh>
 #include <gz/sim/components/JointVelocityCmd.hh>
+#include <gz/sim/components/JointForceCmd.hh>
+#include <gz/sim/components/JointVelocityReset.hh>
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cmath>
@@ -65,12 +67,18 @@ class ActuationRecorder : public gz::sim::System,
     if (!due(info)) return;
     const auto &read_only = std::as_const(ecm);
     pre_commands_ = nlohmann::json::object();
+    pre_overrides_ = nlohmann::json::object();
     for (const auto &name : names_) {
       pre_commands_[name] = nullptr;
+      pre_overrides_[name] = {{"force_command", nullptr}, {"velocity_reset", nullptr}};
       const auto entity = model_.JointByName(read_only, name);
       if (entity != gz::sim::kNullEntity) {
         if (const auto *command = read_only.Component<gz::sim::components::JointVelocityCmd>(entity))
           pre_commands_[name] = command->Data();
+        if (const auto *force = read_only.Component<gz::sim::components::JointForceCmd>(entity))
+          pre_overrides_[name]["force_command"] = force->Data();
+        if (const auto *reset = read_only.Component<gz::sim::components::JointVelocityReset>(entity))
+          pre_overrides_[name]["velocity_reset"] = reset->Data();
       }
     }
     pre_time_ = info.simTime;
@@ -95,9 +103,13 @@ class ActuationRecorder : public gz::sim::System,
       const auto entity = model_.JointByName(ecm, name);
       nlohmann::json joint = {{"present", entity != gz::sim::kNullEntity},
           {"velocity_rad_s", nullptr}, {"velocity_command_rad_s", nullptr},
-          {"pre_update_velocity_command_rad_s", nullptr}};
-      if (pre_sampled_ && pre_time_ == info.simTime)
+          {"pre_update_velocity_command_rad_s", nullptr},
+          {"pre_update_force_command_nm", nullptr}, {"pre_update_velocity_reset_rad_s", nullptr}};
+      if (pre_sampled_ && pre_time_ == info.simTime) {
         joint["pre_update_velocity_command_rad_s"] = pre_commands_.at(name);
+        joint["pre_update_force_command_nm"] = pre_overrides_.at(name).at("force_command");
+        joint["pre_update_velocity_reset_rad_s"] = pre_overrides_.at(name).at("velocity_reset");
+      }
       // 缺失组件保留为 null；不创建组件，也不把命令回显当作物理速度。
       if (entity != gz::sim::kNullEntity) {
         if (const auto *velocity = ecm.Component<gz::sim::components::JointVelocity>(entity))
@@ -129,7 +141,7 @@ class ActuationRecorder : public gz::sim::System,
   int vehicle_{0};
   bool sampled_{false};
   bool pre_sampled_{false};
-  nlohmann::json pre_commands_;
+  nlohmann::json pre_commands_, pre_overrides_;
   std::chrono::steady_clock::duration pre_time_{};
   std::chrono::steady_clock::duration previous_{}, period_{};
 };
