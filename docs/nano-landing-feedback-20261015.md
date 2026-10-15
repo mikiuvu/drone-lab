@@ -10,6 +10,8 @@
 
 接收端绑定首个有效 PX4 自动驾驶组件的 system ID 和 component ID，其他设备或组件的消息不能覆盖状态。解锁请求需要当前的未解锁、已着地反馈；解除武装需要当前的已解锁、已着地反馈。IMU 或外部观测中断不阻止原生反馈有效时的解除武装。
 
+已解锁时收到 `MAV_STATE_CRITICAL`、`MAV_STATE_EMERGENCY` 或 `MAV_STATE_FLIGHT_TERMINATION` 会锁存任务失败，停止发送任务参考和 ARM/OFFBOARD 请求；后续健康心跳不恢复原任务。飞控尚未进入 AUTO/LAND 时仍可发送普通 LAND 请求，由飞控判断是否接受。`ABORT_RETURN` 与正常返航一样检查持续贴地和卡住状态。
+
 ## 49 秒等待的条件
 
 历史运行 `run_20261015_074946` 的 3 号于 59.321 s 被判为无法继续任务，PX4 于 108.504 s 确认着地，间隔 49.183 s。
@@ -47,11 +49,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Landing delay analysis failed' }
 |---|---|
 | 完整 CTest | 16/16 通过 |
 | 无 OpenCV CTest | 15/15 通过 |
-| UDP/MAVLink 收包回归 | 5 项通过，包含着地断流、心跳断流、重新解锁、其他设备干扰、IMU 缺失时解除武装 |
+| UDP/MAVLink 收包回归 | 8 项通过，覆盖消息断流、重新解锁、设备干扰、IMU 缺失时解除武装、原生失效保护锁存、未解锁预检告警、中止返航贴地恢复 |
 | 降落条件统计测试 | 3 项通过，检查不规则采样积分、禁止采用未来样本、缺失覆盖和无效窗口 |
 | Nano 静态测试 | 返回 0 |
 
-旧程序在停止发送着地消息后持续上报 `landed=true`，同一收包回归在修复后通过。Nano 启动 ID 为 `0bbba2cb-823b-4477-86c2-3bf1f140a056`，测试二进制 SHA256 为 `8560b31c27b9d8f8fdbf2187fd5682691172d56885910695e36017e55a1efc8b`。
+旧程序在停止发送着地消息后持续上报 `landed=true`，同一收包回归在修复后通过。原生失效保护和中止返航贴地回归也分别先复现缺失行为，再通过修复后的程序。Nano 启动 ID 为 `0bbba2cb-823b-4477-86c2-3bf1f140a056`；包含失效保护锁存的静态测试二进制 SHA256 为 `699ef737628e7e56503fe49dae857da708d81d121b9fbefd15e4db005a40bd18`。
 
 | 场景 | 运行目录 | 结果 |
 |---|---|---|
@@ -62,4 +64,19 @@ if ($LASTEXITCODE -ne 0) { throw 'Landing delay analysis failed' }
 
 默认地图的 0 号于 24.781 s 进入失效恢复，终止前物理位置为约 `(131.576, 48.274, -104.847) m`，飞控仍报告未着地、已解锁。该运行没有取得全队停机确认。出界后的物理承接面、定位有效性和失控检测需要继续核验。
 
+该机于 19.833 s 接触装甲滑台外壳，PX4 于 22.068 s 进入原生失效保护；随后伴随程序曾请求 OFFBOARD。失效保护锁存修复针对这类任务接管行为，尚无完整接触任务通过的结论。
+
+## 进程暂停注入
+
+两次注入均在起飞过程中暂停 0 号伴随程序，再恢复进程。原生 ULog 确认触发失效保护；伴随日志没有记录 `native_failsafe_latched=true`，因此不能据此确认锁存分支在暂停恢复时生效。
+
+| 暂停时长 | 运行目录 | 原生失效保护区间 | 停止时状态 |
+|---|---|---|---|
+| 1.8 s | `run_20261015_083056` | 11.235–12.445 s | ABORT_RETURN；四机均未取得原生停机确认 |
+| 5.0 s | `run_20261015_083743` | 11.190–15.460 s | LAND_ALL；1、2、3 号着地停机，0 号未着地、已解锁 |
+
+5 秒注入后，0 号水平定位失效，外部速度停止融合，仍有高度输入。它在约 0.566 m 高度停留，任务没有取得全队终态。暂停期间的心跳接收连续性、短暂失效保护漏报和定位失效时的 LAND_ALL 控制需要进一步核验。两次注入均由测试工具终止并确认全部仿真进程退出。
+
 配置、源码快照、二进制哈希、原生 ULog、恢复汇总和反馈审计位于 `build/nano-flight-feedback/{closed-loop,abort-landing}/`。Nano 记录位于 `build/nano-flight-feedback/board-tests/result.json`；历史降落分析位于 `build/nano-landing-delay/diagnostic.json`。
+
+暂停注入记录位于 `build/nano-flight-feedback/{failsafe-landing,failsafe-landing-5s}/`；Nano 失效保护测试记录位于 `failsafe-board-tests/result.json`。
