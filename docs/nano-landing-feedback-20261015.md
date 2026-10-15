@@ -12,6 +12,8 @@
 
 已解锁时收到 `MAV_STATE_CRITICAL`、`MAV_STATE_EMERGENCY` 或 `MAV_STATE_FLIGHT_TERMINATION` 会锁存任务失败，停止发送任务参考和 ARM/OFFBOARD 请求；后续健康心跳不恢复原任务。飞控尚未进入 AUTO/LAND 时仍可发送普通 LAND 请求，由飞控判断是否接受。`ABORT_RETURN` 与正常返航一样检查持续贴地和卡住状态。
 
+已解锁期间心跳处理间隔达到 3 秒时，`heartbeat_gap_latched=true` 会终止原任务。新心跳更新接收时间之前先检查间隔，避免进程恢复后，排队的健康心跳覆盖中断事实。未解锁状态下的连接间隔不锁存任务失败。
+
 ## 49 秒等待的条件
 
 历史运行 `run_20261015_074946` 的 3 号于 59.321 s 被判为无法继续任务，PX4 于 108.504 s 确认着地，间隔 49.183 s。
@@ -49,11 +51,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Landing delay analysis failed' }
 |---|---|
 | 完整 CTest | 16/16 通过 |
 | 无 OpenCV CTest | 15/15 通过 |
-| UDP/MAVLink 收包回归 | 8 项通过，覆盖消息断流、重新解锁、设备干扰、IMU 缺失时解除武装、原生失效保护锁存、未解锁预检告警、中止返航贴地恢复 |
+| UDP/MAVLink 收包回归 | 9 项通过，覆盖消息断流、重新解锁、设备干扰、IMU 缺失时解除武装、原生失效保护锁存、未解锁预检告警、中止返航贴地恢复、暂停后排队的健康心跳 |
 | 降落条件统计测试 | 3 项通过，检查不规则采样积分、禁止采用未来样本、缺失覆盖和无效窗口 |
 | Nano 静态测试 | 返回 0 |
 
-旧程序在停止发送着地消息后持续上报 `landed=true`，同一收包回归在修复后通过。原生失效保护和中止返航贴地回归也分别先复现缺失行为，再通过修复后的程序。Nano 启动 ID 为 `0bbba2cb-823b-4477-86c2-3bf1f140a056`；包含失效保护锁存的静态测试二进制 SHA256 为 `699ef737628e7e56503fe49dae857da708d81d121b9fbefd15e4db005a40bd18`。
+旧程序在停止发送着地消息后持续上报 `landed=true`，同一收包回归在修复后通过。原生失效保护、中止返航贴地和暂停恢复回归也分别先复现缺失行为，再通过修复后的程序。Nano 启动 ID 为 `0bbba2cb-823b-4477-86c2-3bf1f140a056`；包含失效保护和连接中断锁存的静态测试二进制 SHA256 为 `c582a205ee633d521173dac06575fe3bd32308e4830f9f93e99f0684f44e5bc1`。
 
 | 场景 | 运行目录 | 结果 |
 |---|---|---|
@@ -75,8 +77,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Landing delay analysis failed' }
 | 1.8 s | `run_20261015_083056` | 11.235–12.445 s | ABORT_RETURN；四机均未取得原生停机确认 |
 | 5.0 s | `run_20261015_083743` | 11.190–15.460 s | LAND_ALL；1、2、3 号着地停机，0 号未着地、已解锁 |
 
-5 秒注入后，0 号水平定位失效，外部速度停止融合，仍有高度输入。它在约 0.566 m 高度停留，任务没有取得全队终态。暂停期间的心跳接收连续性、短暂失效保护漏报和定位失效时的 LAND_ALL 控制需要进一步核验。两次注入均由测试工具终止并确认全部仿真进程退出。
+5 秒注入后，0 号水平定位失效，外部速度停止融合，仍有高度输入。它在约 0.566 m 高度停留，任务没有取得全队终态。两次注入均由测试工具终止并确认全部仿真进程退出。
+
+加入心跳间隔锁存后的 5 秒复测为 `run_20261015_084313`：0 号于 15.321 s 记录 `HEARTBEAT_GAP` 并请求 LAND，16.168 s 取得原生着地确认，16.270 s 解除武装；全队于 22.981 s 进入 ABORTED，四机着地停机校验通过。0 号最终距起飞点水平误差为 0.1460 m，其余三机为 0.0076–0.0370 m。失效后无 ARM/OFFBOARD 请求，解除武装均有当前着地反馈。
+
+这组结果验证达到 3 秒的中断。较短暂停可能错过 CRITICAL 消息，仍需核验原生模式退出和任务恢复之间的关系；定位失效时的 LAND_ALL 退化控制也需继续验证。
 
 配置、源码快照、二进制哈希、原生 ULog、恢复汇总和反馈审计位于 `build/nano-flight-feedback/{closed-loop,abort-landing}/`。Nano 记录位于 `build/nano-flight-feedback/board-tests/result.json`；历史降落分析位于 `build/nano-landing-delay/diagnostic.json`。
 
 暂停注入记录位于 `build/nano-flight-feedback/{failsafe-landing,failsafe-landing-5s}/`；Nano 失效保护测试记录位于 `failsafe-board-tests/result.json`。
+
+心跳间隔锁存复测的源码快照、原生模式变化、反馈审计和着地停机校验位于 `build/nano-flight-feedback/gap-recovery-5s/`，Nano 记录位于 `gap-board-tests/result.json`。
