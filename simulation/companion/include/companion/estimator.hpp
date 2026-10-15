@@ -4,6 +4,8 @@
  */
 #pragma once
 #include "companion/types.hpp"
+#include <Eigen/Geometry>
+#include <optional>
 
 namespace companion {
 
@@ -52,6 +54,8 @@ class Estimator {
  * @brief 将深度匹配到地图，仅沿可观测的 x/y/yaw 方向融合。
  * @param frame 三个传感器之一的 8×8 轴向深度帧，单位 m。
  * @return 内点数、残差均方根及退化/拒绝原因；退化和接受可以同时成立。
+ * @note 历史曝光需被姿态缓冲覆盖，插值仅使用间隔不超过 100 ms 的相邻姿态。
+ *       最新姿态之后采用零阶保持；未输入过 IMU 姿态时采用固定姿态模型。
  */
   FusionReport fuseTof(const TofFrame& frame);
 /**
@@ -108,6 +112,8 @@ class Estimator {
   struct LineObservation { double residual{0}; Eigen::RowVector3d jacobian{Eigen::RowVector3d::Zero()}; Eigen::Vector3d normal{Eigen::Vector3d::Zero()}; };
   bool lineObservation(const TofFrame&, int, const Pose3&, const Eigen::Matrix3d&, LineObservation&) const;
   bool terrainObservation(const TofFrame&, int, const Pose3&, const Eigen::Matrix3d&, LineObservation&) const;
+  // 将曝光时机体向量转到最新 IMU 机体系；无姿态输入时使用固定姿态模型。
+  std::optional<Eigen::Matrix3d> tofAttitudeDelta(uint64_t stamp) const;
   // 通用 EKF 更新：H 为 M×7，残差为 M×1，测量噪声协方差为 M×M。
   void update(const Eigen::MatrixXd&, const Eigen::VectorXd&, const Eigen::MatrixXd&);
   bool fresh(uint64_t stamp, uint64_t timeout) const;
@@ -119,6 +125,10 @@ class Estimator {
   std::array<TofFrame,3> tof_cache_{};
   std::array<uint64_t,3> last_tof_us_{};
   std::array<uint64_t,3> assimilated_tof_us_{};
+  struct StampedAttitude { uint64_t stamp{0}; Eigen::Quaterniond orientation{Eigen::Quaterniond::Identity()}; };
+  // 固定容量保存原始 IMU 姿态；地图匹配的航向修正不写入这段相对运动历史。
+  std::array<StampedAttitude,128> attitude_history_;
+  std::size_t attitude_begin_{0},attitude_count_{0};
   std::unordered_map<int, uint64_t> last_uwb_us_;
   std::unordered_map<int, uint64_t> last_anchor_us_;
   // 按参考源记录已使用的最大序号，避免同一绝对信息沿队友链路反复回流。

@@ -37,6 +37,7 @@ void Estimator::reset(uint64_t now) {
   // 初始位姿只是滤波器状态初值；在收到有效 XY 来源前不能把它当作定位量测。
   state_.covariance(2,2)=std::max(state_.covariance(2,2),config_.initial_z_sigma_m*config_.initial_z_sigma_m); state_.initialized=true; state_.xy_valid=false; state_.localization_mode="INITIALIZING"; state_.sim_time_us=now;
   assimilated_tof_us_.fill(0);
+  attitude_begin_=attitude_count_=0;
   last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; local_tof_rank_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
 }
 bool Estimator::fresh(uint64_t t,uint64_t timeout) const { return t&&t<=state_.sim_time_us&&state_.sim_time_us-t<=timeout; }
@@ -86,8 +87,14 @@ void Estimator::predict(const ImuSample& s) {
   if(!s.sim_time_us||s.sim_time_us<=last_imu_us_||!s.acceleration_enu_mps2.allFinite()) return;
   advanceTo(s.sim_time_us);
   if(s.attitude_valid && std::isfinite(s.yaw_enu_rad) && std::isfinite(s.roll_flu_rad) && std::isfinite(s.pitch_flu_rad)){
-    if(last_imu_us_)state_.pose.yaw_rad=wrapAngle(state_.pose.yaw_rad+wrapAngle(s.yaw_enu_rad-last_imu_yaw_));
+    if(attitude_count_)state_.pose.yaw_rad=wrapAngle(state_.pose.yaw_rad+wrapAngle(s.yaw_enu_rad-last_imu_yaw_));
     last_imu_yaw_=s.yaw_enu_rad;state_.pose.roll_rad=s.roll_flu_rad;state_.pose.pitch_rad=s.pitch_flu_rad;
+    const auto orientation=Eigen::Quaterniond(Eigen::AngleAxisd(s.yaw_enu_rad,Eigen::Vector3d::UnitZ())*
+        Eigen::AngleAxisd(s.pitch_flu_rad,Eigen::Vector3d::UnitY())*Eigen::AngleAxisd(s.roll_flu_rad,Eigen::Vector3d::UnitX()));
+    const std::size_t slot=(attitude_begin_+attitude_count_)%attitude_history_.size();
+    attitude_history_[slot]={s.sim_time_us,orientation};
+    if(attitude_count_<attitude_history_.size())++attitude_count_;
+    else attitude_begin_=(attitude_begin_+1)%attitude_history_.size();
   }
   held_acceleration_=s.acceleration_valid?s.acceleration_enu_mps2:Eigen::Vector3d::Zero();last_imu_us_=s.sim_time_us;
 }
@@ -161,6 +168,28 @@ void Estimator::update(const Eigen::MatrixXd&h,const Eigen::VectorXd&r,const Eig
   const Eigen::Matrix<double,7,7> a=Eigen::Matrix<double,7,7>::Identity()-k*h;
   state_.covariance=a*p*a.transpose()+k*rc*k.transpose();state_.covariance=.5*(state_.covariance+state_.covariance.transpose()).eval();
 }
+std::optional<Eigen::Matrix3d> Estimator::tofAttitudeDelta(uint64_t stamp) const {
+  if(!attitude_count_)return Eigen::Matrix3d::Identity();
+  const auto at=[&](std::size_t i)->const StampedAttitude&{
+    return attitude_history_[(attitude_begin_+i)%attitude_history_.size()];
+  };
+  const auto& latest=at(attitude_count_-1);
+  if(stamp>=latest.stamp)return Eigen::Matrix3d::Identity();
+  if(stamp<at(0).stamp)return std::nullopt;
+  std::size_t low=0,high=attitude_count_-1;
+  while(low<high){const auto middle=(low+high)/2;if(at(middle).stamp<stamp)low=middle+1;else high=middle;}
+  const auto& right=at(low);
+  Eigen::Quaterniond exposure=right.orientation;
+  if(stamp!=right.stamp){
+    const auto& left=at(low-1);
+    if(right.stamp-left.stamp>100000)return std::nullopt;
+    const double fraction=static_cast<double>(stamp-left.stamp)/(right.stamp-left.stamp);
+    exposure=left.orientation.slerp(fraction,right.orientation);
+  }
+  if((exposure.coeffs().array()==latest.orientation.coeffs().array()).all())return Eigen::Matrix3d::Identity();
+  return (latest.orientation.conjugate()*exposure).toRotationMatrix();
+}
+
 FusionReport Estimator::fuseTof(const TofFrame& frame) {
   FusionReport report;
   if(frame.sensor_index<0 || frame.sensor_index>=3 || !frame.sim_time_us ||
@@ -172,6 +201,16 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     report.stale=true;report.reason="tof_stale";return report;
   }
   last_tof_us_[frame.sensor_index]=frame.sim_time_us;tof_cache_[frame.sensor_index]=frame;
+  std::array<std::optional<Eigen::Matrix3d>,3> attitude_deltas;
+  std::array<bool,3> rotated{};bool missing_attitude=false,exposure_ready=false;
+  for(const auto& cached:tof_cache_){
+    if(cached.sensor_index<0||!fresh(cached.sim_time_us,config_.tof_timeout_us)||
+        cached.sim_time_us<=assimilated_tof_us_[cached.sensor_index])continue;
+    const auto index=cached.sensor_index;
+    attitude_deltas[index]=tofAttitudeDelta(cached.sim_time_us);
+    if(!attitude_deltas[index]){missing_attitude=true;continue;}
+    exposure_ready=true;rotated[index]=!attitude_deltas[index]->isIdentity(0);
+  }
   // 1. 缓存三个方向的新鲜帧，以预测位姿为起点做最多五轮鲁棒点到线/点到面匹配。
   const Pose3 prior=state_.pose;
   Pose3 working=prior;
@@ -182,16 +221,17 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
   for(int iteration=0;iteration<5;++iteration) {
     info.setZero(); Eigen::Vector3d gradient=Eigen::Vector3d::Zero();
     count=0;sum_squared=0; int independent_normals=0; Eigen::Vector3d first_normal=Eigen::Vector3d::Zero();
+    const auto current_rotation=rotation(working.roll_rad,working.pitch_rad,working.yaw_rad);
     for(const auto& cached:tof_cache_) {
-      if(cached.sensor_index<0 || !fresh(cached.sim_time_us,config_.tof_timeout_us) ||
-         cached.sim_time_us<=assimilated_tof_us_[cached.sensor_index])continue;
+      if(cached.sensor_index<0 || !attitude_deltas[cached.sensor_index])continue;
       // 各传感器帧可能在不同时间采样；按当前速度回退到曝光时刻，避免把运动误当成地图误差。
       const double age=(state_.sim_time_us-cached.sim_time_us)*1e-6;
       Pose3 exposure_pose=working;
       exposure_pose.x_m-=state_.velocity_enu_mps.x()*age;
       exposure_pose.y_m-=state_.velocity_enu_mps.y()*age;
       exposure_pose.z_m-=state_.velocity_enu_mps.z()*age;
-      const auto exposure_rotation=rotation(exposure_pose.roll_rad,exposure_pose.pitch_rad,exposure_pose.yaw_rad);
+      Eigen::Matrix3d exposure_rotation=current_rotation;
+      if(rotated[cached.sensor_index])exposure_rotation*=*attitude_deltas[cached.sensor_index];
       for(int cell=0;cell<64;++cell) {
         LineObservation observation;
         const bool observed=config_.terrain ? terrainObservation(cached,cell,exposure_pose,exposure_rotation,observation) : lineObservation(cached,cell,exposure_pose,exposure_rotation,observation);
@@ -207,7 +247,10 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
         sum_squared+=observation.residual*observation.residual;++count;
       }
     }
-    if(count<(config_.terrain?8:2)){report.degenerate=true;report.reason="too_few_structural_returns";return report;}
+    if(count<(config_.terrain?8:2)){
+      report.stale=missing_attitude&&!exposure_ready;report.degenerate=!report.stale;
+      report.reason=report.stale?"tof_attitude_history_missing":"too_few_structural_returns";return report;
+    }
     // 相邻像素共享系统误差，按每 8 个像素最多贡献一个独立样本，避免信息量虚高。
     const double correlated=std::max(1.0,count/8.0);
     info/=correlated;gradient/=correlated;
@@ -260,7 +303,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
   update(h,residual,noise);state_.degenerate_geometry=rank<3;
   // 每帧深度只计权一次；若本次因几何退化未能单独定位，仍保留缓存等待互补方向。
   for(const auto& cached:tof_cache_)
-    if(cached.sensor_index>=0 && fresh(cached.sim_time_us,config_.tof_timeout_us))
+    if(cached.sensor_index>=0 && attitude_deltas[cached.sensor_index])
       assimilated_tof_us_[cached.sensor_index]=cached.sim_time_us;
   // 衰减累计信息只用于诊断，不能把当前不可观测的 XY 方向伪装成全队的新绝对参考。
   // 5. Schur 补 Ixy-Ixy,yaw*Iyaw,xy/Iyaw,yaw 消去航向耦合，判断未知航向下 XY 是否可观测。

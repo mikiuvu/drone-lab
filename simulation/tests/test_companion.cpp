@@ -155,6 +155,84 @@ static void terrainEstimatorRegression() {
   }
 }
 
+static void tofExposureAttitude() {
+  using T=TerrainMap::Triangle;
+  const auto corner=[](float y){return std::make_shared<TerrainMap>(std::vector<T>{
+      T{Eigen::Vector3f(2,-3,-2),Eigen::Vector3f(2,3,-2),Eigen::Vector3f(2,3,2)},
+      T{Eigen::Vector3f(2,-3,-2),Eigen::Vector3f(2,3,2),Eigen::Vector3f(2,-3,2)},
+      T{Eigen::Vector3f(0,y,-2),Eigen::Vector3f(3,y,-2),Eigen::Vector3f(3,y,2)},
+      T{Eigen::Vector3f(0,y,-2),Eigen::Vector3f(3,y,2),Eigen::Vector3f(0,y,2)}});};
+  EstimatorConfig c;c.initial_pose={0,0,1,0,0,0};c.initial_covariance*=.02;
+  c.terrain=corner(.3f);
+  auto& mount=c.tof_mounts[0];mount.translation_body_m={.03,-.02,.015};
+  mount.roll_rad=.03;mount.pitch_down_rad=-.02;mount.yaw_rad=.04;
+  mount.horizontal_fov_rad=mount.vertical_fov_rad=kPi/4;
+  const auto render=[](const EstimatorConfig& config,const Eigen::Matrix3d& attitude,uint64_t stamp,int sensor=0){
+    TofFrame frame;frame.sensor_index=sensor;frame.sim_time_us=stamp;
+    const auto& mount=config.tof_mounts[sensor];
+    const Eigen::Vector3d origin=Eigen::Vector3d(0,0,1)+attitude*mount.translation_body_m;
+    for(int cell=0;cell<64;++cell){
+      TerrainMap::Hit hit;const Eigen::Vector3d ray=attitude*Estimator::tofRayBody(mount,cell/8,cell%8);
+      if(config.terrain->raycast(origin,ray,4,hit)){frame.valid[cell]=1;frame.distance_m[cell]=hit.depth_m;}
+    }
+    return frame;
+  };
+  const auto unchanged=[](const Estimate& before,const Estimate& after){
+    assert(std::abs(after.pose.x_m-before.pose.x_m)<1e-6&&std::abs(after.pose.y_m-before.pose.y_m)<1e-6);
+    assert(std::abs(wrapAngle(after.pose.yaw_rad-before.pose.yaw_rad))<1e-6);
+  };
+  const auto frame=render(c,Eigen::Matrix3d::Identity(),1000000);
+  Estimator e(c);ImuSample imu;imu.attitude_valid=true;imu.sim_time_us=1000000;imu.yaw_enu_rad=2.7;e.predict(imu);
+  imu.sim_time_us=1080000;imu.roll_flu_rad=.12;imu.pitch_flu_rad=-.10;imu.yaw_enu_rad=2.82;e.predict(imu);
+  const auto before=e.estimate();const auto report=e.fuseTof(frame);const auto after=e.estimate();
+  // 旧曝光的零残差深度不能抵消其后真实发生的三轴转动。
+  assert(report.accepted&&report.inliers>=8);unchanged(before,after);
+  // 恒定三维角速度的中点曝光，包含原始航向跨越 ±π 和非零地图航向偏置。
+  const Eigen::Vector3d axis=Eigen::Vector3d(.3,1,.5).normalized();
+  for(double offset:{2.7,3.1}){
+    Estimator interpolated(c);ImuSample start;start.sim_time_us=1000000;start.attitude_valid=true;start.yaw_enu_rad=offset;interpolated.predict(start);
+    const Eigen::Matrix3d raw=(Eigen::AngleAxisd(offset,Eigen::Vector3d::UnitZ())*Eigen::AngleAxisd(.18,axis)).toRotationMatrix();
+    auto end=start;end.sim_time_us=1080000;end.roll_flu_rad=std::atan2(raw(2,1),raw(2,2));
+    end.pitch_flu_rad=std::asin(-raw(2,0));end.yaw_enu_rad=std::atan2(raw(1,0),raw(0,0));interpolated.predict(end);
+    const auto middle=render(c,Eigen::AngleAxisd(.09,axis).toRotationMatrix(),1040000);
+    const auto prior=interpolated.estimate();assert(interpolated.fuseTof(middle).accepted);unchanged(prior,interpolated.estimate());
+  }
+  // 采样中断不插值；新曝光可继续使用最新姿态的零阶保持值。
+  Estimator gap(c);ImuSample start;start.sim_time_us=1000000;start.attitude_valid=true;gap.predict(start);
+  auto end=start;end.sim_time_us=1200000;end.yaw_enu_rad=.16;gap.predict(end);
+  const auto missing=gap.fuseTof(render(c,Eigen::AngleAxisd(.08,Eigen::Vector3d::UnitZ()).toRotationMatrix(),1100000));
+  assert(!missing.accepted&&missing.stale&&missing.reason=="tof_attitude_history_missing");
+  assert(gap.fuseTof(render(c,Eigen::AngleAxisd(.16,Eigen::Vector3d::UnitZ()).toRotationMatrix(),1201000)).accepted);
+  // 环形缓冲覆盖外的曝光拒绝；reset 后不再保留旧姿态或消费记录。
+  Estimator bounded(c);ImuSample fixed;fixed.attitude_valid=true;fixed.yaw_enu_rad=2.7;
+  for(int i=0;i<200;++i){fixed.sim_time_us=1000000+i*1000;bounded.predict(fixed);}
+  const auto expired=bounded.fuseTof(frame);assert(!expired.accepted&&expired.stale);
+  bounded.reset(1000000);assert(bounded.fuseTof(frame).accepted);
+  // 首个有效姿态只建立增量基准，不把此前无姿态 IMU 的默认航向当成测量。
+  Estimator late(c);ImuSample invalid;invalid.sim_time_us=1000000;late.predict(invalid);
+  fixed.sim_time_us=1010000;late.predict(fixed);assert(late.estimate().pose.yaw_rad==0);
+  fixed.sim_time_us=1020000;fixed.yaw_enu_rad=2.8;late.predict(fixed);
+  assert(std::abs(late.estimate().pose.yaw_rad-.1)<1e-12);
+  fixed.sim_time_us=1015000;fixed.yaw_enu_rad=-1;late.predict(fixed);
+  assert(std::abs(late.estimate().pose.yaw_rad-.1)<1e-12);
+  // 两路互补墙面在不同姿态曝光，合并时仍保持当前位姿。
+  auto combined=c;combined.terrain=corner(2);combined.tof_mounts[1]=combined.tof_mounts[0];combined.tof_mounts[1].yaw_rad=kPi/2;
+  Estimator cached(combined);cached.predict(start);
+  const auto first=cached.fuseTof(render(combined,Eigen::Matrix3d::Identity(),1000000));
+  assert(!first.accepted&&first.reason=="terrain_normals_not_independent");
+  end.sim_time_us=1080000;end.yaw_enu_rad=.15;cached.predict(end);
+  const auto prior=cached.estimate();assert(cached.fuseTof(render(combined,Eigen::AngleAxisd(.15,Eigen::Vector3d::UnitZ()).toRotationMatrix(),1080000,1)).accepted);
+  unchanged(prior,cached.estimate());
+  Estimator old_static(c),current_static(c);fixed.yaw_enu_rad=0;
+  for(auto* estimator:{&old_static,&current_static}){
+    fixed.sim_time_us=1000000;estimator->predict(fixed);fixed.sim_time_us=1080000;estimator->predict(fixed);
+  }
+  auto fresh=frame;fresh.sim_time_us=1080000;
+  assert(old_static.fuseTof(frame).accepted&&current_static.fuseTof(fresh).accepted);
+  unchanged(old_static.estimate(),current_static.estimate());
+  assert((old_static.estimate().covariance-current_static.estimate().covariance).cwiseAbs().maxCoeff()==0);
+}
+
 static int terrainBenchmark(const char* path) {
   const auto map=TerrainMap::load(path); TerrainMap::Hit hit; std::size_t hits=0;
   for(int i=0;i<1000;++i) { const double a=(i%37-18)*.015,b=(i%29-14)*.015; hits+=map->raycast(Eigen::Vector3d(-14+(i%101)*.27,-8+(i%61)*.26,5),Eigen::Vector3d(a,b,-1),8,hit); }
@@ -199,4 +277,4 @@ static int terrainDepthDiagnostic(const char* depth_path,const char* mesh_path) 
   return 0;
 }
 
-int main(int argc,char**argv){if(argc==2)return terrainBenchmark(argv[1]);if(argc==4&&std::string(argv[1])=="--depth-diagnostic")return terrainDepthDiagnostic(argv[2],argv[3]);heightAndPrediction();peerGate();sensorAndVisionGates();mavlinkCoordinateRoundTrip();terrainSurfaceTests();terrainTraversalBudgetTests();terrainEstimatorRegression();std::cout<<"PASS companion tests\n";}
+int main(int argc,char**argv){if(argc==2)return terrainBenchmark(argv[1]);if(argc==4&&std::string(argv[1])=="--depth-diagnostic")return terrainDepthDiagnostic(argv[2],argv[3]);heightAndPrediction();peerGate();sensorAndVisionGates();mavlinkCoordinateRoundTrip();terrainSurfaceTests();terrainTraversalBudgetTests();terrainEstimatorRegression();tofExposureAttitude();std::cout<<"PASS companion tests\n";}
