@@ -62,4 +62,36 @@ int main() {
   preflight.heartbeat(t, false, false, false);
   preflight.heartbeat(t + 4s, false, false, false);
   assert(!preflight.state(t + 4s).heartbeat_gap_latched);
+
+  companion::FlightFeedback stream;
+  stream.heartbeat(t, false, true, false);
+  stream.setpointSent(t);
+  assert(!stream.state(t + 2s).setpoint_gap_latched);
+  stream.heartbeat(t + 2s, true, true, false);
+  assert(!stream.state(t + 2s).setpoint_gap_latched);
+  stream.setpointSent(t + 2s);
+  assert(!stream.state(t + 2499ms).setpoint_gap_latched);
+  assert(stream.state(t + 2500ms).setpoint_gap_latched);
+  // 新心跳和新参考均不能掩盖已经发生的发送中断。
+  stream.heartbeat(t + 2500ms, true, true, false);
+  stream.setpointSent(t + 2501ms);
+  assert(stream.state(t + 2501ms).setpoint_gap_latched);
+  assert(!stream.state(t + 2501ms).heartbeat_gap_latched);
+  stream.heartbeat(t + 2502ms, false, false, false);
+  assert(stream.state(t + 2502ms).setpoint_gap_latched);
+
+  companion::FlightFeedback continuous;
+  continuous.heartbeat(t, true, true, false);
+  for (int index = 0; index < 150; ++index) {
+    const auto now = t + index * 20ms;
+    continuous.heartbeat(now, true, true, false);
+    continuous.setpointSent(now);
+    assert(!continuous.state(now).setpoint_gap_latched);
+  }
+  continuous.heartbeat(t + 3s, false, false, false);
+  assert(!continuous.state(t + 5s).setpoint_gap_latched);
+
+  companion::FlightFeedback unpublished;
+  unpublished.heartbeat(t, true, true, false);
+  assert(!unpublished.state(t + 1s).setpoint_gap_latched);
 }

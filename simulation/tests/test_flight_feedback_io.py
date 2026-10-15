@@ -93,6 +93,18 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_landed()
         return self.receive_status(lambda row: row["landed"] and not row["armed"])
 
+    def send_sensors(self, stamp):
+        attitude = struct.pack("<Iffffff", stamp // 1000, 0, 0, 0, 0, 0, 0)
+        self.mav.sendto(mavlink_packet(30, attitude, 39), ("127.0.0.1", self.runner_port))
+        imu = struct.pack("<Q13fH", stamp, 0, 0, -9.80665, 0, 0, 0, 0, 0, 0, 1013.25, 0, 0, 20, 0xFFFF)
+        self.mav.sendto(mavlink_packet(105, imu, 93), ("127.0.0.1", self.runner_port))
+        for sample in [
+            {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
+             "vehicle": 240, "sim_time_us": stamp, "z_world_m": 0.516},
+            {"schema": 1, "kind": "optical_flow", "vehicle": 240, "sim_time_us": stamp,
+             "vx_body_mps": 0, "vy_body_mps": 0, "quality": 1, "variance_m2s2": 0.001}]:
+            self.mav.sendto(json.dumps(sample).encode("utf-8"), ("127.0.0.1", 16240))
+
     def test_ground_feedback_expires_while_heartbeats_continue(self):
         self.grounded()
         deadline = time.monotonic() + 0.8
@@ -175,6 +187,49 @@ class FlightFeedbackIOTest(unittest.TestCase):
         row = self.receive_status(lambda row: row["heartbeat_fresh"])
         self.assertTrue(row["unrecoverable"])
         self.assertTrue(row["heartbeat_gap_latched"])
+
+    def test_short_setpoint_gap_latches_with_healthy_queued_heartbeats(self):
+        self.grounded()
+        started = time.monotonic()
+        setpoint_seen = False
+        while time.monotonic() - started < 11:
+            self.send_heartbeat(armed=True)
+            self.send_landed(on_ground=False)
+            self.send_sensors(1_000_000 + int((time.monotonic() - started) * 1e6))
+            try:
+                packet = self.mav.recv(16384)
+                message_id = int.from_bytes(packet[7:10], "little") if packet[0] == 0xFD else packet[5]
+                setpoint_seen = setpoint_seen or message_id in (82, 84)
+            except socket.timeout:
+                pass
+            if setpoint_seen:
+                break
+            time.sleep(0.01)
+        self.assertTrue(setpoint_seen, "Runner never sent an OFFBOARD setpoint before the pause")
+        self.process.send_signal(signal.SIGSTOP)
+        try:
+            deadline = time.monotonic() + 0.8
+            while time.monotonic() < deadline:
+                self.send_heartbeat(armed=True)
+                time.sleep(0.05)
+        finally:
+            self.process.send_signal(signal.SIGCONT)
+        row = self.receive_status(lambda row: row["unrecoverable"], timeout=1)
+        self.assertTrue(row["setpoint_gap_latched"])
+        self.assertFalse(row["heartbeat_gap_latched"])
+        self.assertFalse(row["native_failsafe_latched"])
+        deadline = time.monotonic() + 1.1
+        while time.monotonic() < deadline:
+            self.send_heartbeat(armed=True)
+            self.send_landed(on_ground=False)
+            self.send_sensors(1_000_000 + int((time.monotonic() - started) * 1e6))
+            time.sleep(0.02)
+        rows = recorded_rows(self.root / "companion_240.jsonl")
+        event = next(index for index, item in enumerate(rows) if item.get("kind") == "unrecoverable")
+        self.assertEqual(rows[event]["reason"], "OFFBOARD_STREAM_GAP")
+        requests = [item["command"] for item in rows[event:] if item.get("kind") == "command_request"]
+        self.assertTrue(requests)
+        self.assertEqual(set(requests), {"LAND"})
 
     def test_grounded_member_in_abort_return_enters_native_recovery(self):
         for index in range(32):
@@ -259,16 +314,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
             stamp = 1000000 + int((time.monotonic() - started) * 1e6)
             self.send_heartbeat()
             self.send_landed()
-            attitude = struct.pack("<Iffffff", stamp // 1000, 0, 0, 0, 0, 0, 0)
-            self.mav.sendto(mavlink_packet(30, attitude, 39), ("127.0.0.1", self.runner_port))
-            imu = struct.pack("<Q13fH", stamp, 0, 0, -9.80665, 0, 0, 0, 0, 0, 0, 1013.25, 0, 0, 20, 0xFFFF)
-            self.mav.sendto(mavlink_packet(105, imu, 93), ("127.0.0.1", self.runner_port))
-            for sample in [
-                {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
-                 "vehicle": 240, "sim_time_us": stamp, "z_world_m": 0.516},
-                {"schema": 1, "kind": "optical_flow", "vehicle": 240, "sim_time_us": stamp,
-                 "vx_body_mps": 0, "vy_body_mps": 0, "quality": 1, "variance_m2s2": 0.001}]:
-                self.mav.sendto(json.dumps(sample).encode("utf-8"), ("127.0.0.1", 16240))
+            self.send_sensors(stamp)
             command = {"kind": "team_command", "vehicle": 240, "sequence": sequence,
                        "sim_time_us": stamp, "phase": "TAKEOFF" if phase == "TAKEOFF" else "HOLD",
                        "mission_phase": phase, "disarm": False,
