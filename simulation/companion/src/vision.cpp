@@ -55,12 +55,17 @@ template<bool WithPnp>
 std::vector<uint8_t> brightMask(const PpmImage& image,const ArmorDetectionConfig& config,
     std::vector<uint8_t>* pnp_mask=nullptr){
   std::vector<uint8_t> mask(static_cast<size_t>(image.width)*image.height);
-  if constexpr(WithPnp)pnp_mask->resize(mask.size());
+  if constexpr(WithPnp)pnp_mask->assign(mask.size(),0);
   if(config.enemy_color==ArmorColor::Blue){
     const auto red=detail::colorThresholds(config.blue_over_red_ratio);
     const auto green=detail::colorThresholds(config.blue_over_green_ratio);
+    const int lower_blue=WithPnp?std::min(config.min_blue_channel,detail::kPnpMinBlueChannel):config.min_blue_channel;
+    auto lower_red=red;
+    if constexpr(WithPnp)for(size_t c=0;c<lower_red.size();++c)lower_red[c]=std::min(red[c],detail::kPnpRedThresholds[c]);
     for(size_t i=0;i<mask.size();++i){
       const auto* rgb=image.rgb.data()+i*3;
+      // 两条链均无法接受的像素保留预置零，灰色背景无需重复分类或写回。
+      if(rgb[2]<lower_blue||rgb[2]<lower_red[rgb[0]])continue;
       mask[i]=rgb[2]>=config.min_blue_channel&&rgb[2]>=red[rgb[0]]&&rgb[2]>=green[rgb[1]];
       if constexpr(WithPnp)(*pnp_mask)[i]=detail::pnpBluePixel(rgb[0],rgb[1],rgb[2])?255:0;
     }
@@ -70,6 +75,7 @@ std::vector<uint8_t> brightMask(const PpmImage& image,const ArmorDetectionConfig
     for(size_t i=0;i<mask.size();++i){
       const int r=image.rgb[i*3],g=image.rgb[i*3+1],b=image.rgb[i*3+2];
       const int maximum=std::max({r,g,b}),minimum=std::min({r,g,b});
+      if(maximum<(WithPnp?detail::kPnpMinBlueChannel:160))continue;
       const bool red=r>=160&&r>=ratio16[g]&&r>=ratio14[b];
       const bool blue=b>=160&&b>=ratio14[g]&&b>=ratio14[r];
       mask[i]=red||blue||(maximum>=220&&maximum-minimum<=70);
