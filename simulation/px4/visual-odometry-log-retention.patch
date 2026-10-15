@@ -1,0 +1,194 @@
+diff --git a/platforms/common/uORB/uORBDeviceNode.hpp b/platforms/common/uORB/uORBDeviceNode.hpp
+--- a/platforms/common/uORB/uORBDeviceNode.hpp
++++ b/platforms/common/uORB/uORBDeviceNode.hpp
+@@ -188,6 +188,10 @@
+ 
+ 	uint8_t get_queue_size() const { return _meta->o_queue; }
+ 
++	/** Retain bounded visual odometry history for logging; ordinary readers keep the topic policy. */
++	uint8_t get_retention_queue_size() const { return id() == ORB_ID::vehicle_visual_odometry ? 8 : _meta->o_queue; }
++
++
+ 	int8_t subscriber_count() const { return _subscriber_count; }
+ 
+ 	/**
+@@ -227,8 +231,8 @@
+ 		if ((dst != nullptr) && (_data != nullptr)) {
+ 			if (_meta->o_queue == 1) {
+ 				ATOMIC_ENTER;
+-				memcpy(dst, _data, _meta->o_size);
+ 				generation = _generation.load();
++				memcpy(dst, _data + _meta->o_size * ((generation - 1) % get_retention_queue_size()), _meta->o_size);
+ 				ATOMIC_LEAVE;
+ 				return true;
+ 
+@@ -262,6 +266,35 @@
+ 
+ 	}
+ 
++	/** Read the oldest retained publication without changing ordinary subscription policy. */
++	bool copy_retained(void *dst, unsigned &generation)
++	{
++		if (id() != ORB_ID::vehicle_visual_odometry) {
++			return copy(dst, generation);
++		}
++
++		if (dst == nullptr || _data == nullptr) {
++			return false;
++		}
++
++		ATOMIC_ENTER;
++		const unsigned current_generation = _generation.load();
++		if (current_generation == generation) {
++			ATOMIC_LEAVE;
++			return false;
++		}
++
++		const unsigned capacity = get_retention_queue_size();
++		if (!is_in_range(current_generation - capacity, generation, current_generation - 1)) {
++			generation = current_generation - capacity;
++		}
++
++		memcpy(dst, _data + _meta->o_size * (generation % capacity), _meta->o_size);
++		++generation;
++		ATOMIC_LEAVE;
++		return true;
++	}
++
+ 	// add item to list of work items to schedule on node update
+ 	bool register_callback(SubscriptionCallback *callback_sub);
+ 
+diff --git a/platforms/common/uORB/uORBDeviceNode.cpp b/platforms/common/uORB/uORBDeviceNode.cpp
+--- a/platforms/common/uORB/uORBDeviceNode.cpp
++++ b/platforms/common/uORB/uORBDeviceNode.cpp
+@@ -159,7 +159,7 @@
+ 
+ 			/* re-check size */
+ 			if (nullptr == _data) {
+-				const size_t data_size = _meta->o_size * _meta->o_queue;
++				const size_t data_size = _meta->o_size * get_retention_queue_size();
+ 				_data = (uint8_t *) px4_cache_aligned_alloc(data_size);
+ 
+ 				if (_data) {
+@@ -190,7 +190,7 @@
+ 	/* wrap-around happens after ~49 days, assuming a publisher rate of 1 kHz */
+ 	unsigned generation = _generation.fetch_add(1);
+ 
+-	memcpy(_data + (_meta->o_size * (generation % _meta->o_queue)), buffer, _meta->o_size);
++	memcpy(_data + (_meta->o_size * (generation % get_retention_queue_size())), buffer, _meta->o_size);
+ 
+ 	// callbacks
+ 	for (auto item : _callbacks) {
+@@ -414,7 +414,7 @@
+ 	if (_data != nullptr && ch != nullptr) { // _data will not be null if there is a publisher.
+ 		// Only send the most recent data to initialize the remote end.
+ 		if (_data_valid) {
+-			ch->send_message(_meta->o_name, _meta->o_size, _data + (_meta->o_size * ((_generation.load() - 1) % _meta->o_queue)));
++			ch->send_message(_meta->o_name, _meta->o_size, _data + (_meta->o_size * ((_generation.load() - 1) % get_retention_queue_size())));
+ 		}
+ 	}
+ 
+diff --git a/platforms/common/uORB/uORBManager.hpp b/platforms/common/uORB/uORBManager.hpp
+--- a/platforms/common/uORB/uORBManager.hpp
++++ b/platforms/common/uORB/uORBManager.hpp
+@@ -441,6 +441,7 @@
+ 	static uint8_t orb_get_queue_size(const void *node_handle);
+ 
+ 	static bool orb_data_copy(void *node_handle, void *dst, unsigned &generation, bool only_if_updated);
++	static bool orb_data_copy_retained(void *node_handle, void *dst, unsigned &generation);
+ 
+ 	static bool register_callback(void *node_handle, SubscriptionCallback *callback_sub);
+ 
+diff --git a/platforms/common/uORB/uORBManager.cpp b/platforms/common/uORB/uORBManager.cpp
+--- a/platforms/common/uORB/uORBManager.cpp
++++ b/platforms/common/uORB/uORBManager.cpp
+@@ -445,6 +445,15 @@
+ 
+ uint8_t uORB::Manager::orb_get_queue_size(const void *node_handle) { return static_cast<const DeviceNode *>(node_handle)->get_queue_size(); }
+ 
++bool uORB::Manager::orb_data_copy_retained(void *node_handle, void *dst, unsigned &generation)
++{
++	if (!is_advertised(node_handle)
++	    || !static_cast<const DeviceNode *>(node_handle)->updates_available(generation)) {
++		return false;
++	}
++	return static_cast<DeviceNode *>(node_handle)->copy_retained(dst, generation);
++}
++
+ bool uORB::Manager::orb_data_copy(void *node_handle, void *dst, unsigned &generation, bool only_if_updated)
+ {
+ 	if (!is_advertised(node_handle)) {
+diff --git a/platforms/common/uORB/Subscription.hpp b/platforms/common/uORB/Subscription.hpp
+--- a/platforms/common/uORB/Subscription.hpp
++++ b/platforms/common/uORB/Subscription.hpp
+@@ -149,6 +149,15 @@
+ 	 * Update the struct
+ 	 * @param dst The uORB message struct we are updating.
+ 	 */
++	/** Update from bounded publication history for logging. */
++	bool update_retained(void *dst)
++	{
++		if (!valid()) {
++			subscribe();
++		}
++		return valid() ? Manager::orb_data_copy_retained(_node, dst, _last_generation) : false;
++	}
++
+ 	bool update(void *dst)
+ 	{
+ 		if (!valid()) {
+diff --git a/src/modules/logger/logger.cpp b/src/modules/logger/logger.cpp
+--- a/src/modules/logger/logger.cpp
++++ b/src/modules/logger/logger.cpp
+@@ -451,11 +451,16 @@
+ 		if (sub.get_interval_us() == 0) {
+ 			// record gaps in full rate (no interval) messages
+ 			const unsigned last_generation = sub.get_last_generation();
+-			updated = sub.update(buffer);
++			updated = static_cast<ORB_ID>(sub.get_topic()->o_id) == ORB_ID::vehicle_visual_odometry ? sub.update_retained(buffer) : sub.update(buffer);
+ 
+ 			if (updated && (sub.get_last_generation() != last_generation + 1)) {
+ 				// error, missed a message
+ 				_message_gaps++;
++				uint64_t sample_stamp = 0;
++				memcpy(&sample_stamp, buffer, sizeof(sample_stamp));
++				PX4_INFO("subscription gap topic=%s previous=%u current=%u sample_us=%llu",
++					 sub.get_topic()->o_name, last_generation, sub.get_last_generation(),
++					 static_cast<unsigned long long>(sample_stamp));
+ 			}
+ 
+ 		} else {
+@@ -756,7 +761,9 @@
+ 				 */
+ 				const bool try_to_subscribe = (sub_idx == next_subscribe_topic_index);
+ 
+-				if (copy_if_updated(sub_idx, _msg_buffer + sizeof(ulog_message_data_s), try_to_subscribe)) {
++				const unsigned budget = static_cast<ORB_ID>(sub.get_topic()->o_id) == ORB_ID::vehicle_visual_odometry && sub.get_interval_us() == 0 ? 8 : 1;
++				for (unsigned remaining = budget; remaining > 0
++				     && copy_if_updated(sub_idx, _msg_buffer + sizeof(ulog_message_data_s), try_to_subscribe); --remaining) {
+ 					// each message consists of a header followed by an orb data object
+ 					const size_t msg_size = sizeof(ulog_message_data_s) + sub.get_topic()->o_size_no_padding;
+ 					const uint16_t write_msg_size = static_cast<uint16_t>(msg_size - ULOG_MSG_HEADER_LEN);
+diff --git a/src/modules/logger/logger.h b/src/modules/logger/logger.h
+--- a/src/modules/logger/logger.h
++++ b/src/modules/logger/logger.h
+@@ -78,6 +78,8 @@
+ 		uORB::SubscriptionInterval(id, interval_ms * 1000, instance)
+ 	{}
+ 
++	bool update_retained(void *dst) { return _subscription.update_retained(dst); }
++
+ 	uint8_t msg_id{MSG_ID_INVALID};
+ };
+ 
+diff --git a/src/modules/logger/logged_topics.cpp b/src/modules/logger/logged_topics.cpp
+--- a/src/modules/logger/logged_topics.cpp
++++ b/src/modules/logger/logged_topics.cpp
+@@ -339,6 +339,7 @@
+ 
+ void LoggedTopics::add_estimator_replay_topics()
+ {
++	add_topic("logger_status");
+ 	// for estimator replay (need to be at full rate)
+ 	add_topic("ekf2_timestamps");
+ 
