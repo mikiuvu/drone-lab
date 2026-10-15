@@ -6,6 +6,14 @@
 #include <cstdint>
 #include <optional>
 namespace companion {
+/** @brief 目标邻域内的加速度计比力突增用于触发姿态恢复；输入单位 m/s²、m。 */
+inline bool inertialContactCandidate(const Eigen::Vector3d& specific_force,
+    const Eigen::Vector3d& target_displacement,double force_threshold,double proximity){
+  if(!specific_force.allFinite()||!target_displacement.allFinite()||!std::isfinite(force_threshold)||
+     !std::isfinite(proximity)||force_threshold<=0||proximity<=0)return false;
+  const double force=specific_force.norm(),distance=target_displacement.norm();
+  return std::isfinite(force)&&std::isfinite(distance)&&force>force_threshold&&distance<=proximity;
+}
 /** @brief 按同一剩余时间缩放机体系位移，满足水平、侧向和垂向速度上限；单位 m、m/s。 */
 inline std::optional<Eigen::Vector3d> terminalVelocity(const Eigen::Vector3d& displacement,
     double horizontal_limit,double lateral_limit,double vertical_limit){

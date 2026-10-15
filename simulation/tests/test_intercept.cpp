@@ -3,6 +3,18 @@
 #include <cassert>
 #include <limits>
 int main(){
+ assert(!companion::inertialContactCandidate({0,0,9.80665},{.2,.3,.1},20,.75));
+ assert(!companion::inertialContactCandidate({5,0,9.80665},{.2,.3,.1},20,.75));
+ assert(companion::inertialContactCandidate({20,0,9.80665},{.2,.3,.1},20,.75));
+ assert(!companion::inertialContactCandidate({20,0,0},{.2,0,0},20,.75));
+ assert(companion::inertialContactCandidate({20.001,0,0},{.75,0,0},20,.75));
+ assert(!companion::inertialContactCandidate({20.001,0,0},{.750001,0,0},20,.75));
+ assert(!companion::inertialContactCandidate({30,0,0},{0,0,0},0,.75));
+ assert(!companion::inertialContactCandidate({30,0,0},{0,0,0},20,0));
+ assert(!companion::inertialContactCandidate({std::numeric_limits<double>::quiet_NaN(),0,0},{0,0,0},20,.75));
+ assert(!companion::inertialContactCandidate({30,0,0},{std::numeric_limits<double>::quiet_NaN(),0,0},20,.75));
+ assert(!companion::inertialContactCandidate({std::numeric_limits<double>::max(),0,0},{0,0,0},20,.75));
+ assert(!companion::inertialContactCandidate({30,0,0},{0,0,0},std::numeric_limits<double>::infinity(),.75));
  for(double forward:{.15,.9,2.0})for(double lateral:{-.8,0.0,.3})for(double vertical:{-.55,0.0,.2}){
    const Eigen::Vector3d displacement(forward,lateral,vertical);
    const auto velocity=companion::terminalVelocity(displacement,3.0,1.5,1.5);
