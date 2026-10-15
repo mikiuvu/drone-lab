@@ -33,6 +33,8 @@
 #include <csignal>
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -52,6 +54,51 @@ using Clock=std::chrono::steady_clock;
 volatile std::sig_atomic_t running=1;
 void stop(int){running=0;}
 double age(Clock::time_point t){return std::chrono::duration<double>(Clock::now()-t).count();}
+/** @brief DRONE_PROFILE_RUNTIME=1 时记录已解锁循环的阶段耗时和对应线程 CPU 时间。 */
+struct RuntimeProfile {
+  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, Count };
+  struct Metric {
+    uint64_t samples{0},over_100ms{0},max_wall_us{0},begin_sim_us{0},end_sim_us{0};
+    std::optional<uint64_t> cpu_at_max_us;
+  };
+  bool enabled{false},armed{false};
+  std::array<Metric,Count> metrics{};
+  RuntimeProfile(){const char* value=std::getenv("DRONE_PROFILE_RUNTIME");enabled=value&&std::strcmp(value,"1")==0;}
+  static std::optional<uint64_t> threadCpuUs(){
+    timespec value{};if(clock_gettime(CLOCK_THREAD_CPUTIME_ID,&value)!=0)return std::nullopt;
+    return static_cast<uint64_t>(value.tv_sec)*1000000+static_cast<uint64_t>(value.tv_nsec)/1000;
+  }
+  struct Span {
+    RuntimeProfile* profile;Stage stage;const uint64_t* sim;
+    uint64_t begin_sim{0};Clock::time_point start{};std::optional<uint64_t> cpu;
+    Span(RuntimeProfile& owner,Stage id,const uint64_t* stamp):profile(owner.enabled&&owner.armed?&owner:nullptr),stage(id),sim(stamp){
+      if(profile){begin_sim=*sim;cpu=threadCpuUs();start=Clock::now();}
+    }
+    Span(const Span&)=delete;Span& operator=(const Span&)=delete;
+    ~Span(){
+      if(!profile)return;
+      const auto wall=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-start).count());
+      const auto current_cpu=threadCpuUs();auto& metric=profile->metrics[stage];
+      ++metric.samples;if(wall>=100000)++metric.over_100ms;
+      if(wall>metric.max_wall_us){
+        metric.max_wall_us=wall;metric.begin_sim_us=begin_sim;metric.end_sim_us=*sim;
+        metric.cpu_at_max_us=cpu&&current_cpu&&*current_cpu>=*cpu?
+            std::optional<uint64_t>(*current_cpu-*cpu):std::nullopt;
+      }
+    }
+  };
+  Span measure(Stage stage,const uint64_t* sim){return Span(*this,stage,sim);}
+  json report()const{
+    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"}};
+    json result=json::object();
+    for(int i=0;i<Count;++i){const auto& m=metrics[i];
+      result[names[i]]={{"samples",m.samples},{"over_100ms",m.over_100ms},{"max_wall_us",m.max_wall_us},
+          {"thread_cpu_at_max_us",m.cpu_at_max_us?json(*m.cpu_at_max_us):json(nullptr)},
+          {"begin_sim_us",m.begin_sim_us},{"end_sim_us",m.end_sim_us}};
+    }
+    return result;
+  }
+};
 json readJson(const std::filesystem::path& p){std::ifstream f(p);if(!f)throw std::runtime_error("cannot read "+p.string());json j;f>>j;return j;}
 /**
  * @brief 非阻塞回环 UDP，当前进程拥有套接字，析构负责关闭。
@@ -348,7 +395,8 @@ int main(int argc,char**argv){try{
       config.safe_waypoints.push_back({config.initial_pose.x_m,config.initial_pose.y_m,config.initial_pose.yaw_rad});
   }
   std::filesystem::create_directories(o.runtime);std::ofstream log(o.runtime/("companion_"+std::to_string(o.vehicle)+".jsonl"));if(!log)throw std::runtime_error("cannot open runtime log");
-  auto emit=[&](json j){j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';log.flush();};
+  RuntimeProfile runtime_profile;uint64_t profile_sim_us=0;
+  auto emit=[&](json j){auto measured=runtime_profile.measure(RuntimeProfile::Log,&profile_sim_us);j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';log.flush();};
   emit({{"kind","startup"},{"simulation_only",true},{"height_assist_allowed",true},{"map",o.map.string()},{"gnss_position_ignored",true},{"mavlink_local_port",o.local},{"mavlink_remote_port",o.remote}});
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
@@ -363,6 +411,8 @@ int main(int argc,char**argv){try{
   // 单线程轮询：各通道每轮限制包数，避免繁忙通道使其他输入长期得不到处理。
   while(running && (o.duration==0||age(start)<o.duration)){
     auto flight=native_feedback.state(Clock::now());
+    runtime_profile.armed=flight.armed&&flight.heartbeat_fresh;profile_sim_us=sim_us;
+    auto loop_timing=runtime_profile.measure(RuntimeProfile::Loop,&sim_us);
     // 2. 接收协调器目标；只接受递增 sequence，记录进入接触阶段的时刻。
     if(team)for(int n=0;n<32;++n){
       auto packet=team->receive();if(packet.empty())break;
@@ -400,7 +450,8 @@ int main(int argc,char**argv){try{
     }
     // 3. 测量按 kind 分流。UWB 必须配合邻机估计；仅有距离不能直接得到世界位置。
     // 碰撞后 0.4 s 暂不使用 ToF，避免剧烈姿态变化时错误的结构匹配。
-    for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;sim_us=std::max(sim_us,stamp);obs_rx=Clock::now();if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);else if(auto t=companion::parseTofDatagram(s,o.vehicle)){const auto disturbance=sensor_disturbance();if(!team_enabled||!disturbance||stamp>disturbance+400000)tof_queue.submit(*t);}else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);}}catch(const std::exception&){} }
+    {auto measured=runtime_profile.measure(RuntimeProfile::Observations,&sim_us);
+    for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;sim_us=std::max(sim_us,stamp);profile_sim_us=sim_us;obs_rx=Clock::now();if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);else if(auto t=companion::parseTofDatagram(s,o.vehicle)){const auto disturbance=sensor_disturbance();if(!team_enabled||!disturbance||stamp>disturbance+400000)tof_queue.submit(*t);}else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);}}catch(const std::exception&){} }}
     // 4. 更新邻机缓存；只保存配置机群成员，是否新鲜由融合器再次判断。
     //    同一通道还承载滑轨观测样本：滑轨全周期 5.6 s，学成一个模型需要两个以上完整
     //    周期（>11 s）的连续观测，而单机一次回合的视觉窗最长只有 9–10 s，谁都学不成，
@@ -414,6 +465,7 @@ int main(int argc,char**argv){try{
       }
     }
     // 5. MAVLink 是字节流协议，一包 UDP 可能含多个消息，解析器需跨包保留状态。
+    {auto measured=runtime_profile.measure(RuntimeProfile::Mavlink,&sim_us);
     for(int n=0;n<64;++n){auto bytes=mav.receive();if(bytes.empty())break;static mavlink_message_t msg{};static mavlink_status_t status{};for(unsigned char byte:bytes)if(mavlink_parse_char(MAVLINK_COMM_0,byte,&msg,&status)){
       if(msg.msgid==MAVLINK_MSG_ID_HEARTBEAT){
         mavlink_heartbeat_t h;mavlink_msg_heartbeat_decode(&msg,&h);
@@ -515,7 +567,7 @@ int main(int argc,char**argv){try{
         imu_rx=Clock::now();
       }      else if(msg.msgid==MAVLINK_MSG_ID_COMMAND_ACK){mavlink_command_ack_t a;mavlink_msg_command_ack_decode(&msg,&a);emit({{"kind","command_ack"},{"command",a.command},{"result",a.result},{"sim_time_us",sim_us}});}
       // No positions, GPS, simulator states, or PX4 velocity estimates are consumed.
-    }}
+    }}}
     // 已解锁失效保护、心跳或控制流中断均终止任务；排队的健康心跳不能恢复原任务。
     flight=native_feedback.state(Clock::now());
     if((flight.failsafe_latched||flight.heartbeat_gap_latched||flight.setpoint_gap_latched)&&!unrecoverable){
@@ -560,6 +612,7 @@ int main(int argc,char**argv){try{
       }
       auto camera_dir=o.runtime; if(std::filesystem::exists(o.runtime/"camera"))camera_dir=o.runtime/"camera";
       try {
+        auto camera_timing=runtime_profile.measure(RuntimeProfile::Camera,&sim_us);
         const auto meta=readJson(camera_dir/("camera_"+std::to_string(o.vehicle)+".json"));
         const auto seq=meta.at("frame_seq").get<uint64_t>(),stamp=meta.at("sim_time_us").get<uint64_t>();
         if(armor_enabled||visual_contact){
@@ -1083,12 +1136,16 @@ int main(int argc,char**argv){try{
     }
     // 只在导航发布后启动一帧融合，给计算留出完整的 20 ms 槽位。
     if(navigation_due)if(auto frame=tof_queue.take())
-      if(!team_enabled||!sensor_disturbance()||frame->sim_time_us>sensor_disturbance()+400000)
+      if(!team_enabled||!sensor_disturbance()||frame->sim_time_us>sensor_disturbance()+400000){
+        auto tof_timing=runtime_profile.measure(RuntimeProfile::Tof,&sim_us);
         fusion(estimator.fuseTof(*frame),"tof",frame->sim_time_us);
+      }
+    {auto sleep_timing=runtime_profile.measure(RuntimeProfile::Sleep,&sim_us);
     std::this_thread::sleep_until(std::min(Clock::now()+std::chrono::milliseconds(2),
-        last_publish+std::chrono::milliseconds(20)));
+        last_publish+std::chrono::milliseconds(20)));}
   }
   const auto final_feedback=native_feedback.state(Clock::now());
+  if(runtime_profile.enabled)emit({{"kind","runtime_profile"},{"sim_time_us",sim_us},{"stages",runtime_profile.report()}});
   emit({{"kind","stop"},{"sim_time_us",sim_us},{"armed_at_stop",final_feedback.armed},{"heartbeat_fresh",final_feedback.heartbeat_fresh},{"landed_fresh",final_feedback.landed_fresh},{"peer_send_drops",peers.send_drops},{"peer_last_errno",peers.last_send_errno},{"mav_send_drops",mav.send_drops},{"mav_last_errno",mav.last_send_errno},
       {"imu_attitude",{{"exact",imu_attitude_counts[0]},{"interpolated",imu_attitude_counts[1]},{"extrapolated",imu_attitude_counts[2]},
           {"missing",imu_attitude_missing},{"attitude_stamp_rejected",attitude_stamp_rejected},{"imu_stamp_rejected",imu_stamp_rejected},
