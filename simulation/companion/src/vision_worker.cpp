@@ -95,6 +95,7 @@ Completed process(const VisionRequest& request) {
 
 struct VisionWorker::Impl {
   mutable std::mutex mutex;
+  mutable std::mutex statistics_mutex;
   std::condition_variable wake;
   std::optional<VisionRequest> pending;
   std::optional<VisionResult> result;
@@ -110,16 +111,22 @@ struct VisionWorker::Impl {
     wake.notify_one(); thread.join();
   }
   void publish(Completed done) {
-    ++stats.completed;
-    stats.failed += !done.result.error.empty();
-    stats.last_compute_ms = done.compute_ms;
-    stats.max_compute_ms = std::max(stats.max_compute_ms, done.compute_ms);
-    for (int stage = 0; stage < 3; ++stage) if (done.milliseconds[stage] >= 0) {
-      if(record_timings)stats.stages[stage].milliseconds.push_back(done.milliseconds[stage]);
-      done.accepted[stage] ? ++stats.stages[stage].accepted : ++stats.stages[stage].rejected;
+    std::optional<VisionResult> previous;
+    {
+      std::lock_guard<std::mutex> statistics_lock(statistics_mutex);
+      ++stats.completed;
+      stats.failed += !done.result.error.empty();
+      stats.last_compute_ms = done.compute_ms;
+      stats.max_compute_ms = std::max(stats.max_compute_ms, done.compute_ms);
+      for (int stage = 0; stage < 3; ++stage) if (done.milliseconds[stage] >= 0) {
+        if(record_timings)stats.stages[stage].milliseconds.push_back(done.milliseconds[stage]);
+        done.accepted[stage] ? ++stats.stages[stage].accepted : ++stats.stages[stage].rejected;
+      }
+      std::lock_guard<std::mutex> lock(mutex);
+      if (result) ++stats.result_replaced;
+      previous = std::move(result);
+      result = std::move(done.result);
     }
-    if (result) ++stats.result_replaced;
-    result = std::move(done.result);
   }
   void run() {
 #ifdef __linux__
@@ -135,30 +142,36 @@ struct VisionWorker::Impl {
         job = std::move(pending); pending.reset();
       }
       auto done = process(*job);
-      { std::lock_guard<std::mutex> lock(mutex); publish(std::move(done)); }
+      publish(std::move(done));
     }
   }
 };
 VisionWorker::VisionWorker(bool asynchronous, bool record_timings) : impl_(std::make_unique<Impl>(asynchronous,record_timings)) {}
 VisionWorker::~VisionWorker() = default;
 bool VisionWorker::submit(VisionRequest request) {
-  if (!request.stamp || request.stamp <= last_submitted_) return false;
+  if (!request.stamp || request.stamp <= last_submitted_) { ++submit_invalid_; return false; }
   if (!impl_->asynchronous) {
     last_submitted_ = request.stamp;
     auto done = process(request);
-    std::lock_guard<std::mutex> lock(impl_->mutex);
     ++impl_->stats.submitted; impl_->publish(std::move(done)); return true;
   }
+  std::optional<VisionRequest> previous;
   std::unique_lock<std::mutex> lock(impl_->mutex, std::try_to_lock);
-  if (!lock.owns_lock()) return false;
+  if (!lock.owns_lock()) { ++submit_busy_; return false; }
   last_submitted_ = request.stamp; ++impl_->stats.submitted;
   if (impl_->pending) ++impl_->stats.pending_replaced;
-  impl_->pending = std::move(request); impl_->wake.notify_one(); return true;
+  previous = std::move(impl_->pending);
+  impl_->pending = std::move(request);
+  lock.unlock();
+  impl_->wake.notify_one(); return true;
 }
 std::optional<VisionResult> VisionWorker::poll(uint64_t now, uint64_t timeout) {
   std::unique_lock<std::mutex> lock(impl_->mutex, std::try_to_lock);
-  if (!lock.owns_lock() || !impl_->result) return std::nullopt;
+  if (!lock.owns_lock()) { ++poll_busy_; return std::nullopt; }
+  if (!impl_->result) return std::nullopt;
   auto result = std::move(impl_->result); impl_->result.reset();
+  // 结果校验和释放不占用消息锁。
+  lock.unlock();
   if (result->stamp > now) { ++impl_->stats.future; return std::nullopt; }
   if (result->stamp <= last_published_ || now - result->stamp > timeout) {
     ++impl_->stats.stale; return std::nullopt;
@@ -167,6 +180,11 @@ std::optional<VisionResult> VisionWorker::poll(uint64_t now, uint64_t timeout) {
   return result;
 }
 VisionWorkerStats VisionWorker::stats() const {
-  std::lock_guard<std::mutex> lock(impl_->mutex); return impl_->stats;
+  std::scoped_lock lock(impl_->mutex, impl_->statistics_mutex);
+  auto result = impl_->stats;
+  result.submit_invalid = submit_invalid_;
+  result.submit_busy = submit_busy_;
+  result.poll_busy = poll_busy_;
+  return result;
 }
 }  // namespace companion

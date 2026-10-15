@@ -321,6 +321,7 @@ class Workload {
     j["vision_pipeline"] = {{"asynchronous", o_.vision_async}, {"submitted", vision.submitted},
         {"completed", vision.completed}, {"used", vision_used_}, {"pending_replaced", vision.pending_replaced},
         {"result_replaced", vision.result_replaced}, {"stale", vision.stale}, {"future", vision.future},
+        {"submit_invalid", vision.submit_invalid}, {"submit_busy", vision.submit_busy}, {"poll_busy", vision.poll_busy},
         {"failed", vision.failed}, {"nice", vision.worker_nice}, {"max_compute_ms", vision.max_compute_ms},
         {"frame_age", frame_ages_.json()}, {"branches", o_.guide_mode == GuideMode::Always ? "all" : "fallback"}};
     j["tof_queue"] = {{"bounded", o_.tof_bounded}, {"submitted", tof_queue_.submitted},

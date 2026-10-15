@@ -41,12 +41,13 @@ struct VisionStageStats {
 };
 struct VisionWorkerStats {
   uint64_t submitted{0}, completed{0}, pending_replaced{0}, result_replaced{0};
+  uint64_t submit_invalid{0}, submit_busy{0}, poll_busy{0};
   uint64_t stale{0}, future{0}, failed{0};
   int worker_nice{-1};
   double last_compute_ms{0}, max_compute_ms{0};
   std::array<VisionStageStats, 3> stages;
 };
-/** @brief submit/poll 由控制线程调用；图像和检测配置在任务内保持不变。
+/** @brief submit/poll/stats 由同一控制线程调用；图像和检测配置在任务内保持不变。
  * @note submit/poll 只尝试消息锁。stats 用于停止测量后的统计快照。
  *       poll 以曝光时间检查时效；完成时间不替换曝光时间。
  */
@@ -63,5 +64,6 @@ class VisionWorker {
   struct Impl;
   std::unique_ptr<Impl> impl_;
   uint64_t last_submitted_{0}, last_published_{0};
+  uint64_t submit_invalid_{0}, submit_busy_{0}, poll_busy_{0};
 };
 }  // namespace companion

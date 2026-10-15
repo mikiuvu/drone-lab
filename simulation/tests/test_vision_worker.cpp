@@ -59,8 +59,9 @@ int main() {
 #endif
   const auto input = request(1000000);
   const auto reference = detectArmorStrips(*input.image, input.camera, input.detection);
-  VisionWorker synchronous(false), background;
-  assert(synchronous.submit(input)); assert(background.submit(input));
+  VisionWorker synchronous(false), background(true, true);
+  assert(synchronous.submit(input));
+  while (!background.submit(input)) std::this_thread::yield();
   const auto a = wait(synchronous, input.stamp), b = wait(background, input.stamp);
   assert(a->frame_valid && b->frame_valid && a->pixel.valid == reference.valid);
   assert(a->pixel.range_m == b->pixel.range_m && b->pixel.range_m == reference.range_m);
@@ -75,6 +76,8 @@ int main() {
   assert(a->world_covariance(1,1)>input.pnp_variance_m2+.0025);
 #endif
   assert(!synchronous.submit(input));
+  assert(!synchronous.submit(VisionRequest{}));
+  assert(synchronous.stats().submit_invalid == 2 && synchronous.stats().submit_busy == 0);
 
   auto mismatch = input; mismatch.stamp += 1; mismatch.verify_metadata = true;
   assert(synchronous.submit(mismatch));
@@ -108,15 +111,25 @@ int main() {
   assert(bad_covariance->frame_valid&&!bad_covariance->world_valid&&bad_covariance->error=="invalid_guide_world_uncertainty");
   // 连续输入不累积图像队列，最终仍可取得最新帧。
   uint64_t latest = input.stamp;
+  uint64_t busy = background.stats().submit_busy;
   for (int i = 1; i <= 100; ++i) {
     auto r = input; r.stamp = latest + 20000;
-    while (!background.submit(r)) std::this_thread::yield();
+    while (!background.submit(r)) { ++busy; std::this_thread::yield(); }
+    const auto snapshot = background.stats();
+    assert(snapshot.submitted == static_cast<uint64_t>(i + 1));
+    assert(snapshot.completed <= snapshot.submitted);
+    assert(snapshot.stages[0].milliseconds.size() == snapshot.completed);
     latest = r.stamp;
   }
   assert(wait(background, latest)->frame_valid);
   assert(background.stats().pending_replaced > 0);
+  assert(!background.submit(input) && !background.submit(VisionRequest{}));
+  const auto snapshot = background.stats();
+  assert(snapshot.submit_invalid == 2 && snapshot.submit_busy == busy);
+  assert(snapshot.completed + snapshot.pending_replaced == snapshot.submitted);
   auto copied=green_request;copied.stamp=latest+20000;
-  assert(background.submit(copied));copied.exposure_covariance.setZero();
+  while (!background.submit(copied)) std::this_thread::yield();
+  copied.exposure_covariance.setZero();
   const auto owned=wait(background,copied.stamp);
   assert(owned->world_valid&&owned->green&&owned->world_covariance(1,1)>copied.guide_variance_m2+.0025);
 
