@@ -40,13 +40,21 @@ Completed process(const VisionRequest& request) {
         const auto begin = Clock::now(); done.accepted[stage] = call();
         done.milliseconds[stage] = elapsed(begin);
       };
+      std::optional<ArmorColorMasks> masks;
       if (request.pixel) measure(0, [&] {
+#ifdef COMPANION_WITH_OPENCV
+        if(request.pnp){
+          masks=classifyArmorPixels(*image,request.detection);
+          out.pixel=detectArmorStrips(*image,request.camera,request.detection,std::move(masks->strips));
+        }else
+#endif
         out.pixel = detectArmorStrips(*image, request.camera, request.detection);
         return out.pixel.valid;
       });
       if (request.pnp) measure(1, [&] {
 #ifdef COMPANION_WITH_OPENCV
-        out.pnp = detectRmArmor(*image, request.camera, request.strip_height_m, request.bottom_separation_m);
+        out.pnp = masks?detectRmArmor(*image,request.camera,request.strip_height_m,request.bottom_separation_m,std::move(masks->pnp)):
+            detectRmArmor(*image,request.camera,request.strip_height_m,request.bottom_separation_m);
         if (out.pnp.valid && request.pose_valid) {
           const auto projection=cameraPointProjection(out.pnp.position_camera_m,request.exposure_pose,request.camera_forward_m);
           const auto covariance=projection?worldObservationCovariance(projection->pose_jacobian,

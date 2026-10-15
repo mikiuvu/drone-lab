@@ -39,6 +39,24 @@ std::optional<VisionResult> wait(VisionWorker& w, uint64_t stamp) {
 }
 }
 int main() {
+#ifdef COMPANION_WITH_OPENCV
+  for(const auto color:{std::pair<int,int>{180,230},{20,140}}){
+    auto input=request(1000000);
+    auto image=std::make_shared<PpmImage>(*input.image);
+    for(size_t i=0;i<image->rgb.size();i+=3)if(image->rgb[i+2]==255){image->rgb[i+1]=color.first;image->rgb[i+2]=color.second;}
+    input.image=image;
+    VisionWorker worker(false);
+    assert(worker.submit(input));const auto both=wait(worker,input.stamp);
+    assert(!both->pixel.valid&&both->pnp.valid&&both->world_valid);
+    input.stamp+=20000;input.pixel=false;input.detection.blue_over_green_ratio=0;
+    assert(worker.submit(input));const auto pnp=wait(worker,input.stamp);
+    assert(pnp->error.empty()&&pnp->world_valid&&(pnp->world-both->world).norm()<1e-12);
+    assert(!detectRmArmor(*image,input.camera,input.strip_height_m,input.bottom_separation_m,std::vector<uint8_t>(1)).valid);
+    input.stamp+=20000;input.pixel=true;input.pnp=false;input.detection.blue_over_green_ratio=1.4;
+    assert(worker.submit(input));const auto pixel=wait(worker,input.stamp);
+    assert(pixel->error.empty()&&!pixel->pixel.valid&&!pixel->pnp.valid&&!pixel->world_valid);
+  }
+#endif
   const auto input = request(1000000);
   const auto reference = detectArmorStrips(*input.image, input.camera, input.detection);
   VisionWorker synchronous(false), background;
