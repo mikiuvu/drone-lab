@@ -690,6 +690,7 @@ def main():
                     "param set EKF2_EV_POS_Z 0",
                     "param set COM_RC_IN_MODE 4",
                     "param set COM_OF_LOSS_T 0.5",
+                    "param set SDLOG_PROFILE 3",  # 默认话题及全速估计器回放输入。
                     "",
                 ]
             )
