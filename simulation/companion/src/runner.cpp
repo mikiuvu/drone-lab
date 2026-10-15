@@ -19,6 +19,7 @@
 #include "companion/vision_delay.hpp"
 #include "companion/flight_feedback.hpp"
 #include "companion/imu_attitude.hpp"
+#include "companion/imu_clock.hpp"
 #ifdef COMPANION_WITH_OPENCV
 #include "companion/rm_auto_aim.hpp"
 #endif
@@ -123,9 +124,40 @@ struct Options {
   double duration=0,takeoff_height=1.8;
   bool offboard=false,arm=false;
   int mission_vehicle=0;
+  std::string imu_clock="arrival";
   std::filesystem::path config="simulation/config.json",map="simulation/maps/calibration.json",runtime="simulation/runtime";
 };
-Options options(int argc,char**argv){Options o;for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"){std::cout<<"--vehicle N --config JSON --map JSON --runtime DIR --duration SECONDS [--offboard] [--arm] [--takeoff-height M] [--mavlink-local-port N] [--mavlink-remote-port N]\n";std::exit(0);}if(a=="--offboard"){o.offboard=true;continue;}if(a=="--arm"){o.arm=true;continue;}if(++i>=argc)throw std::runtime_error("missing value for "+a);std::string v=argv[i];if(a=="--vehicle")o.vehicle=std::stoi(v);else if(a=="--config")o.config=v;else if(a=="--map")o.map=v;else if(a=="--runtime")o.runtime=v;else if(a=="--duration")o.duration=std::stod(v);else if(a=="--takeoff-height")o.takeoff_height=std::stod(v);else if(a=="--mavlink-local-port")o.local=std::stoi(v);else if(a=="--mavlink-remote-port")o.remote=std::stoi(v);else throw std::runtime_error("unknown option "+a);}if(o.vehicle<0||o.vehicle>245||o.duration<0||o.takeoff_height<0.3||o.takeoff_height>3.0||o.arm&&!o.offboard)throw std::runtime_error("invalid CLI options");if(!o.local)o.local=14540+o.vehicle;if(!o.remote)o.remote=14580+o.vehicle;if(o.local<1024||o.local>65535||o.remote<1024||o.remote>65535)throw std::runtime_error("invalid UDP port");return o;}
+Options options(int argc,char**argv){
+  Options o;
+  for(int i=1;i<argc;++i){
+    std::string a=argv[i];
+    if(a=="--help"){
+      std::cout<<"--vehicle N --config JSON --map JSON --runtime DIR --duration SECONDS [--offboard] [--arm] [--takeoff-height M] [--mavlink-local-port N] [--mavlink-remote-port N] [--imu-clock arrival|gazebo]\n";
+      std::exit(0);
+    }
+    if(a=="--offboard"){o.offboard=true;continue;}
+    if(a=="--arm"){o.arm=true;continue;}
+    if(++i>=argc)throw std::runtime_error("missing value for "+a);
+    std::string v=argv[i];
+    if(a=="--vehicle")o.vehicle=std::stoi(v);
+    else if(a=="--config")o.config=v;
+    else if(a=="--map")o.map=v;
+    else if(a=="--runtime")o.runtime=v;
+    else if(a=="--duration")o.duration=std::stod(v);
+    else if(a=="--takeoff-height")o.takeoff_height=std::stod(v);
+    else if(a=="--mavlink-local-port")o.local=std::stoi(v);
+    else if(a=="--mavlink-remote-port")o.remote=std::stoi(v);
+    else if(a=="--imu-clock")o.imu_clock=v;
+    else throw std::runtime_error("unknown option "+a);
+  }
+  if(o.vehicle<0||o.vehicle>245||o.duration<0||o.takeoff_height<0.3||o.takeoff_height>3.0||o.arm&&!o.offboard)
+    throw std::runtime_error("invalid CLI options");
+  if(o.imu_clock!="arrival"&&o.imu_clock!="gazebo")throw std::runtime_error("invalid IMU clock domain");
+  if(!o.local)o.local=14540+o.vehicle;
+  if(!o.remote)o.remote=14580+o.vehicle;
+  if(o.local<1024||o.local>65535||o.remote<1024||o.remote>65535)throw std::runtime_error("invalid UDP port");
+  return o;
+}
 /**
  * @brief 合并地图与传感器配置，建立本机的初始估计和安装关系。
  * @param o 输入路径和机号，spawns 必须包含该机。
@@ -407,7 +439,9 @@ int main(int argc,char**argv){try{
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
   Eigen::Vector2d reliable_odometry_xy(config.initial_pose.x_m,config.initial_pose.y_m);
-  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double yaw=0;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,first_imu_sim=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
+  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double yaw=0;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
+  companion::ImuClockMapper imu_clock(o.imu_clock=="gazebo"?
+      companion::ImuClockDomain::Gazebo:companion::ImuClockDomain::FirstArrival);
   companion::ImuAttitudeHistory attitude_history;
   uint64_t latest_imu_boot_us=0,attitude_stamp_rejected=0,imu_stamp_rejected=0,imu_attitude_missing=0;
   uint64_t max_attitude_extrapolation_us=0,max_attitude_interpolation_us=0;
@@ -520,14 +554,14 @@ int main(int argc,char**argv){try{
         if((i.fields_updated&0x38)==0x38)body_rate=Eigen::Vector3d(i.xgyro,-i.ygyro,-i.zgyro);
         const auto timed_attitude=attitude_history.at(i.time_usec,body_rate);
         if(!timed_attitude){++imu_attitude_missing;continue;}
+        const auto mapped=imu_clock.map(i.time_usec,sim_us);
+        if(!mapped)continue;
         if(!first_imu){
-          estimator.reset(sim_us);first_imu=i.time_usec;first_imu_sim=sim_us;bias_start=Clock::now();
-          emit({{"kind","imu_clock_alignment"},{"sim_time_us",first_imu_sim},{"imu_boot_time_us",first_imu},
+          estimator.reset(*mapped);first_imu=i.time_usec;bias_start=Clock::now();
+          emit({{"kind","imu_clock_alignment"},{"sim_time_us",*mapped},{"imu_boot_time_us",first_imu},
+              {"clock_domain",o.imu_clock},{"observation_sim_time_us",sim_us},
               {"attitude_boot_time_us",attitude_history.latestTimeUs()}});
         }
-        // 把飞控 IMU 的时间增量映射到首包对应的仿真时刻，拒绝偏差过大的映射。
-        int64_t mapped=static_cast<int64_t>(first_imu_sim)+static_cast<int64_t>(i.time_usec)-static_cast<int64_t>(first_imu);
-        if(mapped<=0||std::llabs(mapped-static_cast<int64_t>(sim_us))>500000) continue;
         ++imu_attitude_counts[static_cast<std::size_t>(timed_attitude->mode)];
         if(timed_attitude->mode==companion::ImuAttitudeMode::Extrapolated)
           max_attitude_extrapolation_us=std::max(max_attitude_extrapolation_us,i.time_usec-timed_attitude->begin_us);
@@ -540,7 +574,7 @@ int main(int argc,char**argv){try{
         const double raw_yaw=std::atan2(attitude_rotation(1,0),attitude_rotation(0,0));
         if(!yaw_aligned){yaw_offset=companion::wrapAngle(config.initial_pose.yaw_rad-raw_yaw);yaw_aligned=true;}
         const double aligned_yaw=companion::wrapAngle(raw_yaw+yaw_offset);
-        companion::ImuSample sample; sample.sim_time_us=static_cast<uint64_t>(mapped); sample.attitude_valid=true;
+        companion::ImuSample sample; sample.sim_time_us=*mapped; sample.attitude_valid=true;
         sample.roll_flu_rad=roll_flu; sample.pitch_flu_rad=pitch_flu; sample.yaw_enu_rad=aligned_yaw;
         // 加速度计给的是比力：先 FRD→FLU，再旋到世界系并补重力，得到平移加速度。
         Eigen::Vector3d specific_flu(i.xacc,-i.yacc,-i.zacc);

@@ -61,9 +61,12 @@ class FlightFeedbackIOTest(unittest.TestCase):
             "--config", str(self.root / "config.json"), "--runtime", str(self.root),
             "--mavlink-local-port", str(self.runner_port),
             "--mavlink-remote-port", str(self.mav.getsockname()[1]),
+            "--imu-clock", "gazebo" if self._testMethodName ==
+            "test_gazebo_imu_clock_preserves_source_epoch" else "arrival",
         ], stdout=subprocess.DEVNULL, stderr=self.errors,
             env={**os.environ, "DRONE_RECORD_IMU_INPUT":
-                 "1" if self._testMethodName == "test_attitude_and_acceleration_share_imu_epoch" else "0"})
+                 "1" if self._testMethodName in ("test_attitude_and_acceleration_share_imu_epoch",
+                     "test_gazebo_imu_clock_preserves_source_epoch") else "0"})
         self.addCleanup(self.stop_runner)
         self.receive_status()
 
@@ -96,15 +99,15 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_landed()
         return self.receive_status(lambda row: row["landed"] and not row["armed"])
 
-    def send_sensors(self, stamp):
+    def send_sensors(self, stamp, observation_stamp=None):
         attitude = struct.pack("<Iffffff", stamp // 1000, 0, 0, 0, 0, 0, 0)
         self.mav.sendto(mavlink_packet(30, attitude, 39), ("127.0.0.1", self.runner_port))
         imu = struct.pack("<Q13fH", stamp, 0, 0, -9.80665, 0, 0, 0, 0, 0, 0, 1013.25, 0, 0, 20, 0xFFFF)
         self.mav.sendto(mavlink_packet(105, imu, 93), ("127.0.0.1", self.runner_port))
         for sample in [
             {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
-             "vehicle": 240, "sim_time_us": stamp, "z_world_m": 0.516},
-            {"schema": 1, "kind": "optical_flow", "vehicle": 240, "sim_time_us": stamp,
+             "vehicle": 240, "sim_time_us": observation_stamp or stamp, "z_world_m": 0.516},
+            {"schema": 1, "kind": "optical_flow", "vehicle": 240, "sim_time_us": observation_stamp or stamp,
              "vx_body_mps": 0, "vy_body_mps": 0, "quality": 1, "variance_m2s2": 0.001}]:
             self.mav.sendto(json.dumps(sample).encode("utf-8"), ("127.0.0.1", 16240))
 
@@ -249,6 +252,28 @@ class FlightFeedbackIOTest(unittest.TestCase):
         attitudes = [row for row in recorded_rows(self.root / "companion_240.jsonl")
                      if row.get("kind") == "attitude_input" and row["time_boot_ms"] == source // 1000]
         self.assertEqual(attitudes[-1]["rpy_frd_rad"], [0, 0, 0])
+
+    def test_gazebo_imu_clock_preserves_source_epoch(self):
+        self.grounded()
+        started = time.monotonic()
+        while time.monotonic() - started < 8.4:
+            self.send_heartbeat()
+            self.send_landed()
+            stamp = 1_000_000 + int((time.monotonic() - started) * 1e6)
+            self.send_sensors(stamp, stamp + 15_000)
+            time.sleep(0.01)
+        rows = recorded_rows(self.root / "companion_240.jsonl")
+        alignment = [row for row in rows if row.get("kind") == "imu_clock_alignment"]
+        self.assertEqual(len(alignment), 1)
+        first = alignment[0]
+        self.assertEqual(first["clock_domain"], "gazebo")
+        self.assertEqual(first["sim_time_us"], first["imu_boot_time_us"])
+        self.assertNotEqual(first["sim_time_us"], first["observation_sim_time_us"])
+        self.assertLessEqual(abs(first["sim_time_us"] - first["observation_sim_time_us"]), 500_000)
+        inputs = [row for row in rows if row.get("kind") == "imu_input" and
+                  row["time_usec"] == first["imu_boot_time_us"]]
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(inputs[0]["sim_time_us"], first["observation_sim_time_us"])
 
     def test_stale_heartbeat_cannot_be_refreshed_by_ground_packets(self):
         self.grounded()

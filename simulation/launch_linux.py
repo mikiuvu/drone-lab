@@ -806,6 +806,8 @@ def main():
                     run_dir,
                     "--duration",
                     "0",
+                    "--imu-clock",
+                    "gazebo",
                 ]
                 if args.fly:
                     command += ["--offboard", "--arm"]
