@@ -7,9 +7,6 @@ from pathlib import Path
 
 import numpy as np
 
-from summarize_recovery_ulog import load_segments, rows
-
-
 def latest(data, time_s):
     index = int(np.searchsorted(data["timestamp"], round(time_s * 1e6), side="right")) - 1
     if index < 0:
@@ -31,6 +28,8 @@ def blocked_seconds(data, key, start_s, end_s, blocked_value):
 
 
 def summarize(run, vehicle, paths):
+    from summarize_recovery_ulog import load_segments, rows
+
     companion = rows(run / f"companion_{vehicle}.jsonl")
     failure = next((row for row in companion if row.get("kind") == "unrecoverable"), None)
     if failure is None:
@@ -44,6 +43,8 @@ def summarize(run, vehicle, paths):
     if not len(land_indices):
         raise ValueError("Vehicle has no native landing confirmation after failure")
     end_s = int(land["timestamp"][land_indices[0]]) / 1e6
+    land_time = land["timestamp"].astype(np.float64) / 1e6
+    gate_gaps = np.diff(land_time)[(land_time[1:] >= start_s) & (land_time[:-1] <= end_s)]
 
     # 位置一致的发送/接收记录约束时钟差；接收时间差同时包含链路延迟。
     ev_time = ev["timestamp"].astype(np.float64) / 1e6
@@ -102,6 +103,7 @@ def summarize(run, vehicle, paths):
     velocity = np.stack([ev[f"velocity[{axis}]"][select] for axis in range(3)], axis=1)
     return {"run": str(run), "vehicle": vehicle, "failure_time_s": start_s, "native_landing_time_s": end_s,
         "failure_to_landing_s": end_s - start_s,
+        "native_gate_log_gap_max_s": float(np.max(gate_gaps)) if len(gate_gaps) else None,
         "clock_matching": {"anchors": anchors, "physical_time_shift_s": 0,
             "receive_offset_median_ms": float(np.median([row["receive_offset_ms"] for row in anchors])),
             "receive_offset_range_ms": [min(row["receive_offset_ms"] for row in anchors), max(row["receive_offset_ms"] for row in anchors)]},
