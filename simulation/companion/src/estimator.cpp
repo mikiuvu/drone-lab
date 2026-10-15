@@ -77,6 +77,12 @@ void Estimator::advanceTo(uint64_t now) {
   if(remain>2.0){ state_.covariance.diagonal().array()+=remain; state_.sim_time_us=now; held_acceleration_.setZero(); return; }
   while(remain>1e-8){ double dt=std::min(remain,0.02); Eigen::Vector3d a=fresh(last_imu_us_,100000)?held_acceleration_:Eigen::Vector3d::Zero(); Eigen::Vector3d p(state_.pose.x_m,state_.pose.y_m,state_.pose.z_m); p+=state_.velocity_enu_mps*dt+.5*a*dt*dt; state_.pose.x_m=p.x();state_.pose.y_m=p.y();state_.pose.z_m=p.z();state_.velocity_enu_mps+=a*dt; Eigen::Matrix<double,7,7> f=Eigen::Matrix<double,7,7>::Identity();f(0,4)=f(1,5)=f(2,6)=dt;Eigen::Matrix<double,7,7> q=Eigen::Matrix<double,7,7>::Zero();for(int i=0;i<3;i++){int v=4+i;q(i,i)=.25*dt*dt*dt/3;q(v,v)=.25*dt;q(i,v)=q(v,i)=.25*dt*dt/2;}q(3,3)=.003*dt;state_.covariance=f*state_.covariance*f.transpose()+q;remain-=dt;state_.sim_time_us+=static_cast<uint64_t>(std::llround(dt*1e6));} state_.sim_time_us=now;
 }
+double Estimator::yawAfterImu(const ImuSample& s) const {
+  if(!s.sim_time_us||s.sim_time_us<=last_imu_us_||!s.acceleration_enu_mps2.allFinite()||
+      !attitude_count_||!s.attitude_valid||!std::isfinite(s.yaw_enu_rad)||
+      !std::isfinite(s.roll_flu_rad)||!std::isfinite(s.pitch_flu_rad))return state_.pose.yaw_rad;
+  return wrapAngle(state_.pose.yaw_rad+wrapAngle(s.yaw_enu_rad-last_imu_yaw_));
+}
 /**
  * @brief 接收 IMU 姿态和 ENU 加速度，并交给下一次时间推进使用。
  * @note 航向只累加相邻 IMU 样本的包角差；加速度在两次样本之间零阶保持，超过 100 ms
@@ -85,9 +91,10 @@ void Estimator::advanceTo(uint64_t now) {
 void Estimator::predict(const ImuSample& s) {
   // 航向只累加相邻 IMU 样本的包角差；加速度零阶保持，超过 100 ms 未更新则不再使用。
   if(!s.sim_time_us||s.sim_time_us<=last_imu_us_||!s.acceleration_enu_mps2.allFinite()) return;
+  const double yaw_after_imu=yawAfterImu(s);
   advanceTo(s.sim_time_us);
   if(s.attitude_valid && std::isfinite(s.yaw_enu_rad) && std::isfinite(s.roll_flu_rad) && std::isfinite(s.pitch_flu_rad)){
-    if(attitude_count_)state_.pose.yaw_rad=wrapAngle(state_.pose.yaw_rad+wrapAngle(s.yaw_enu_rad-last_imu_yaw_));
+    state_.pose.yaw_rad=yaw_after_imu;
     last_imu_yaw_=s.yaw_enu_rad;state_.pose.roll_rad=s.roll_flu_rad;state_.pose.pitch_rad=s.pitch_flu_rad;
     const auto orientation=Eigen::Quaterniond(Eigen::AngleAxisd(s.yaw_enu_rad,Eigen::Vector3d::UnitZ())*
         Eigen::AngleAxisd(s.pitch_flu_rad,Eigen::Vector3d::UnitY())*Eigen::AngleAxisd(s.roll_flu_rad,Eigen::Vector3d::UnitX()));

@@ -36,6 +36,10 @@ class Estimator {
  * @param sample ENU 加速度与姿态样本，重复 IMU 时间戳被忽略。
  */
   void predict(const ImuSample& sample);
+  /** @brief 返回接收本条有效 IMU 后的地图航向，保留已有地图修正；不改变状态。
+   * @note 首个有效姿态建立增量参考。无效或重复样本沿用当前航向。
+   */
+  double yawAfterImu(const ImuSample& sample) const;
   /**
    * @brief 在确认着陆且已解除武装时清除惯性速度和保持加速度。
    * @param now_us 可选仿真时间 us；早于当前状态时忽略，0 表示不推进时间。

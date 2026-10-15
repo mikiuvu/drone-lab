@@ -476,7 +476,7 @@ int main(int argc,char**argv){try{
         sample.roll_flu_rad=roll_flu; sample.pitch_flu_rad=pitch_flu; sample.yaw_enu_rad=aligned_yaw;
         // 加速度计给的是比力：先 FRD→FLU，再旋到世界系并补重力，得到平移加速度。
         Eigen::Vector3d specific_flu(i.xacc,-i.yacc,-i.zacc);
-        const double acceleration_yaw=estimator.estimate().pose.yaw_rad;
+        const double acceleration_yaw=estimator.yawAfterImu(sample);
         Eigen::Vector3d raw_linear=rotation(roll_flu,pitch_flu,acceleration_yaw)*specific_flu+Eigen::Vector3d(0,0,-9.80665);
         // 冲击识别：必须是当前撞击机、接近基地、超过阶段切换屏蔽期并出现减速度。
         // 这仍是传感器判断；Gazebo 接触日志由独立评估器核验，未作为这里的输入。

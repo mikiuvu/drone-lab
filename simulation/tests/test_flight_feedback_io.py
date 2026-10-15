@@ -1,6 +1,7 @@
 """Exercise flight-feedback expiry through the runner's loopback MAVLink input."""
 
 import json
+import math
 import os
 import signal
 import socket
@@ -118,21 +119,21 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_landed()
         self.receive_status(lambda row: row["landed"])
 
-    def test_attitude_is_sampled_at_imu_time_and_old_attitude_is_ignored(self):
+    def test_attitude_and_acceleration_share_imu_epoch(self):
         self.grounded()
         started = time.monotonic()
-        while time.monotonic() - started < 8.3:
+        while time.monotonic() - started < 9.2:
             self.send_heartbeat()
             self.send_landed()
             stamp = 1_000_000 + int((time.monotonic() - started) * 1e6)
             self.send_sensors(stamp)
-            time.sleep(0.02)
+            time.sleep(0.01)
         source = (stamp // 1000 + 100) * 1000
 
-        def send_sample(imu_stamp, attitude_stamp, yaw):
+        def send_sample(imu_stamp, attitude_stamp, yaw, acceleration_x=0):
             attitude = struct.pack("<Iffffff", attitude_stamp // 1000, 0, 0, yaw, 0, 0, 1)
             self.mav.sendto(mavlink_packet(30, attitude, 39), ("127.0.0.1", self.runner_port))
-            imu = struct.pack("<Q13fH", imu_stamp, 0, 0, -9.80665, 0, 0, 1, 0, 0, 0,
+            imu = struct.pack("<Q13fH", imu_stamp, acceleration_x, 0, -9.80665, 0, 0, 1, 0, 0, 0,
                               1013.25, 0, 0, 20, 0xFFFF)
             self.mav.sendto(mavlink_packet(105, imu, 93), ("127.0.0.1", self.runner_port))
             height = {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
@@ -145,7 +146,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
                 estimates = [row for row in recorded_rows(self.root / "companion_240.jsonl")
                              if row.get("kind") == "estimate" and row["sim_time_us"] >= source]
                 if estimates and abs(estimates[-1]["yaw_rad"] - expected) < 1e-6:
-                    return
+                    return estimates[-1]
                 time.sleep(0.01)
             self.fail(f"Expected yaw {expected} at IMU exposure, latest: {estimates[-1] if estimates else None}")
 
@@ -153,6 +154,29 @@ class FlightFeedbackIOTest(unittest.TestCase):
         expect_yaw(-0.02)
         send_sample(source + 30_000, source - 1000, 1)
         expect_yaw(-0.03)
+        self.send_heartbeat(armed=True)
+        self.send_landed(on_ground=False)
+        self.receive_status(lambda row: row["armed"] and not row["landed"])
+        send_sample(source + 40_000, source, 0, acceleration_x=1)
+        before = expect_yaw(-0.04)
+        target_stamp = before["sim_time_us"] + 50_000
+        height = {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
+                  "vehicle": 240, "sim_time_us": target_stamp, "z_world_m": 0.516}
+        self.mav.sendto(json.dumps(height).encode("utf-8"), ("127.0.0.1", 16240))
+        deadline = time.monotonic() + 1
+        after = None
+        while time.monotonic() < deadline:
+            after = next((row for row in reversed(recorded_rows(self.root / "companion_240.jsonl"))
+                          if row.get("kind") == "estimate" and row["sim_time_us"] >= target_stamp), None)
+            if after:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(after)
+        delta_x, delta_y = after["vx_mps"] - before["vx_mps"], after["vy_mps"] - before["vy_mps"]
+        self.assertAlmostEqual(math.hypot(delta_x, delta_y), 0.05, delta=1e-6)
+        self.assertAlmostEqual(delta_y, math.sin(-0.04) * 0.05, delta=1e-6,
+                               msg="IMU acceleration used previous yaw")
+        self.assertAlmostEqual(delta_x, math.cos(-0.04) * 0.05, delta=1e-6)
 
     def test_stale_heartbeat_cannot_be_refreshed_by_ground_packets(self):
         self.grounded()
