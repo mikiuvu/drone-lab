@@ -126,6 +126,117 @@ void flowYawLinearization() {
     assert((Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double,7,7>>(after.covariance).eigenvalues().minCoeff() >= -1e-12));
   }
 }
+
+void delayedFlowUsesExposureAttitude() {
+  using namespace companion;
+  const auto rotate=[](double roll,double pitch,double yaw) {
+    return (Eigen::AngleAxisd(yaw,Eigen::Vector3d::UnitZ())*
+        Eigen::AngleAxisd(pitch,Eigen::Vector3d::UnitY())*
+        Eigen::AngleAxisd(roll,Eigen::Vector3d::UnitX())).toRotationMatrix();
+  };
+  for (const double turn : {-.8, .8}) {
+    auto c=config(31);
+    c.initial_pose.yaw_rad=.4;
+    c.initial_pose.roll_rad=.2;
+    c.initial_pose.pitch_rad=-.15;
+    c.initial_covariance(3,3)=1e-12;
+    Estimator estimator(c);
+    const Eigen::Vector3d initial_body=rotate(.2,-.15,.4).transpose()*Eigen::Vector3d(.6,-.3,0);
+    assert(estimator.fuseOpticalFlow({900000,initial_body.x(),initial_body.y(),1,.0001}).accepted);
+    ImuSample imu;
+    imu.sim_time_us=1000000;imu.attitude_valid=true;
+    imu.yaw_enu_rad=-.7;imu.roll_flu_rad=.2;imu.pitch_flu_rad=-.15;
+    estimator.predict(imu);
+    imu.sim_time_us=1100000;imu.yaw_enu_rad+=turn;
+    estimator.predict(imu);
+    const auto before=estimator.estimate();
+    // Raw IMU yaw has a different origin; the known map yaw at mid-exposure is .4+turn/2.
+    const Eigen::Vector3d exposure_body=rotate(.2,-.15,.4+turn*.5).transpose()*before.velocity_enu_mps;
+    const auto fused=estimator.fuseOpticalFlow({1050000,exposure_body.x(),exposure_body.y(),1,.0001});
+    assert(fused.accepted);
+    assert(fused.innovation_norm<1e-9);
+    assert((estimator.estimate().velocity_enu_mps-before.velocity_enu_mps).norm()<1e-9);
+    assert(std::abs(wrapAngle(estimator.estimate().pose.yaw_rad-before.pose.yaw_rad))<1e-12);
+    assert(estimator.fuseOpticalFlow({1050000,0,0,1,.0001}).stale);
+  }
+}
+
+void delayedFlowArbitraryRotation() {
+  using namespace companion;
+  const Eigen::Quaterniond origin(Eigen::AngleAxisd(-.7,Eigen::Vector3d::UnitZ())*
+      Eigen::AngleAxisd(-.15,Eigen::Vector3d::UnitY())*Eigen::AngleAxisd(.2,Eigen::Vector3d::UnitX()));
+  for (const auto axis : {Eigen::Vector3d(1,0,0),Eigen::Vector3d(0,1,0),Eigen::Vector3d(1,2,-1).normalized().eval()}) {
+    for (double map_offset : {1.1,-2.0}) {
+      auto c=config(32);c.initial_pose.yaw_rad=-.7+map_offset;
+      c.initial_pose.roll_rad=.2;c.initial_pose.pitch_rad=-.15;c.initial_covariance(3,3)=.04;
+      Estimator estimator(c);
+      const Eigen::Matrix3d map_rotation=Eigen::AngleAxisd(map_offset,Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      const Eigen::Vector3d seed=(map_rotation*origin.toRotationMatrix()).transpose()*Eigen::Vector3d(.7,-.4,0);
+      assert(estimator.fuseOpticalFlow({900000,seed.x(),seed.y(),1,.0001}).accepted);
+      for (int i=0;i<=10;++i) {
+        const Eigen::Matrix3d r=(Eigen::Quaterniond(Eigen::AngleAxisd(i*.08,axis))*origin).toRotationMatrix();
+        ImuSample sample;sample.sim_time_us=1000000+i*20000;sample.attitude_valid=true;
+        sample.roll_flu_rad=std::atan2(r(2,1),r(2,2));
+        sample.pitch_flu_rad=std::atan2(-r(2,0),std::hypot(r(0,0),r(1,0)));
+        sample.yaw_enu_rad=std::atan2(r(1,0),r(0,0));
+        estimator.predict(sample);
+      }
+      const auto before=estimator.estimate();
+      Estimator perturbed=estimator;
+      const Eigen::Quaterniond exposure=Eigen::Quaterniond(Eigen::AngleAxisd(.44,axis))*origin;
+      const Eigen::Vector3d body=(map_rotation*exposure.toRotationMatrix()).transpose()*before.velocity_enu_mps;
+      const auto report=estimator.fuseOpticalFlow({1110000,body.x(),body.y(),1,.0001});
+      assert(report.accepted&&report.innovation_norm<1e-9);
+      const auto after=estimator.estimate();
+      assert((after.velocity_enu_mps-before.velocity_enu_mps).norm()<1e-9);
+      assert((after.covariance-after.covariance.transpose()).norm()<1e-12);
+      assert((Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double,7,7>>(after.covariance).eigenvalues().minCoeff()>=-1e-12));
+      const Eigen::Matrix3d exposure_rotation=map_rotation*exposure.toRotationMatrix();
+      const auto observation=[&](double yaw_delta,const Eigen::Vector3d& velocity)->Eigen::Vector2d {
+        const Eigen::Matrix3d r=Eigen::AngleAxisd(yaw_delta,Eigen::Vector3d::UnitZ()).toRotationMatrix()*exposure_rotation;
+        return (r.transpose()*velocity).head<2>();
+      };
+      constexpr double epsilon=1e-6;
+      Eigen::Matrix<double,2,7> jacobian=Eigen::Matrix<double,2,7>::Zero();
+      jacobian.col(3)=(observation(epsilon,before.velocity_enu_mps)-observation(-epsilon,before.velocity_enu_mps))/(2*epsilon);
+      for(int component=0;component<3;++component) {
+        Eigen::Vector3d delta=Eigen::Vector3d::Zero();delta(component)=epsilon;
+        jacobian.col(4+component)=(observation(0,before.velocity_enu_mps+delta)-observation(0,before.velocity_enu_mps-delta))/(2*epsilon);
+      }
+      const Eigen::Vector2d residual(.03,-.02);
+      const Eigen::Matrix2d noise=Eigen::Matrix2d::Identity()*.0001;
+      const Eigen::Matrix<double,7,2> gain=before.covariance*jacobian.transpose()*
+          (jacobian*before.covariance*jacobian.transpose()+noise).inverse();
+      const Eigen::Matrix<double,7,1> correction=gain*residual;
+      const Eigen::Matrix<double,7,7> a=Eigen::Matrix<double,7,7>::Identity()-gain*jacobian;
+      const Eigen::Matrix<double,7,7> covariance=a*before.covariance*a.transpose()+gain*noise*gain.transpose();
+      assert(perturbed.fuseOpticalFlow({1110000,body.x()+residual.x(),body.y()+residual.y(),1,.0001}).accepted);
+      const auto corrected=perturbed.estimate();
+      assert((corrected.velocity_enu_mps-before.velocity_enu_mps-correction.tail<3>()).norm()<1e-8);
+      assert(std::abs(wrapAngle(corrected.pose.yaw_rad-before.pose.yaw_rad)-correction(3))<1e-8);
+      assert((corrected.covariance-covariance).norm()<1e-8);
+    }
+  }
+}
+
+void flowHistoryCoverage() {
+  using namespace companion;
+  for (bool before_history : {false,true}) {
+    Estimator estimator(config(33));
+    ImuSample sample;sample.attitude_valid=true;
+    sample.sim_time_us=before_history?1100000:1000000;
+    estimator.predict(sample);
+    sample.sim_time_us=before_history?1200000:1100001;
+    estimator.predict(sample);
+    const auto before=estimator.estimate();
+    const auto rejected=estimator.fuseOpticalFlow({1050000,1,0,1,.0001});
+    assert(!rejected.accepted&&rejected.stale&&rejected.reason=="flow_attitude_history_missing");
+    assert((estimator.estimate().velocity_enu_mps-before.velocity_enu_mps).norm()==0);
+    assert((estimator.estimate().covariance-before.covariance).norm()==0);
+    assert(estimator.fuseOpticalFlow({sample.sim_time_us,0,0,1,.0001}).accepted);
+    assert(estimator.fuseOpticalFlow({sample.sim_time_us+1000,0,0,1,.0001}).accepted);
+  }
+}
 }
 
 int main() {
@@ -209,5 +320,8 @@ int main() {
   }
   structuralReferencePropagation();
   flowYawLinearization();
+  delayedFlowUsesExposureAttitude();
+  delayedFlowArbitraryRotation();
+  flowHistoryCoverage();
   return 0;
 }

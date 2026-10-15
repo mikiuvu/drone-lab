@@ -66,6 +66,9 @@ class Estimator {
  * @brief 用机体 FLU 前向、左向速度约束世界系速度。
  * @param sample 带正方差的测量，质量至少 0.5 才融合。
  * @return 时效、质量检查及融合结果。
+ * @note 机体投影使用采样时刻的历史姿态并保留当前地图航向修正。
+ *       采样早于姿态历史或插值间隔超过 100 ms 时拒绝；最新姿态之后零阶保持。
+ *       无 IMU 历史时使用状态姿态；速度更新当前状态，不回滚或重放过去的速度。
  */
   FusionReport fuseOpticalFlow(const FlowSample& sample);
 /**
@@ -117,7 +120,7 @@ class Estimator {
   bool lineObservation(const TofFrame&, int, const Pose3&, const Eigen::Matrix3d&, LineObservation&) const;
   bool terrainObservation(const TofFrame&, int, const Pose3&, const Eigen::Matrix3d&, LineObservation&) const;
   // 将曝光时机体向量转到最新 IMU 机体系；无姿态输入时使用固定姿态模型。
-  std::optional<Eigen::Matrix3d> tofAttitudeDelta(uint64_t stamp) const;
+  std::optional<Eigen::Matrix3d> attitudeDelta(uint64_t stamp) const;
   // 通用 EKF 更新：H 为 M×7，残差为 M×1，测量噪声协方差为 M×M。
   void update(const Eigen::MatrixXd&, const Eigen::VectorXd&, const Eigen::MatrixXd&);
   bool fresh(uint64_t stamp, uint64_t timeout) const;

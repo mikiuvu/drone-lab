@@ -175,7 +175,7 @@ void Estimator::update(const Eigen::MatrixXd&h,const Eigen::VectorXd&r,const Eig
   const Eigen::Matrix<double,7,7> a=Eigen::Matrix<double,7,7>::Identity()-k*h;
   state_.covariance=a*p*a.transpose()+k*rc*k.transpose();state_.covariance=.5*(state_.covariance+state_.covariance.transpose()).eval();
 }
-std::optional<Eigen::Matrix3d> Estimator::tofAttitudeDelta(uint64_t stamp) const {
+std::optional<Eigen::Matrix3d> Estimator::attitudeDelta(uint64_t stamp) const {
   if(!attitude_count_)return Eigen::Matrix3d::Identity();
   const auto at=[&](std::size_t i)->const StampedAttitude&{
     return attitude_history_[(attitude_begin_+i)%attitude_history_.size()];
@@ -214,7 +214,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     if(cached.sensor_index<0||!fresh(cached.sim_time_us,config_.tof_timeout_us)||
         cached.sim_time_us<=assimilated_tof_us_[cached.sensor_index])continue;
     const auto index=cached.sensor_index;
-    attitude_deltas[index]=tofAttitudeDelta(cached.sim_time_us);
+    attitude_deltas[index]=attitudeDelta(cached.sim_time_us);
     if(!attitude_deltas[index]){missing_attitude=true;continue;}
     exposure_ready=true;rotated[index]=!attitude_deltas[index]->isIdentity(0);
   }
@@ -342,7 +342,11 @@ FusionReport Estimator::fuseOpticalFlow(const FlowSample& sample) {
   if (sample.quality < 0.5 || !fresh(sample.sim_time_us, config_.flow_timeout_us)) {
     report.gated=true; report.reason="flow_quality_gate"; return report;
   }
-  const Eigen::Matrix3d r=rotation(state_.pose.roll_rad,state_.pose.pitch_rad,state_.pose.yaw_rad);
+  const auto delta=attitudeDelta(sample.sim_time_us);
+  if (!delta) {
+    report.stale=true; report.reason="flow_attitude_history_missing"; return report;
+  }
+  const Eigen::Matrix3d r=rotation(state_.pose.roll_rad,state_.pose.pitch_rad,state_.pose.yaw_rad)*(*delta);
   const Eigen::Vector2d measured(sample.vx_body_mps,sample.vy_body_mps);
   Eigen::Matrix<double,2,7> h=Eigen::Matrix<double,2,7>::Zero();
   // v_body_xy=(Rᵀ*v_enu).head<2>()；包含 roll/pitch 的旋转让 vz 也能影响机体 XY。
