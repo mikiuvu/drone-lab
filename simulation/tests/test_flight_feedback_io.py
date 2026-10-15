@@ -328,6 +328,19 @@ class FlightFeedbackIOTest(unittest.TestCase):
         attitude = struct.pack("<Iffffff", stamp // 1000, roll, pitch, 0, 0, 0, 0)
         self.mav.sendto(mavlink_packet(30, attitude, 39, system), ("127.0.0.1", self.runner_port))
 
+    def processed_input_rows(self):
+        marker = getattr(self, "input_marker", 65000) + 1
+        self.input_marker = marker
+        self.mav.sendto(mavlink_packet(77, struct.pack("<HB", marker, 0), 143),
+                        ("127.0.0.1", self.runner_port))
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            rows = recorded_rows(self.root / "companion_240.jsonl")
+            if any(row.get("kind") == "command_ack" and row["command"] == marker for row in rows):
+                return rows
+            time.sleep(0.005)
+        self.fail("Runner did not process the input marker")
+
     def test_sustained_inversion_requests_land_and_waits_for_native_ground(self):
         self.grounded()
         self.send_heartbeat(armed=True, main_mode=2)
@@ -345,7 +358,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
 
         stream(0.3, True)
         stream(0.1, False)
-        self.assertFalse(self.receive_status()["unrecoverable"])
+        self.assertFalse(any(row.get("kind") == "unrecoverable" for row in self.processed_input_rows()))
         stream(0.7, True)
         row = self.receive_status(lambda row: row["unrecoverable"], timeout=0.5)
         self.assertFalse(row["native_failsafe_latched"])
@@ -377,7 +390,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
             self.send_heartbeat(armed=True, main_mode=2)
             self.send_attitude(2_000_000, roll=math.pi)
             time.sleep(0.02)
-        self.assertFalse(self.receive_status()["unrecoverable"])
+        self.assertFalse(any(row.get("kind") == "unrecoverable" for row in self.processed_input_rows()))
 
     def test_buffered_inverted_history_cannot_replace_live_duration(self):
         self.grounded()
@@ -389,9 +402,9 @@ class FlightFeedbackIOTest(unittest.TestCase):
         while time.monotonic() < deadline:
             self.send_heartbeat(armed=True, main_mode=2)
             time.sleep(0.03)
-        self.assertFalse(self.receive_status()["unrecoverable"])
+        self.assertFalse(any(row.get("kind") == "unrecoverable" for row in self.processed_input_rows()))
         self.send_attitude(3_000_000)
-        self.assertFalse(self.receive_status()["unrecoverable"])
+        self.assertFalse(any(row.get("kind") == "unrecoverable" for row in self.processed_input_rows()))
 
     def test_armed_feedback_gap_latches_even_when_queued_heartbeat_is_healthy(self):
         self.grounded()
