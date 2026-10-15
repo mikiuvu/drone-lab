@@ -17,6 +17,14 @@ struct GuideObservation {
   double x_px{0}, y_px{0};
   int area{0}, candidates{0};
 };
+/** @brief 两条检测链的独立前景掩码，按行存储；strips 为 0/1，pnp 为 0/255。 */
+struct ArmorColorMasks {
+  std::vector<uint8_t> strips,pnp;
+};
+/** @brief 单次 RGB 扫描生成灯条颜色配置与固定 PnP 蓝色门限对应的掩码。
+ * @note 非法颜色门限或配对门限抛出 invalid_argument；无效图像返回空掩码。
+ */
+ArmorColorMasks classifyArmorPixels(const PpmImage& image,const ArmorDetectionConfig& detection);
 /** @brief 世界点 m 及其对曝光状态 [x,y,z,yaw] 的 3×4 雅可比。 */
 struct WorldPointProjection {
   Eigen::Vector3d position{Eigen::Vector3d::Zero()};
@@ -66,6 +74,11 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
  */
 ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& config,
                                    const ArmorDetectionConfig& detection);
+/** @brief 使用预分类前景并接管掩码存储；非零表示前景，尺寸须等于图像像素数。
+ * @note 掩码应对应 detection 的颜色门限；尺寸不符时返回无效观测。
+ */
+ArmorObservation detectArmorStrips(const PpmImage& image,const CameraConfig& config,
+    const ArmorDetectionConfig& detection,std::vector<uint8_t> mask);
 
 /**
  * @brief 从相机角误差、轴向深度与曝光时间估计相对横向运动，生成 FLU 速度参考。

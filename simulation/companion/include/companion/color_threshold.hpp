@@ -16,4 +16,10 @@ constexpr std::array<uint16_t,256> colorThresholds(double ratio){
   }
   return result;
 }
+constexpr auto kPnpRedThresholds=colorThresholds(1.4);
+constexpr auto kPnpGreenThresholds=colorThresholds(1.2);
+/** @brief PnP 蓝色前景：B≥120 且严格超过 R/G 的固定比例。 */
+constexpr bool pnpBluePixel(uint8_t r,uint8_t g,uint8_t b){
+  return b>=120&&b>=kPnpRedThresholds[r]&&b>=kPnpGreenThresholds[g];
+}
 }

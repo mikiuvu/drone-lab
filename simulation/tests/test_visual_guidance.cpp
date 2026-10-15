@@ -93,6 +93,53 @@ void colorAndPixelGeometry() {
   require(!detectArmorStrips(frame, camera(), blue).valid, "configurable blue threshold");
 }
 
+void sharedColorMasks(){
+  PpmImage frame;frame.width=frame.height=256;frame.rgb.resize(256*256*3);
+  for(int mode=0;mode<4;++mode){
+    ArmorDetectionConfig detection;
+    if(mode){detection.enemy_color=ArmorColor::Blue;}
+    if(mode==2){detection.min_blue_channel=0;detection.blue_over_red_ratio=1.8;detection.blue_over_green_ratio=2.3;}
+    if(mode==3){detection.min_blue_channel=120;detection.blue_over_red_ratio=1.4;detection.blue_over_green_ratio=1.2;}
+    for(int b=0;b<256;++b){
+      if(mode>=2&&b!=0&&b!=1&&b!=119&&b!=120&&b!=159&&b!=160&&b!=200&&b!=254&&b!=255)continue;
+      for(int g=0;g<256;++g)for(int r=0;r<256;++r){
+        const size_t i=g*256+r;frame.rgb[i*3]=r;frame.rgb[i*3+1]=g;frame.rgb[i*3+2]=b;
+      }
+      const auto masks=classifyArmorPixels(frame,detection);
+      require(masks.strips.size()==65536&&masks.pnp.size()==65536,"shared mask dimensions");
+      for(int g=0;g<256;++g)for(int r=0;r<256;++r){
+        const size_t i=g*256+r;
+        const bool blue=b>=detection.min_blue_channel&&b>detection.blue_over_red_ratio*r&&b>detection.blue_over_green_ratio*g;
+        const int maximum=std::max({r,g,b}),minimum=std::min({r,g,b});
+        const bool bright=(r>=160&&r>1.6*g&&r>1.4*b)||(b>=160&&b>1.4*g&&b>1.4*r)||(maximum>=220&&maximum-minimum<=70);
+        const bool pnp=b>=120&&b>1.4*r&&b>1.2*g;
+        require(masks.strips[i]==(mode?blue:bright),"shared pixel mask matches scalar RGB criterion");
+        require(masks.pnp[i]==(pnp?255:0),"shared PnP mask preserves independent RGB criterion");
+      }
+    }
+  }
+  ArmorDetectionConfig detection;detection.enemy_color=ArmorColor::Blue;
+  require(classifyArmorPixels({},detection).strips.empty(),"invalid image has no mask");
+  auto target=image();strip(target,40,40,59,10,20,230);strip(target,80,40,59,10,20,230);
+  const auto original=target.rgb;
+  auto masks=classifyArmorPixels(target,detection);
+  const auto reference=detectArmorStrips(target,camera(),detection);
+  const auto combined=detectArmorStrips(target,camera(),detection,std::move(masks.strips));
+  require(reference.valid&&combined.valid&&reference.range_m==combined.range_m&&
+      reference.centroid_x_px==combined.centroid_x_px&&reference.bright_pixels==combined.bright_pixels,
+      "preclassified mask preserves strip geometry");
+  require(target.rgb==original,"mask consumers preserve RGB image");
+  require(!detectArmorStrips(target,camera(),detection,std::vector<uint8_t>(1)).valid,"wrong mask size rejected");
+  for(int invalid=0;invalid<3;++invalid){
+    auto bad=detection;
+    if(invalid==0)bad.blue_over_red_ratio=1;
+    if(invalid==1)bad.min_blue_channel=-1;
+    if(invalid==2)bad.max_pair_aspect=std::numeric_limits<double>::quiet_NaN();
+    bool rejected=false;try{classifyArmorPixels(target,bad);}catch(const std::invalid_argument&){rejected=true;}
+    require(rejected,"shared classification validates configuration");
+  }
+}
+
 void lateralMotionAndLimits() {
   VisualGuidanceConfig config;
   config.velocity_filter_alpha = 1.0;
@@ -286,6 +333,7 @@ int main() {
       require(std::abs(accepted.range_m - .135 * 100 / 46) < 1e-9, "inclined pair range");
     }
     colorAndPixelGeometry();
+    sharedColorMasks();
     projectionCovariance();
     {
       auto frame=image();

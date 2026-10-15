@@ -50,18 +50,17 @@ struct Light {
   double width;
 };
 
-std::vector<Light> findLights(const PpmImage& image, bool trapezoid) {
-  cv::Mat mask(image.height, image.width, CV_8UC1);
-  static constexpr auto red=detail::colorThresholds(1.4);
-  static constexpr auto green=detail::colorThresholds(1.2);
-  for (int y = 0; y < image.height; ++y) {
-    auto* row = mask.ptr<uint8_t>(y);
-    for (int x = 0; x < image.width; ++x) {
-      const size_t p = (static_cast<size_t>(y) * image.width + x) * 3;
-      const int r = image.rgb[p], g = image.rgb[p + 1], b = image.rgb[p + 2];
-      row[x] = b >= 120 && b >= red[r] && b >= green[g] ? 255 : 0;
-    }
-  }
+bool validPnpInput(const PpmImage& image,const CameraConfig& camera,double strip_height_m){
+  return image.width>0&&image.height>0&&
+      image.rgb.size()==static_cast<size_t>(image.width)*static_cast<size_t>(image.height)*3&&
+      std::isfinite(camera.fx_px)&&std::isfinite(camera.fy_px)&&
+      std::isfinite(camera.cx_px)&&std::isfinite(camera.cy_px)&&
+      std::isfinite(camera.strip_center_separation_m)&&std::isfinite(strip_height_m)&&
+      camera.fx_px>0&&camera.fy_px>0&&camera.strip_center_separation_m>0&&strip_height_m>0;
+}
+
+std::vector<Light> findLights(const PpmImage& image,bool trapezoid,std::vector<uint8_t> pixels) {
+  cv::Mat mask(image.height,image.width,CV_8UC1,pixels.data());
   std::vector<std::vector<cv::Point>> contours;
   cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
   std::vector<Light> lights;
@@ -88,10 +87,7 @@ std::vector<Light> findLights(const PpmImage& image, bool trapezoid) {
     if(trapezoid){
       std::vector<cv::Point> polygon;
       cv::approxPolyDP(contour,polygon,.025*cv::arcLength(contour,true),true);
-      // 近距时灯条轮廓不再是严格四边形，approxPolyDP 会给出 3 或 5 个顶点——实测在
-      // 接触阶段的真实帧里约 12.5% 的轮廓如此。旧实现直接丢弃该灯条，两条中丢一条就
-      // 没有配对、整帧 PnP 失锁。顶点数不为 4 时保留上面 minAreaRect 给出的中心线端点：
-      // 对透视梯形略差，但仍可参与配对和测距。
+      // 四顶点梯形使用上下边中点；其他轮廓保留最小外接矩形的中心线端点。
       if(polygon.size()==4){
         std::sort(polygon.begin(),polygon.end(),[](auto p,auto q){return p.y<q.y;});
         a=(cv::Point2f(polygon[0])+cv::Point2f(polygon[1]))*.5F;
@@ -190,15 +186,20 @@ RmArmorDetection solvePair(const Light& left, const Light& right,
 
 RmArmorDetection detectRmArmor(const PpmImage& image, const CameraConfig& camera,
                                double strip_height_m, double bottom_separation_m) {
+  if(!validPnpInput(image,camera,strip_height_m))return {};
+  std::vector<uint8_t> mask(static_cast<size_t>(image.width)*image.height);
+  for(size_t i=0;i<mask.size();++i){
+    const auto* rgb=image.rgb.data()+i*3;
+    mask[i]=detail::pnpBluePixel(rgb[0],rgb[1],rgb[2])?255:0;
+  }
+  return detectRmArmor(image,camera,strip_height_m,bottom_separation_m,std::move(mask));
+}
+
+RmArmorDetection detectRmArmor(const PpmImage& image,const CameraConfig& camera,
+    double strip_height_m,double bottom_separation_m,std::vector<uint8_t> mask){
   RmArmorDetection result;
-  if (image.width <= 0 || image.height <= 0 ||
-      image.rgb.size() != static_cast<size_t>(image.width) * static_cast<size_t>(image.height) * 3 ||
-      !std::isfinite(camera.fx_px) || !std::isfinite(camera.fy_px) ||
-      !std::isfinite(camera.cx_px) || !std::isfinite(camera.cy_px) ||
-      !std::isfinite(camera.strip_center_separation_m) || !std::isfinite(strip_height_m) ||
-      camera.fx_px <= 0 || camera.fy_px <= 0 || camera.strip_center_separation_m <= 0 ||
-      strip_height_m <= 0) return result;
-  const auto lights = findLights(image,bottom_separation_m>0);
+  if(!validPnpInput(image,camera,strip_height_m)||mask.size()!=static_cast<size_t>(image.width)*image.height)return result;
+  const auto lights = findLights(image,bottom_separation_m>0,std::move(mask));
   double best_score = 0;
   for (size_t i = 0; i < lights.size(); ++i) {
     for (size_t j = i + 1; j < lights.size(); ++j) {

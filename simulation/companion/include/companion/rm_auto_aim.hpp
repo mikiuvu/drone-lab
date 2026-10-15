@@ -2,6 +2,7 @@
 
 #include <array>
 #include <limits>
+#include <vector>
 
 #include "companion/types.hpp"
 
@@ -28,5 +29,10 @@ struct RmArmorDetection {
 RmArmorDetection detectRmArmor(const PpmImage& image, const CameraConfig& camera,
                                double strip_height_m = 0.055,
                                double bottom_separation_m = 0.0);
+/** @brief 使用固定 PnP 蓝色门限的预分类前景并接管掩码存储。
+ * @note 非零表示前景；尺寸须等于图像像素数，否则返回无效检测。
+ */
+RmArmorDetection detectRmArmor(const PpmImage& image,const CameraConfig& camera,
+    double strip_height_m,double bottom_separation_m,std::vector<uint8_t> mask);
 
 }  // namespace companion

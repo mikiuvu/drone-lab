@@ -51,14 +51,18 @@ bool readToken(std::istream& stream, std::string* token) {
 }
 
 // 每帧只做一次颜色分类；连通域扩展复用掩码，不重复读取 RGB 与计算比例。
-std::vector<uint8_t> brightMask(const PpmImage& image,const ArmorDetectionConfig& config){
+template<bool WithPnp>
+std::vector<uint8_t> brightMask(const PpmImage& image,const ArmorDetectionConfig& config,
+    std::vector<uint8_t>* pnp_mask=nullptr){
   std::vector<uint8_t> mask(static_cast<size_t>(image.width)*image.height);
+  if constexpr(WithPnp)pnp_mask->resize(mask.size());
   if(config.enemy_color==ArmorColor::Blue){
     const auto red=detail::colorThresholds(config.blue_over_red_ratio);
     const auto green=detail::colorThresholds(config.blue_over_green_ratio);
     for(size_t i=0;i<mask.size();++i){
       const auto* rgb=image.rgb.data()+i*3;
       mask[i]=rgb[2]>=config.min_blue_channel&&rgb[2]>=red[rgb[0]]&&rgb[2]>=green[rgb[1]];
+      if constexpr(WithPnp)(*pnp_mask)[i]=detail::pnpBluePixel(rgb[0],rgb[1],rgb[2])?255:0;
     }
   }else{
     static constexpr auto ratio14=detail::colorThresholds(1.4);
@@ -69,9 +73,23 @@ std::vector<uint8_t> brightMask(const PpmImage& image,const ArmorDetectionConfig
       const bool red=r>=160&&r>=ratio16[g]&&r>=ratio14[b];
       const bool blue=b>=160&&b>=ratio14[g]&&b>=ratio14[r];
       mask[i]=red||blue||(maximum>=220&&maximum-minimum<=70);
+      if constexpr(WithPnp)(*pnp_mask)[i]=detail::pnpBluePixel(r,g,b)?255:0;
     }
   }
   return mask;
+}
+
+void validateDetection(const ArmorDetectionConfig& detection){
+  if(!std::isfinite(detection.max_pair_aspect)||detection.max_pair_aspect<1.0)
+    throw std::invalid_argument("invalid armor pair aspect threshold");
+  if(detection.enemy_color==ArmorColor::Blue&&
+      (detection.min_blue_channel<0||detection.min_blue_channel>255||
+       !std::isfinite(detection.blue_over_red_ratio)||detection.blue_over_red_ratio<=1.0||
+       !std::isfinite(detection.blue_over_green_ratio)||detection.blue_over_green_ratio<=1.0))
+    throw std::invalid_argument("invalid blue armor color thresholds");
+}
+bool validImage(const PpmImage& image){
+  return image.width>0&&image.height>0&&image.rgb.size()==static_cast<size_t>(image.width)*image.height*3;
 }
 
 double clamp(double value, double lower, double upper) {
@@ -226,22 +244,25 @@ std::optional<Eigen::Matrix3d> worldObservationCovariance(const Eigen::Matrix<do
 
 ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& config,
                                    const ArmorDetectionConfig& detection) {
+  validateDetection(detection);
+  if(!validImage(image))return {};
+  return detectArmorStrips(image,config,detection,brightMask<false>(image,detection));
+}
+
+ArmorColorMasks classifyArmorPixels(const PpmImage& image,const ArmorDetectionConfig& detection){
+  validateDetection(detection);
+  ArmorColorMasks result;
+  if(validImage(image))result.strips=brightMask<true>(image,detection,&result.pnp);
+  return result;
+}
+
+ArmorObservation detectArmorStrips(const PpmImage& image,const CameraConfig& config,
+    const ArmorDetectionConfig& detection,std::vector<uint8_t> mask){
   ArmorObservation result;
-  if (!std::isfinite(detection.max_pair_aspect) || detection.max_pair_aspect < 1.0)
-    throw std::invalid_argument("invalid armor pair aspect threshold");
-  if (detection.enemy_color == ArmorColor::Blue &&
-      (detection.min_blue_channel < 0 || detection.min_blue_channel > 255 ||
-       !std::isfinite(detection.blue_over_red_ratio) || detection.blue_over_red_ratio <= 1.0 ||
-       !std::isfinite(detection.blue_over_green_ratio) || detection.blue_over_green_ratio <= 1.0)) {
-    throw std::invalid_argument("invalid blue armor color thresholds");
-  }
-  if (image.width <= 0 || image.height <= 0 ||
-      image.rgb.size() != static_cast<size_t>(image.width) * image.height * 3) {
-    return result;
-  }
+  validateDetection(detection);
+  if(!validImage(image)||mask.size()!=static_cast<size_t>(image.width)*image.height)return result;
   // 1. 八邻域保留远距离单像素宽斜灯条的连通性；四邻域会将其拆成多个散点。
   // 掩码中 1 表示待遍历亮像素，入队后清零，无需另一份 visited 数组。
-  auto mask=brightMask(image,detection);
   std::vector<BrightStrip> components;
   const int min_area = std::max(4, image.width * image.height / 40000);
   for (int y = 0; y < image.height; ++y) {
@@ -289,10 +310,7 @@ ArmorObservation detectArmorStrips(const PpmImage& image, const CameraConfig& co
           }
         }
       }
-      // 灯条的长宽比必须用主轴二阶矩估计，不能用轴对齐包围盒：灯条相对图像倾斜
-      // 20°–30° 时包围盒接近正方形（实测 29x38 的灯条包围盒是 34x37），旧判据
-      // height >= 1.2*width 会丢掉其中一根，components<2 就直接返回无效。
-      // 用接触阶段的真实帧回放，配对成功率从 32.5% 升到 80%，与 PnP 链的约 85% 相当。
+      // 灯条倾斜时轴对齐包围盒可能接近正方形，用主轴二阶矩估计长宽比。
       const double mean_x = static_cast<double>(sum_x) / component.area;
       result.bright_pixels += component.area;
       const double mean_y = static_cast<double>(sum_y) / component.area;
