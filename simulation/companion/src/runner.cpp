@@ -357,6 +357,8 @@ int main(int argc,char**argv){try{
         auto sequence=cmd.at("sequence").get<uint64_t>();if(sequence<=team_sequence)continue;
         bool finite=true;for(const char*key:{"target_x_m","target_y_m","target_z_m","target_yaw_rad","contact_speed_mps"})finite=finite&&cmd.contains(key)&&cmd.at(key).is_number()&&std::isfinite(cmd.at(key).get<double>());
         if(!finite)continue;
+        if(cmd.contains("contact_deadline_us")&&(!cmd.at("contact_deadline_us").is_number_integer()||
+            (!cmd.at("contact_deadline_us").is_number_unsigned()&&cmd.at("contact_deadline_us").get<int64_t>()<0)))continue;
         if(cmd.value("phase","")=="CONTACT"&&team_command.value("phase","")!="CONTACT"){contact_enter_us=cmd.at("sim_time_us").get<uint64_t>();dive_committed=false;dive_retry_entry=false;dive_commit_us=0;dive_alignment_since_us=0;last_alignment_report_us=0;last_commit_gate_report_us=0;weak_contacts=0;weak_until_us=0;dive_aim_source.clear();}
         // 返航或降落后禁止解锁及重新接管；HOLD 仍须检查全队阶段。
         for(const auto& phase:{cmd.value("phase",std::string{}),cmd.value("mission_phase",std::string{})})
@@ -831,7 +833,9 @@ int main(int argc,char**argv){try{
                 const Eigen::Vector3d aim(anchor.x(),clamped,anchor.z());
                 dive_aim=aim;
                 const bool prediction_usable=(periodic_valid||linear_valid)&&dive_track.measured;
-                const bool commit_eligible=flight.armed&&team_ready&&prediction_usable&&
+                const auto contact_deadline=team_command.value("contact_deadline_us",uint64_t(0));
+                const bool attempt_window=companion::diveAttemptFitsWindow(sim_us,contact_deadline,dive_timeout_s);
+                const bool commit_eligible=flight.armed&&team_ready&&prediction_usable&&attempt_window&&
                     companion::diveCommitEligible(self,e.velocity_enu_mps,aim,e.pose.yaw_rad,heading,
                         dive_entry.z(),dive_track.measurement_time_us,sim_us,
                         dive.value("entry_height_tolerance_m",.12),dive.value("entry_yaw_tolerance_rad",.35));
@@ -870,6 +874,7 @@ int main(int argc,char**argv){try{
                 if(!commit_eligible&&sim_us>=last_commit_gate_report_us+200000){
                   last_commit_gate_report_us=sim_us;
                   emit({{"kind","dive_commit_gate"},{"sim_time_us",sim_us},{"eligible",false},
+                      {"attempt_window_available",attempt_window},{"contact_deadline_us",contact_deadline},
                       {"prediction_usable",prediction_usable},{"track_measured",dive_track.measured},
                       {"measurement_time_us",dive_track.measurement_time_us},{"aim_source",source},
                       {"self_x_m",self.x()},{"self_z_m",self.z()},

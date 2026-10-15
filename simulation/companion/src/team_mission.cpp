@@ -8,6 +8,7 @@
 #include "companion/team_mission.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -277,6 +278,11 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   std::vector<TeamCommand> out(status_.size()); ++sequence_;
   for(size_t i=0;i<status_.size();++i) {
     auto&c=out[i];c.vehicle=static_cast<int>(i);c.sequence=sequence_;c.sim_time_us=sim;
+    if(phase_==TeamPhase::CONTACT){
+      uint64_t limit=config_.contact_timeout_us;
+      if(config_.stage_timeout_us&&(!limit||config_.stage_timeout_us<limit))limit=config_.stage_timeout_us;
+      if(limit)c.contact_deadline_us=phase_start_+std::min(limit,std::numeric_limits<uint64_t>::max()-phase_start_);
+    }
     c.phase=phase_;c.active_vehicle=activeVehicle();c.skipped=skipped_now_[i];
     c.degraded=!validForBarrier(static_cast<int>(i),sim,wall);
     if(c.degraded) {

@@ -94,6 +94,21 @@ void physicalContactAndTimeout() {
   check(f.mission.phase() == TeamPhase::CONTACT && !f.mission.aborted() &&
         f.mission.completed().empty(),"健康车辆被默认阶段期限中止或未接触却成功");
 }
+void contactDeadlineRemainsFixed() {
+  for (const auto limits : {std::pair<uint64_t,uint64_t>{3000000,0}, {0,2000000}, {3000000,2000000}, {0,0}}) {
+    Fixture f;
+    f.c.contact_timeout_us=limits.first;
+    f.c.stage_timeout_us=limits.second;
+    f.mission=TeamMission(f.c);
+    f.contact();
+    const auto deadline=f.commands[0].contact_deadline_us;
+    const auto limit=limits.first&&limits.second?std::min(limits.first,limits.second):std::max(limits.first,limits.second);
+    check(limit?(deadline>f.now&&deadline-f.now<=limit):deadline==0,"接触截止时间未取最早期限");
+    f.tick();check(f.commands[0].contact_deadline_us==deadline,"周期下发延长了接触期限");
+    f.set(0,f.c.target);++f.states[0].impact_seq;f.tick();
+    check(f.mission.phase()==TeamPhase::RETREAT&&f.commands[0].contact_deadline_us==0,"退出接触后保留了旧期限");
+  }
+}
 void sequentialAndLanding() {
   Fixture f; f.contact();
   for (int active = 0; active < 4; ++active) {
@@ -451,7 +466,7 @@ void landingTimeoutKeepsLandingCommands() {
 }
 int main() {
   try {
-    barriers(); physicalContactAndTimeout(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
+    barriers(); physicalContactAndTimeout(); contactDeadlineRemainsFixed(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
     visualApproachRangeGate(); visualRangeGateDisabledWithoutSetting(); visualGateIgnoresApproachYaw();
     diveAttackFliesThroughEntryGate(); diveEntryRejectsMisalignedHeading(); contactTimeoutSkipsFailedVehicle();
     approachTimeoutSkipsVehicleThatCannotReachEntry(); retreatHoldingDirect();

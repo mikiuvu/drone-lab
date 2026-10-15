@@ -210,6 +210,7 @@ TeamVehicleStatus readStatus(const char* data, int length) {
 json commandJson(const TeamCommand& c) {
   return {{"schema",1},{"kind","team_command"},{"vehicle",c.vehicle},
       {"sim_time_us",c.sim_time_us},{"sequence",c.sequence},
+      {"contact_deadline_us",c.contact_deadline_us},
       {"phase",c.degraded && c.phase != TeamPhase::WAIT_READY ? "HOLD" : teamPhaseName(c.phase)},
       {"mission_phase",teamPhaseName(c.phase)},
       {"active_vehicle",c.active_vehicle},{"target_x_m",c.target_x_m},{"target_y_m",c.target_y_m},

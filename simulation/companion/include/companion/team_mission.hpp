@@ -89,6 +89,7 @@ const char* teamPhaseName(TeamPhase phase);
 struct TeamCommand {
   int vehicle = -1, active_vehicle = -1;
   uint64_t sim_time_us = 0, sequence = 0;
+  uint64_t contact_deadline_us = 0; // 当前接触轮次的仿真截止时刻，0 表示不限时。
   TeamPhase phase = TeamPhase::WAIT_READY;
   double target_x_m = 0, target_y_m = 0, target_z_m = 0, target_yaw_rad = 0;
   double contact_speed_mps = 0;

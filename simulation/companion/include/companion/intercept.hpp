@@ -6,6 +6,11 @@
 #include <cstdint>
 #include <optional>
 namespace companion {
+/** @brief 剩余接触时窗须覆盖一次俯冲上限及 20 ms 导航周期；deadline=0 表示不限时。 */
+inline bool diveAttemptFitsWindow(uint64_t now,uint64_t deadline,double duration_s){
+  if(!std::isfinite(duration_s)||duration_s<=0)return false;
+  return !deadline||(now<deadline&&static_cast<double>(deadline-now)>std::ceil(duration_s*1e6)+20000.0);
+}
 /** @brief 本机沿任务航向超过目标平面的裕量后返回 true；位置及裕量单位 m。 */
 inline bool passedTargetPlane(const Eigen::Vector3d& self,const Eigen::Vector3d& target,
     double heading,double margin){

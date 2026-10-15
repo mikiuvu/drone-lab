@@ -3,6 +3,17 @@
 #include <cassert>
 #include <limits>
 int main(){
+ assert(!companion::diveAttemptFitsWindow(35541000,36041000,1.2));
+ assert(companion::diveAttemptFitsWindow(25061000,36041000,1.2));
+ assert(!companion::diveAttemptFitsWindow(1000000,2220000,1.2));
+ assert(companion::diveAttemptFitsWindow(1000000,2220001,1.2));
+ assert(!companion::diveAttemptFitsWindow(2000000,2000000,1.2));
+ assert(!companion::diveAttemptFitsWindow(2000001,2000000,1.2));
+ assert(companion::diveAttemptFitsWindow(2000000,0,1.2));
+ assert(!companion::diveAttemptFitsWindow(1,0,0));
+ assert(!companion::diveAttemptFitsWindow(1,0,std::numeric_limits<double>::quiet_NaN()));
+ assert(!companion::diveAttemptFitsWindow(1,0,-1));
+ assert(!companion::diveAttemptFitsWindow(1,std::numeric_limits<uint64_t>::max(),std::numeric_limits<double>::max()));
  const Eigen::Vector3d approach(10.7,0,2.075),armor(11.584,.1,1.525);
  assert(!companion::passedTargetPlane({11.7,0,2},armor,0,.25));
  assert(companion::passedTargetPlane({11.9,0,2},armor,0,.25));
