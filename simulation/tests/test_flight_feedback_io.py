@@ -61,7 +61,9 @@ class FlightFeedbackIOTest(unittest.TestCase):
             "--config", str(self.root / "config.json"), "--runtime", str(self.root),
             "--mavlink-local-port", str(self.runner_port),
             "--mavlink-remote-port", str(self.mav.getsockname()[1]),
-        ], stdout=subprocess.DEVNULL, stderr=self.errors)
+        ], stdout=subprocess.DEVNULL, stderr=self.errors,
+            env={**os.environ, "DRONE_RECORD_IMU_INPUT":
+                 "1" if self._testMethodName == "test_attitude_and_acceleration_share_imu_epoch" else "0"})
         self.addCleanup(self.stop_runner)
         self.receive_status()
 
@@ -143,6 +145,7 @@ class FlightFeedbackIOTest(unittest.TestCase):
         rows = [json.loads(line) for line in content.splitlines()]
         self.assertEqual(rows[0]["kind"], "startup")
         self.assertEqual(rows[-1]["kind"], "stop")
+        self.assertFalse(any(row["kind"] in ("imu_input", "attitude_input") for row in rows))
         self.assertEqual([row["command"] for row in rows if row.get("kind") == "command_ack"], commands)
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO required")
@@ -236,6 +239,16 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.assertAlmostEqual(delta_y, math.sin(-0.04) * 0.05, delta=1e-6,
                                msg="IMU acceleration used previous yaw")
         self.assertAlmostEqual(delta_x, math.cos(-0.04) * 0.05, delta=1e-6)
+        inputs = [row for row in recorded_rows(self.root / "companion_240.jsonl")
+                  if row.get("kind") == "imu_input" and row["time_usec"] == source + 40_000]
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(inputs[0]["fields_updated"], 0xFFFF)
+        self.assertEqual(inputs[0]["acceleration_frd_mps2"][0], 1)
+        self.assertEqual(inputs[0]["body_rate_frd_radps"], [0, 0, 1])
+        self.assertGreater(inputs[0]["receive_wall_us"], 0)
+        attitudes = [row for row in recorded_rows(self.root / "companion_240.jsonl")
+                     if row.get("kind") == "attitude_input" and row["time_boot_ms"] == source // 1000]
+        self.assertEqual(attitudes[-1]["rpy_frd_rad"], [0, 0, 0])
 
     def test_stale_heartbeat_cannot_be_refreshed_by_ground_packets(self):
         self.grounded()

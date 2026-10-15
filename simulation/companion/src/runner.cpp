@@ -400,6 +400,8 @@ int main(int argc,char**argv){try{
   companion::CameraMetadataWorker camera_source(o.runtime,o.vehicle);
   std::optional<companion::CameraMetadata> camera_metadata;
   RuntimeProfile runtime_profile;uint64_t profile_sim_us=0;
+  const char* imu_record_env=std::getenv("DRONE_RECORD_IMU_INPUT");
+  const bool record_imu_input=imu_record_env&&std::strcmp(imu_record_env,"1")==0;
   auto emit=[&](json j){auto measured=runtime_profile.measure(RuntimeProfile::Log,&profile_sim_us);j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';};
   emit({{"kind","startup"},{"simulation_only",true},{"height_assist_allowed",true},{"map",o.map.string()},{"gnss_position_ignored",true},{"mavlink_local_port",o.local},{"mavlink_remote_port",o.remote}});
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
@@ -489,6 +491,10 @@ int main(int argc,char**argv){try{
       if(target_sys==0||msg.sysid!=target_sys||msg.compid!=target_comp)continue;
       if(msg.msgid==MAVLINK_MSG_ID_ATTITUDE){
         mavlink_attitude_t a;mavlink_msg_attitude_decode(&msg,&a);
+        if(record_imu_input)emit({{"kind","attitude_input"},{"sim_time_us",sim_us},
+            {"receive_wall_us",wallUs(Clock::now())},{"time_boot_ms",a.time_boot_ms},
+            {"rpy_frd_rad",{a.roll,a.pitch,a.yaw}},
+            {"body_rate_frd_radps",{a.rollspeed,a.pitchspeed,a.yawspeed}}});
         const auto stamp=companion::attitudeBootTimeUs(a.time_boot_ms,
             latest_imu_boot_us?latest_imu_boot_us:attitude_history.latestTimeUs());
         if(stamp&&std::isfinite(a.roll)&&std::isfinite(a.pitch)&&std::isfinite(a.yaw)&&
@@ -499,6 +505,10 @@ int main(int argc,char**argv){try{
       else if(msg.msgid==MAVLINK_MSG_ID_EXTENDED_SYS_STATE){mavlink_extended_sys_state_t state;mavlink_msg_extended_sys_state_decode(&msg,&state);native_feedback.landed(Clock::now(),state.landed_state==MAV_LANDED_STATE_ON_GROUND);flight=native_feedback.state(Clock::now());}
       else if(msg.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
         mavlink_highres_imu_t i; mavlink_msg_highres_imu_decode(&msg,&i);
+        if(record_imu_input)emit({{"kind","imu_input"},{"sim_time_us",sim_us},
+            {"receive_wall_us",wallUs(Clock::now())},{"time_usec",i.time_usec},
+            {"fields_updated",i.fields_updated},{"acceleration_frd_mps2",{i.xacc,i.yacc,i.zacc}},
+            {"body_rate_frd_radps",{i.xgyro,i.ygyro,i.zgyro}},{"abs_pressure",i.abs_pressure}});
         if(!i.time_usec||i.time_usec<=latest_imu_boot_us||i.time_usec>static_cast<uint64_t>(std::numeric_limits<int64_t>::max())){
           ++imu_stamp_rejected;continue;
         }
