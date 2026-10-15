@@ -2,6 +2,8 @@
 
 import importlib.util
 from pathlib import Path, PurePosixPath
+import subprocess
+import tempfile
 import unittest
 
 SPEC = importlib.util.spec_from_file_location('logger_builder', Path(__file__).resolve().parents[1] /
@@ -11,6 +13,21 @@ SPEC.loader.exec_module(builder)
 
 
 class DiagnosticLinkTests(unittest.TestCase):
+    def test_patch_inside_parent_repository_only_changes_copied_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '--quiet', str(root)], check=True)
+            original = root / 'input.txt'
+            original.write_bytes(b'before\n')
+            source = root / 'build/diagnostic/source'
+            source.mkdir(parents=True)
+            (source / 'input.txt').write_bytes(original.read_bytes())
+            patch = root / 'diagnostic.patch'
+            patch.write_bytes(b'--- a/input.txt\n+++ b/input.txt\n@@ -1 +1 @@\n-before\n+after\n')
+            builder.apply_diagnostic_patch(source, patch)
+            self.assertEqual((source / 'input.txt').read_bytes(), b'after\n')
+            self.assertEqual(original.read_bytes(), b'before\n')
+
     def test_compound_ninja_command_preserves_space_arguments(self):
         raw = (': && /usr/bin/c++ "source with space.o" -o bin/px4 '
                'src/modules/logger/libmodules__logger.a "other library.a" '

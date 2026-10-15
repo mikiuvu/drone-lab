@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -14,6 +15,17 @@ SOURCES = ('src/modules/logger/logged_topics.cpp', 'src/modules/logger/logger.cp
 
 def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def apply_diagnostic_patch(source_root, patch):
+    """只在复制的源码目录应用补丁，不向上寻找工作区仓库。"""
+    environment = dict(os.environ)
+    for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'):
+        environment.pop(name, None)
+    environment['GIT_CEILING_DIRECTORIES'] = str(source_root.parent.resolve())
+    for arguments in (['--check'], []):
+        subprocess.run(['git', '-c', 'core.autocrlf=false', 'apply', *arguments, str(patch)], cwd=source_root,
+                       env=environment, check=True)
 
 
 def link_command(raw, archive, binary):
@@ -55,8 +67,7 @@ def build_diagnostic(sdk, build, output, patch):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(original, target)
         originals[name] = sha256(original)
-    subprocess.run(['git', 'apply', '--check', str(patch)], cwd=source_root, check=True)
-    subprocess.run(['git', 'apply', str(patch)], cwd=source_root, check=True)
+    apply_diagnostic_patch(source_root, patch)
     original_archive = build / 'src/modules/logger/libmodules__logger.a'
     archive = output / original_archive.name
     shutil.copy2(original_archive, archive)
