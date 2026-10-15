@@ -289,6 +289,13 @@ int main(int argc,char**argv){try{
 
   for(const char* key:{"position_gain","cruise_speed_mps","climb_speed_mps","descent_speed_mps","landing_speed_mps","touchdown_descent_mps","yaw_gain","yaw_rate_limit_rad_s","impact_acceleration_mps2","impact_proximity_m"})
     if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<=0))throw std::runtime_error(std::string("invalid team_mission.")+key);
+  const double collision_force=team_settings.value("collision_specific_force_mps2",20.0);
+  const double collision_proximity=team_settings.value("collision_proximity_m",.75);
+  const double collision_grace_s=team_settings.value("collision_confirmation_grace_s",.06);
+  if(!std::isfinite(collision_force)||collision_force<=9.80665||!std::isfinite(collision_proximity)||collision_proximity<=0)
+    throw std::runtime_error("invalid collision force or proximity");
+  if(!std::isfinite(collision_grace_s)||collision_grace_s<0||collision_grace_s>.2)
+    throw std::runtime_error("collision confirmation grace must be 0..0.2 s");
   for(const char* key:{"velocity_damping","impact_settle_s","impact_recovery_s","impact_pitch_rad","impact_roll_rad","touchdown_thrust"})
     if(team_settings.contains(key)&&(!team_settings[key].is_number()||!std::isfinite(team_settings[key].get<double>())||team_settings[key].get<double>()<0))throw std::runtime_error(std::string("invalid team_mission.")+key);
   // 视觉撞击的现场调参项：必须在启动时报错而不是在飞行中静默退化成默认值。
@@ -311,7 +318,9 @@ int main(int argc,char**argv){try{
   std::unique_ptr<Udp> team;
   if(team_enabled)team=std::make_unique<Udp>(18000+o.vehicle);
   // 首条任务指令到达前，空对象允许 value() 返回默认值；null 会抛出 type_error.306。
-  json team_command=json::object();Clock::time_point team_rx{};uint64_t team_sequence=0,impact_seq=0,last_impact_us=0,contact_enter_us=0;
+  json team_command=json::object();Clock::time_point team_rx{};uint64_t team_sequence=0,impact_seq=0,last_impact_us=0,last_collision_us=0,contact_enter_us=0;
+  companion::PendingInertialContact pending_collision;
+  const auto sensor_disturbance=[&](){return std::max({last_impact_us,last_collision_us,pending_collision.since_us});};
   bool team_disarm=false,team_complete=false,team_restart_blocked=false,landing_recorded=false;
   // 趴窝判定：任务要求在空中飞行的阶段里持续落地超过 stranded_s 即认定无法复飞。
   // 一旦置位就不再清除——落在基地结构上的机体不会自己飞起来，而反复置位/清除只会
@@ -376,16 +385,17 @@ int main(int argc,char**argv){try{
         const bool qualified=j.value("qualified",true);
         const double force=j.value("force_n",0.0);
         if(team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&stamp>=contact_enter_us&&stamp+500000>=sim_us){
-          if(qualified){++impact_seq;last_impact_us=stamp;weak_until_us=0;emit({{"kind","impact"},{"sim_time_us",stamp},{"impact_seq",impact_seq},{"force_n",force},{"confirmation","armor_pressure"}});}
+          if(qualified){++impact_seq;last_impact_us=stamp;weak_until_us=0;pending_collision.clear();emit({{"kind","impact"},{"sim_time_us",stamp},{"impact_seq",impact_seq},{"force_n",force},{"confirmation","armor_pressure"}});}
           else{++weak_seq;emit({{"kind","weak_impact"},{"sim_time_us",stamp},{"weak_seq",weak_seq},{"force_n",force},{"limit",dive_weak_limit}});
-            ++weak_contacts;weak_until_us=stamp+static_cast<uint64_t>(dive_weak_retreat_s*1e6);
+            if(!dive_retry_entry)++weak_contacts;
+            weak_until_us=std::max(weak_until_us,stamp+static_cast<uint64_t>(dive_weak_retreat_s*1e6));
             dive_committed=false;dive_retry_entry=true;dive_alignment_since_us=0;}
         }
       }catch(const std::exception&){}
     }
     // 3. 测量按 kind 分流。UWB 必须配合邻机估计；仅有距离不能直接得到世界位置。
     // 碰撞后 0.4 s 暂不使用 ToF，避免剧烈姿态变化时错误的结构匹配。
-    for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;sim_us=std::max(sim_us,stamp);obs_rx=Clock::now();if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);else if(auto t=companion::parseTofDatagram(s,o.vehicle)){if(!team_enabled||!last_impact_us||stamp>last_impact_us+400000)tof_queue.submit(*t);}else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);}}catch(const std::exception&){} }
+    for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;sim_us=std::max(sim_us,stamp);obs_rx=Clock::now();if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);else if(auto t=companion::parseTofDatagram(s,o.vehicle)){const auto disturbance=sensor_disturbance();if(!team_enabled||!disturbance||stamp>disturbance+400000)tof_queue.submit(*t);}else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);}}catch(const std::exception&){} }
     // 4. 更新邻机缓存；只保存配置机群成员，是否新鲜由融合器再次判断。
     //    同一通道还承载滑轨观测样本：滑轨全周期 5.6 s，学成一个模型需要两个以上完整
     //    周期（>11 s）的连续观测，而单机一次回合的视觉窗最长只有 9–10 s，谁都学不成，
@@ -446,6 +456,15 @@ int main(int argc,char**argv){try{
           const bool visual_near=visual_result.tracking_valid&&visual_result.range_valid&&visual_result.range_m>0&&visual_result.range_m<.16&&visual_result.observation_age_s<.45;
           const bool close_to_target=visual_contact?visual_near:std::hypot(estimate.pose.x_m-tx,estimate.pose.y_m-ty)<team_settings.value("impact_proximity_m",.35);
           if(visual_contact&&impulse>1.0)emit({{"kind","impact_candidate"},{"sim_time_us",sim_us},{"impulse",impulse},{"range_m",visual_result.range_m},{"age_s",visual_result.observation_age_s},{"tracking",visual_result.tracking_valid}});
+          // 近目标冲击等待压力反馈；合格压力取消未确认冲击的退出请求。
+          if(visual_contact&&dive_committed&&!unrecoverable&&(i.fields_updated&7)==7&&sim_us>last_collision_us+1000000&&
+             std::llabs(static_cast<int64_t>(sim_us)-static_cast<int64_t>(estimate.sim_time_us))<=150000&&
+             companion::inertialContactCandidate(specific_flu,dive_aim-Eigen::Vector3d(estimate.pose.x_m,
+                 estimate.pose.y_m,estimate.pose.z_m),collision_force,collision_proximity)){
+            if(pending_collision.observe(sim_us,specific_flu.norm()))
+              emit({{"kind","collision_candidate"},{"sim_time_us",sim_us},{"imu_time_us",sample.sim_time_us},
+                  {"specific_force_mps2",specific_flu.norm()}});
+          }
           if(!visual_contact&&close_to_target&&impulse>(visual_contact?8.0:team_settings.value("impact_acceleration_mps2",2.0))){++impact_seq;last_impact_us=sim_us;if(!visual_contact)estimator.fuseMapContact(std::max(sim_us,estimator.estimate().sim_time_us),Eigen::Vector3d::UnitX(),tx-team_settings.value("contact_radius_m",.041));emit({{"kind","impact"},{"sim_time_us",sim_us},{"impact_seq",impact_seq},{"acceleration_mps2",raw_linear.head<2>().norm()},{"normal_deceleration_mps2",deceleration}});}
         }
         // 未解锁静置期间统计加速度偏置；样本数量和经过时间同时满足才认为可用。
@@ -456,7 +475,8 @@ int main(int argc,char**argv){try{
         sample.acceleration_enu_mps2=raw_linear-(bias_ready?imu_linear_bias:Eigen::Vector3d::Zero());
         sample.acceleration_valid=bias_ready&&(i.fields_updated&7)==7&&sample.acceleration_enu_mps2.allFinite()&&sample.acceleration_enu_mps2.norm()<15;
         sample.pressure_valid=i.fields_updated&(1<<9); sample.absolute_pressure_hpa=i.abs_pressure;
-        if(!flight.armed||(team_enabled&&last_impact_us&&sim_us<last_impact_us+400000))sample.acceleration_valid=false;
+        const auto disturbance=sensor_disturbance();
+        if(!flight.armed||(team_enabled&&disturbance&&sim_us<disturbance+400000))sample.acceleration_valid=false;
         estimator.predict(sample); estimator.fuseBaroPressure(sample);
         if(!flight.armed&&flight.landed&&std::abs(estimator.estimate().pose.z_m-team_settings.value("home_ground_z_m",config.initial_pose.z_m-.0375)-team_settings.value("body_clearance_m",.0125))<.08)estimator.resetInertialVelocityWhileLanded(sample.sim_time_us);
         imu_rx=Clock::now();
@@ -471,6 +491,18 @@ int main(int argc,char**argv){try{
             {"reason",flight.failsafe_latched?"PX4_FAILSAFE":(flight.heartbeat_gap_latched?"HEARTBEAT_GAP":"OFFBOARD_STREAM_GAP")},
             {"native_failsafe_latched",flight.failsafe_latched},{"heartbeat_gap_latched",flight.heartbeat_gap_latched},
             {"setpoint_gap_latched",flight.setpoint_gap_latched}});
+    }
+    const bool collision_attempt=visual_contact&&dive_committed&&!unrecoverable&&flight.armed&&
+        team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&
+        (!last_impact_us||last_impact_us<dive_commit_us);
+    if(!collision_attempt)pending_collision.clear();
+    else if(pending_collision.mature(sim_us,static_cast<uint64_t>(collision_grace_s*1e6))){
+      const auto estimate=estimator.estimate();
+      emit({{"kind","collision_recovery"},{"sim_time_us",sim_us},{"candidate_time_us",pending_collision.since_us},
+          {"specific_force_mps2",pending_collision.peak_specific_force_mps2},{"retry_count",weak_contacts+1},
+          {"self_x_m",estimate.pose.x_m},{"self_y_m",estimate.pose.y_m},{"self_z_m",estimate.pose.z_m}});
+      last_collision_us=sim_us;pending_collision.clear();dive_committed=false;dive_retry_entry=true;dive_alignment_since_us=0;
+      ++weak_contacts;weak_until_us=sim_us+static_cast<uint64_t>(dive_weak_retreat_s*1e6);
     }
     // 6. 请求姿态/IMU/落地状态发送间隔，单位 μs；请求值不等于链路保证的实际频率。
     if(target_sys&&!intervals_requested){command(mav,o.remote,target_sys,target_comp,MAV_CMD_SET_MESSAGE_INTERVAL,MAVLINK_MSG_ID_ATTITUDE,20000);command(mav,o.remote,target_sys,target_comp,MAV_CMD_SET_MESSAGE_INTERVAL,MAVLINK_MSG_ID_HIGHRES_IMU,10000);command(mav,o.remote,target_sys,target_comp,MAV_CMD_SET_MESSAGE_INTERVAL,MAVLINK_MSG_ID_EXTENDED_SYS_STATE,100000);intervals_requested=true;}
@@ -936,7 +968,8 @@ int main(int argc,char**argv){try{
 
           // 无法继续任务的成员交给飞控自动降落，不再接受任务速度参考。
           if(unrecoverable){intention.mode="RECOVER_LAND";intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;intention.target_valid=false;}
-          if(intention.mode=="WAIT_READY"||intention.mode=="HOLD"||(last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_settle_s",.4)*1e6))||team_disarm||team_complete){intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
+          const auto disturbance=std::max(last_impact_us,last_collision_us);
+          if(intention.mode=="WAIT_READY"||intention.mode=="HOLD"||(disturbance&&sim_us<disturbance+static_cast<uint64_t>(team_settings.value("impact_settle_s",.4)*1e6))||team_disarm||team_complete){intention.velocity_flu_mps.setZero();intention.yaw_rate_ref_rad_s=0;}
         }
         team->send(json{{"schema",1},{"kind","team_status"},{"vehicle",o.vehicle},{"sim_time_us",sim_us},{"x_m",e.pose.x_m},{"y_m",e.pose.y_m},{"z_m",e.pose.z_m},{"yaw_rad",e.pose.yaw_rad},{"vx_mps",e.velocity_enu_mps.x()},{"vy_mps",e.velocity_enu_mps.y()},{"vz_mps",e.velocity_enu_mps.z()},{"xy_valid",e.xy_valid||e.flow_valid},{"z_valid",e.z_valid},{"ready",team_ready},{"xy_reason",e.localization_mode},{"flow_valid",e.flow_valid},{"visual_ready",visual_ready},{"position_confidence",e.position_confidence},{"armed",flight.armed},{"landed",flight.landed},{"heartbeat_fresh",flight.heartbeat_fresh},{"landed_fresh",flight.landed_fresh},{"native_failsafe_active",flight.failsafe_active},{"native_failsafe_latched",flight.failsafe_latched},{"heartbeat_gap_latched",flight.heartbeat_gap_latched},{"setpoint_gap_latched",flight.setpoint_gap_latched},{"unrecoverable",unrecoverable},{"impact_seq",impact_seq}}.dump(),18100);
       }
@@ -966,7 +999,8 @@ int main(int argc,char**argv){try{
       // 9. 常规发送速度参考；碰撞恢复、定位失效保持或着地低推力阶段改发姿态参考。
       if(o.offboard&&target_sys&&live&&!unrecoverable&&!native_feedback.state(Clock::now()).setpoint_gap_latched){
         mavlink_message_t msg;
-        const bool impact_recovery=team_enabled&&flight.armed&&last_impact_us&&sim_us<last_impact_us+static_cast<uint64_t>(team_settings.value("impact_recovery_s",0.0)*1e6);
+        const auto disturbance=std::max(last_impact_us,last_collision_us);
+        const bool impact_recovery=team_enabled&&flight.armed&&disturbance&&sim_us<disturbance+static_cast<uint64_t>(team_settings.value("impact_recovery_s",0.0)*1e6);
         const bool touchdown=team_enabled&&flight.armed&&team_command.value("phase","")=="LAND_ALL"&&team_settings.contains("touchdown_thrust")&&e.z_valid&&
             e.pose.z_m<team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.015&&std::abs(e.velocity_enu_mps.z())<.25;
         const bool attitude_hold=team_enabled&&flight.armed&&((!e.xy_valid&&!e.flow_valid)||impact_recovery||touchdown);
@@ -1012,7 +1046,7 @@ int main(int argc,char**argv){try{
     }
     // 只在导航发布后启动一帧融合，给计算留出完整的 20 ms 槽位。
     if(navigation_due)if(auto frame=tof_queue.take())
-      if(!team_enabled||!last_impact_us||frame->sim_time_us>last_impact_us+400000)
+      if(!team_enabled||!sensor_disturbance()||frame->sim_time_us>sensor_disturbance()+400000)
         fusion(estimator.fuseTof(*frame),"tof",frame->sim_time_us);
     std::this_thread::sleep_until(std::min(Clock::now()+std::chrono::milliseconds(2),
         last_publish+std::chrono::milliseconds(20)));
