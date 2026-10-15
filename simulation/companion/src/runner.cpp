@@ -56,7 +56,7 @@ void stop(int){running=0;}
 double age(Clock::time_point t){return std::chrono::duration<double>(Clock::now()-t).count();}
 /** @brief DRONE_PROFILE_RUNTIME=1 时记录已解锁循环的阶段耗时和对应线程 CPU 时间。 */
 struct RuntimeProfile {
-  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, Count };
+  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, LogFlush, Count };
   struct Metric {
     uint64_t samples{0},over_100ms{0},max_wall_us{0},begin_sim_us{0},end_sim_us{0};
     std::optional<uint64_t> cpu_at_max_us;
@@ -89,7 +89,7 @@ struct RuntimeProfile {
   };
   Span measure(Stage stage,const uint64_t* sim){return Span(*this,stage,sim);}
   json report()const{
-    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"}};
+    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"},{"log_flush"}};
     json result=json::object();
     for(int i=0;i<Count;++i){const auto& m=metrics[i];
       result[names[i]]={{"samples",m.samples},{"over_100ms",m.over_100ms},{"max_wall_us",m.max_wall_us},
@@ -396,7 +396,7 @@ int main(int argc,char**argv){try{
   }
   std::filesystem::create_directories(o.runtime);std::ofstream log(o.runtime/("companion_"+std::to_string(o.vehicle)+".jsonl"));if(!log)throw std::runtime_error("cannot open runtime log");
   RuntimeProfile runtime_profile;uint64_t profile_sim_us=0;
-  auto emit=[&](json j){auto measured=runtime_profile.measure(RuntimeProfile::Log,&profile_sim_us);j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';log.flush();};
+  auto emit=[&](json j){auto measured=runtime_profile.measure(RuntimeProfile::Log,&profile_sim_us);j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';};
   emit({{"kind","startup"},{"simulation_only",true},{"height_assist_allowed",true},{"map",o.map.string()},{"gnss_position_ignored",true},{"mavlink_local_port",o.local},{"mavlink_remote_port",o.remote}});
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
@@ -1140,6 +1140,8 @@ int main(int argc,char**argv){try{
         auto tof_timing=runtime_profile.measure(RuntimeProfile::Tof,&sim_us);
         fusion(estimator.fuseTof(*frame),"tof",frame->sim_time_us);
       }
+    // 每个导航周期发送控制后刷新日志；流缓冲区满时仍会自动写出。
+    if(navigation_due){auto log_timing=runtime_profile.measure(RuntimeProfile::LogFlush,&sim_us);log.flush();}
     {auto sleep_timing=runtime_profile.measure(RuntimeProfile::Sleep,&sim_us);
     std::this_thread::sleep_until(std::min(Clock::now()+std::chrono::milliseconds(2),
         last_publish+std::chrono::milliseconds(20)));}
@@ -1149,7 +1151,7 @@ int main(int argc,char**argv){try{
   emit({{"kind","stop"},{"sim_time_us",sim_us},{"armed_at_stop",final_feedback.armed},{"heartbeat_fresh",final_feedback.heartbeat_fresh},{"landed_fresh",final_feedback.landed_fresh},{"peer_send_drops",peers.send_drops},{"peer_last_errno",peers.last_send_errno},{"mav_send_drops",mav.send_drops},{"mav_last_errno",mav.last_send_errno},
       {"imu_attitude",{{"exact",imu_attitude_counts[0]},{"interpolated",imu_attitude_counts[1]},{"extrapolated",imu_attitude_counts[2]},
           {"missing",imu_attitude_missing},{"attitude_stamp_rejected",attitude_stamp_rejected},{"imu_stamp_rejected",imu_stamp_rejected},
-          {"max_extrapolation_us",max_attitude_extrapolation_us},{"max_interpolation_gap_us",max_attitude_interpolation_us}}}});return 0;
+          {"max_extrapolation_us",max_attitude_extrapolation_us},{"max_interpolation_gap_us",max_attitude_interpolation_us}}}});log.flush();return 0;
 }catch(const std::exception&e){std::cerr<<"companion: "<<e.what()<<'\n';return 2;}}
 
 

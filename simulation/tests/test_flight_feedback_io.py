@@ -119,6 +119,32 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_landed()
         self.receive_status(lambda row: row["landed"])
 
+    def test_buffered_log_preserves_burst_order_and_stop(self):
+        self.grounded()
+        commands = list(range(1000, 1200))
+        for command in commands:
+            packet = mavlink_packet(77, struct.pack("<HB", command, 0), 143)
+            self.mav.sendto(packet, ("127.0.0.1", self.runner_port))
+            time.sleep(0.001)
+        path = self.root / "companion_240.jsonl"
+        deadline = time.monotonic() + 3
+        received = []
+        while time.monotonic() < deadline:
+            received = [row["command"] for row in recorded_rows(path)
+                        if row.get("kind") == "command_ack"]
+            if len(received) >= len(commands):
+                break
+            time.sleep(0.01)
+        self.assertEqual(received, commands)
+        self.stop_runner()
+        self.assertEqual(self.process.returncode, 0)
+        content = path.read_text(encoding="utf-8")
+        self.assertTrue(content.endswith("\n"))
+        rows = [json.loads(line) for line in content.splitlines()]
+        self.assertEqual(rows[0]["kind"], "startup")
+        self.assertEqual(rows[-1]["kind"], "stop")
+        self.assertEqual([row["command"] for row in rows if row.get("kind") == "command_ack"], commands)
+
     def test_attitude_and_acceleration_share_imu_epoch(self):
         self.grounded()
         started = time.monotonic()
