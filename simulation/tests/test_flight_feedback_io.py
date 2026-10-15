@@ -145,6 +145,39 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.assertEqual(rows[-1]["kind"], "stop")
         self.assertEqual([row["command"] for row in rows if row.get("kind") == "command_ack"], commands)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO required")
+    def test_camera_metadata_read_does_not_stall_navigation(self):
+        self.grounded()
+        path = self.root / "camera_240.json"
+        os.mkfifo(path)
+        descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+
+        def release():
+            nonlocal descriptor
+            if descriptor is None:
+                return
+            metadata = json.dumps({"frame_seq": 1, "sim_time_us": 1000000}) + "\n"
+            replacement = self.root / "camera_240.ready"
+            replacement.write_text(metadata, encoding="utf-8")
+            os.replace(replacement, path)
+            os.write(descriptor, metadata.encode("utf-8"))
+            os.close(descriptor)
+            descriptor = None
+
+        self.addCleanup(release)
+        try:
+            deadline = time.monotonic() + 0.8
+            count = 0
+            while time.monotonic() < deadline:
+                self.send_heartbeat()
+                self.send_landed()
+                row = self.receive_status(timeout=0.3)
+                self.assertTrue(row["landed"] and row["heartbeat_fresh"])
+                count += 1
+            self.assertGreaterEqual(count, 15)
+        finally:
+            release()
+
     def test_attitude_and_acceleration_share_imu_epoch(self):
         self.grounded()
         started = time.monotonic()
