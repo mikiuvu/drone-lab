@@ -60,6 +60,9 @@ def summarize(run, ulog_root):
         if not phases or row["phase"] != phases[-1]["phase"]:
             phases.append({"time_s": row["sim_time_us"] / 1e6, "phase": row["phase"]})
     result = {"run": str(run), "phase_transitions": phases, "vehicles": []}
+    recovery_phases = {"RETURN_ALL", "ABORT_RETURN", "LAND_ALL", "COMPLETE", "ABORTED"}
+    recovery_us = next((row["sim_time_us"] for row in team if row["phase"] in recovery_phases), None)
+    result["recovery_start_time_s"] = recovery_us / 1e6 if recovery_us is not None else None
     landing_us = next((row["sim_time_us"] for row in team if row["phase"] == "LAND_ALL"), None)
     for spawn in config["spawns"]:
         vehicle = spawn["id"]
@@ -102,12 +105,17 @@ def summarize(run, ulog_root):
                "disarm_requests": sum(request.get("command") == "DISARM" for request in requests),
                "auto_land_confirmed": any(control.get("auto_land_active") for control in controls),
                "arm_or_offboard_after_failure": forbidden,
+               "arm_or_offboard_after_recovery": [row for row in log if row.get("kind") == "command_request"
+                   and row.get("command") in ("ARM", "OFFBOARD") and recovery_us is not None
+                   and row.get("sim_time_us", 0) >= recovery_us],
                "arm_or_offboard_after_landing": [row for row in log if row.get("kind") == "command_request"
                    and row.get("command") in ("ARM", "OFFBOARD") and landing_us is not None
                    and row.get("sim_time_us", 0) >= landing_us],
                "armed_at_stop": stops[-1]["armed_at_stop"] if stops else None,
                "native_landed": bool(land["landed"][-1]) if land else None,
                "native_arming_state": int(status["arming_state"][-1]) if status else None,
+               "first_armed_time_s": first_armed_us / 1e6 if first_armed_us is not None else None,
+               "first_airborne_time_s": first_airborne_us / 1e6 if first_airborne_us is not None else None,
                "landing_time_s": first_land, "disarm_time_s": disarm, "external_odometry": None,
                "ulog_path": metadata[-1]["path"], "ulog_sha256": metadata[-1]["sha256"],
                "ulog_segments": metadata,
@@ -154,8 +162,9 @@ def main():
                           "armed_at_stop", "native_landed", "external_odometry")} for row in result["vehicles"]]}, ensure_ascii=False))
     if args.require_stopped and (not result["all_stopped"] or result["terminal"] not in ("COMPLETE", "ABORTED")
                                 or any(row["arm_or_offboard_after_failure"] or row["arm_or_offboard_after_landing"]
+                                       or row["arm_or_offboard_after_recovery"]
                                        for row in result["vehicles"])):
-        raise SystemExit("Recovery lacks terminal, landing or disarm confirmation")
+        raise SystemExit("Recovery lacks terminal, landing or disarm confirmation, or contains ARM/OFFBOARD retries")
 
 
 if __name__ == "__main__":
