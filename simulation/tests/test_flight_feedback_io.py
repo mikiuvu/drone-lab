@@ -324,6 +324,75 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.assertFalse(row["unrecoverable"])
         self.assertFalse(row["native_failsafe_latched"])
 
+    def send_attitude(self, stamp, roll=0.0, pitch=0.0, system=1):
+        attitude = struct.pack("<Iffffff", stamp // 1000, roll, pitch, 0, 0, 0, 0)
+        self.mav.sendto(mavlink_packet(30, attitude, 39, system), ("127.0.0.1", self.runner_port))
+
+    def test_sustained_inversion_requests_land_and_waits_for_native_ground(self):
+        self.grounded()
+        self.send_heartbeat(armed=True, main_mode=2)
+        self.send_landed(on_ground=False)
+        self.receive_status(lambda row: row["armed"] and not row["landed"])
+        started = time.monotonic()
+
+        def stream(seconds, inverted):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                self.send_heartbeat(armed=True, main_mode=2)
+                stamp = 1_000_000 + int((time.monotonic() - started) * 1e6)
+                self.send_attitude(stamp, roll=math.pi if inverted else 0)
+                time.sleep(0.02)
+
+        stream(0.3, True)
+        stream(0.1, False)
+        self.assertFalse(self.receive_status()["unrecoverable"])
+        stream(0.7, True)
+        row = self.receive_status(lambda row: row["unrecoverable"], timeout=0.5)
+        self.assertFalse(row["native_failsafe_latched"])
+        self.assertTrue(row["attitude_inverted_latched"])
+        stream(0.15, False)
+        rows = recorded_rows(self.root / "companion_240.jsonl")
+        event = next(index for index, item in enumerate(rows) if item.get("kind") == "unrecoverable")
+        self.assertEqual(rows[event]["reason"], "ATTITUDE_INVERTED")
+        self.assertEqual(self.disarm_requests(0.3), [])
+        rows = recorded_rows(self.root / "companion_240.jsonl")
+        requests = [item["command"] for item in rows[event:] if item.get("kind") == "command_request"]
+        self.assertTrue(requests)
+        self.assertEqual(set(requests), {"LAND"})
+        self.assertTrue(self.receive_status()["unrecoverable"])
+        disarms = self.disarm_requests(1.1, send_ground=True)
+        self.assertTrue(disarms)
+        self.assertTrue(all(command == (0.0, 0.0) for command in disarms))
+
+    def test_preflight_and_duplicate_inverted_attitudes_cannot_latch_failure(self):
+        self.grounded()
+        started = time.monotonic()
+        while time.monotonic() - started < 0.65:
+            self.send_heartbeat()
+            self.send_attitude(1_000_000 + int((time.monotonic() - started) * 1e6), roll=math.pi)
+            time.sleep(0.02)
+        self.send_heartbeat(armed=True, main_mode=2)
+        self.send_landed(on_ground=False)
+        for _ in range(35):
+            self.send_heartbeat(armed=True, main_mode=2)
+            self.send_attitude(2_000_000, roll=math.pi)
+            time.sleep(0.02)
+        self.assertFalse(self.receive_status()["unrecoverable"])
+
+    def test_buffered_inverted_history_cannot_replace_live_duration(self):
+        self.grounded()
+        self.send_heartbeat(armed=True, main_mode=2)
+        self.send_landed(on_ground=False)
+        for index in range(80):
+            self.send_attitude(1_000_000 + index * 20_000, roll=math.pi)
+        deadline = time.monotonic() + 0.65
+        while time.monotonic() < deadline:
+            self.send_heartbeat(armed=True, main_mode=2)
+            time.sleep(0.03)
+        self.assertFalse(self.receive_status()["unrecoverable"])
+        self.send_attitude(3_000_000)
+        self.assertFalse(self.receive_status()["unrecoverable"])
+
     def test_armed_feedback_gap_latches_even_when_queued_heartbeat_is_healthy(self):
         self.grounded()
         self.send_heartbeat(armed=True)

@@ -1,6 +1,7 @@
 #include "companion/flight_feedback.hpp"
 #include <cassert>
 #include <chrono>
+#include <limits>
 
 int main() {
   using namespace std::chrono_literals;
@@ -94,4 +95,61 @@ int main() {
   companion::FlightFeedback unpublished;
   unpublished.heartbeat(t, true, true, false);
   assert(!unpublished.state(t + 1s).setpoint_gap_latched);
+
+  companion::FlightFeedback inverted;
+  inverted.heartbeat(t, true, true, false);
+  for (int i = 0; i < 50; ++i) {
+    const auto now = t + i * 20ms;
+    inverted.heartbeat(now, true, true, false);
+    inverted.attitude(now, 1000000 + i * 20000, i < 15 ? -1.0 : 1.0);
+    assert(!inverted.state(now).attitude_inverted_latched);
+  }
+  for (int i = 0; i <= 25; ++i) {
+    const auto now = t + 1s + i * 20ms;
+    inverted.attitude(now, 2000000 + i * 20000, -1);
+    assert(inverted.state(now).attitude_inverted_latched == (i == 25));
+  }
+  inverted.attitude(t + 1520ms, 2520000, 1);
+  inverted.heartbeat(t + 1540ms, false, false, false);
+  inverted.landed(t + 1540ms, true);
+  assert(inverted.state(t + 1540ms).attitude_inverted_latched);
+  assert(inverted.state(t + 1540ms).landed && !inverted.state(t + 1540ms).armed);
+  assert(!inverted.state(t + 1540ms).failsafe_latched);
+
+  companion::FlightFeedback preflight_tilt;
+  preflight_tilt.heartbeat(t, false, false, false);
+  for (int i = 0; i < 60; ++i) preflight_tilt.attitude(t + i * 20ms, 1000000 + i * 20000, -1);
+  assert(!preflight_tilt.state(t + 1200ms).attitude_inverted_latched);
+  preflight_tilt.heartbeat(t + 1200ms, true, false, false);
+  preflight_tilt.attitude(t + 1200ms, 2200000, -1);
+  for (int i = 1; i < 60; ++i) preflight_tilt.attitude(t + 1200ms + i * 20ms, 2200000, -1);
+  assert(!preflight_tilt.state(t + 2400ms).attitude_inverted_latched);
+
+  companion::FlightFeedback queued;
+  queued.heartbeat(t, true, false, false);
+  for (int i = 0; i < 100; ++i) queued.attitude(t, 1000000 + i * 20000, -1);
+  assert(!queued.state(t + 600ms).attitude_inverted_latched);
+  queued.attitude(t + 600ms, 3000000, -1);
+  assert(!queued.state(t + 600ms).attitude_inverted_latched);
+
+  companion::FlightFeedback gaps;
+  gaps.heartbeat(t, true, false, false);
+  for (int i = 0; i < 8; ++i) gaps.attitude(t + i * 300ms, 1000000 + i * 20000, -1);
+  assert(!gaps.state(t + 2100ms).attitude_inverted_latched);
+  gaps.heartbeat(t + 2100ms, true, false, false);
+  for (int i = 0; i < 40; ++i) gaps.attitude(t + 2120ms + i * 20ms, 1300000 + i * 300000, -1);
+  assert(!gaps.state(t + 3s).attitude_inverted_latched);
+  gaps.attitude(t + 3s, 20000000, -1);
+  gaps.attitude(t + 3020ms, 20020000, std::numeric_limits<double>::quiet_NaN());
+  for (int i = 0; i < 25; ++i) gaps.attitude(t + 3040ms + i * 20ms, 20040000 + i * 20000, -1);
+  assert(!gaps.state(t + 3520ms).attitude_inverted_latched);
+
+  companion::FlightFeedback stale_tilt;
+  stale_tilt.heartbeat(t, true, false, false);
+  for (int i = 0; i < 40; ++i) stale_tilt.attitude(t + 3s + i * 20ms, 1000000 + i * 20000, -1);
+  assert(!stale_tilt.state(t + 4s).attitude_inverted_latched);
+  companion::FlightFeedback horizontal;
+  horizontal.heartbeat(t, true, false, false);
+  for (int i = 0; i < 50; ++i) horizontal.attitude(t + i * 20ms, 1000000 + i * 20000, 0);
+  assert(!horizontal.state(t + 1s).attitude_inverted_latched);
 }

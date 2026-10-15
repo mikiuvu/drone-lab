@@ -124,7 +124,7 @@ if(COMPANION_BUILD_TESTS)
     if(Python3_Interpreter_FOUND)
       add_test(NAME flight_feedback_io COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_flight_feedback_io.py")
-      set_tests_properties(flight_feedback_io PROPERTIES RUN_SERIAL TRUE TIMEOUT 60
+      set_tests_properties(flight_feedback_io PROPERTIES RUN_SERIAL TRUE TIMEOUT 90
         ENVIRONMENT "DRONE_COMPANION_BIN=$<TARGET_FILE:drone_companion_runner>")
     endif()
   endif()

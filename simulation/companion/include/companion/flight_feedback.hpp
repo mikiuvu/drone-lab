@@ -1,5 +1,7 @@
 #pragma once
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 
 namespace companion {
 
@@ -14,6 +16,7 @@ struct FlightFeedbackState {
   bool failsafe_latched{false};
   bool heartbeat_gap_latched{false};
   bool setpoint_gap_latched{false};
+  bool attitude_inverted_latched{false};
 };
 
 /** @brief 飞控反馈按本机单调时钟过期；未知状态不能确认停机或着地。 */
@@ -26,7 +29,10 @@ class FlightFeedback {
     heartbeat_gap_latched_ = heartbeat_gap_latched_ || armedHeartbeatGap(now);
     setpoint_gap_latched_ = setpoint_gap_latched_ || armedSetpointGap(now);
     // 重新连接或解锁状态变化后，等待新的着地消息，避免复用上一次飞行的反馈。
-    if (!heartbeatFresh(now) || armed != armed_) landed_seen_ = false;
+    if (!heartbeatFresh(now) || armed != armed_) {
+      landed_seen_ = false;
+      attitude_seen_ = inversion_pending_ = false;
+    }
     heartbeat_rx_ = now;
     heartbeat_seen_ = true;
     armed_ = armed;
@@ -51,6 +57,42 @@ class FlightFeedback {
     on_ground_ = on_ground;
   }
 
+  /** @brief 已解锁时，机体上轴朝下连续 500 ms 后锁存；不作为着地确认。
+   * @param source_us 姿态源时间 us，必须递增；body_up_cosine 为机体上轴与世界上轴的点积。
+   * @note 源时间与收包墙钟须同时覆盖 500 ms，源或收包间隔超过 250 ms 时重新计时。
+   *       排队历史、重复样本、未解锁姿态不能代替连续的新鲜输入。
+   */
+  void attitude(Time now, uint64_t source_us, double body_up_cosine) {
+    if (!heartbeatFresh(now) || !armed_) {
+      attitude_seen_ = inversion_pending_ = false;
+      return;
+    }
+    if (!source_us || !std::isfinite(body_up_cosine) ||
+        body_up_cosine < -1 || body_up_cosine > 1) {
+      inversion_pending_ = false;
+      return;
+    }
+    if (attitude_seen_ && source_us <= attitude_source_us_) return;
+    const bool gap = !attitude_seen_ || now < attitude_rx_ ||
+        now - attitude_rx_ > std::chrono::milliseconds(250) ||
+        source_us - attitude_source_us_ > 250000;
+    attitude_seen_ = true;
+    attitude_source_us_ = source_us;
+    attitude_rx_ = now;
+    if (body_up_cosine >= 0) {
+      inversion_pending_ = false;
+      return;
+    }
+    if (!inversion_pending_ || gap) {
+      inversion_pending_ = true;
+      inversion_source_begin_us_ = source_us;
+      inversion_begin_ = now;
+    }
+    attitude_inverted_latched_ = attitude_inverted_latched_ ||
+        (source_us - inversion_source_begin_us_ >= 500000 &&
+         now - inversion_begin_ >= std::chrono::milliseconds(500));
+  }
+
   FlightFeedbackState state(Time now) const {
     FlightFeedbackState result;
     result.heartbeat_fresh = heartbeatFresh(now);
@@ -64,6 +106,7 @@ class FlightFeedback {
     result.failsafe_latched = failsafe_latched_;
     result.heartbeat_gap_latched = heartbeat_gap_latched_ || armedHeartbeatGap(now);
     result.setpoint_gap_latched = setpoint_gap_latched_ || armedSetpointGap(now);
+    result.attitude_inverted_latched = attitude_inverted_latched_;
     return result;
   }
 
@@ -88,6 +131,9 @@ class FlightFeedback {
   bool failsafe_active_{false}, failsafe_latched_{false};
   bool heartbeat_gap_latched_{false};
   bool setpoint_monitored_{false}, setpoint_gap_latched_{false};
+  Time attitude_rx_{}, inversion_begin_{};
+  uint64_t attitude_source_us_{0}, inversion_source_begin_us_{0};
+  bool attitude_seen_{false}, inversion_pending_{false}, attitude_inverted_latched_{false};
 };
 
 }  // namespace companion
