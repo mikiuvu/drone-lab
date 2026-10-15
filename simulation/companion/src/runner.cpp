@@ -56,7 +56,7 @@ void stop(int){running=0;}
 double age(Clock::time_point t){return std::chrono::duration<double>(Clock::now()-t).count();}
 /** @brief DRONE_PROFILE_RUNTIME=1 时记录已解锁循环的阶段耗时和对应线程 CPU 时间。 */
 struct RuntimeProfile {
-  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, LogFlush, Count };
+  enum Stage { Log, Observations, Mavlink, Camera, Tof, Loop, Sleep, LogFlush, CameraPath, Count };
   struct Metric {
     uint64_t samples{0},over_100ms{0},max_wall_us{0},begin_sim_us{0},end_sim_us{0};
     std::optional<uint64_t> cpu_at_max_us;
@@ -89,7 +89,7 @@ struct RuntimeProfile {
   };
   Span measure(Stage stage,const uint64_t* sim){return Span(*this,stage,sim);}
   json report()const{
-    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"},{"log_flush"}};
+    static constexpr const char* names[]={{"log_emit"},{"observations"},{"mavlink"},{"camera"},{"tof"},{"loop"},{"sleep"},{"log_flush"},{"camera_path"}};
     json result=json::object();
     for(int i=0;i<Count;++i){const auto& m=metrics[i];
       result[names[i]]={{"samples",m.samples},{"over_100ms",m.over_100ms},{"max_wall_us",m.max_wall_us},
@@ -610,7 +610,9 @@ int main(int argc,char**argv){try{
         target=vision_done->pixel;frame_seq=vision_done->sequence;camera_us=vision_done->stamp;
         emit({{"kind","vision"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"pixel_only",true},{"detected",target.valid},{"reason",vision_done->error.empty()?target.rejection_reason:vision_done->error},{"bright_pixels",target.bright_pixels},{"components",target.candidate_components},{"strips",target.accepted_strips},{"pairs",target.tested_pairs},{"pair_aspect_rejected",target.rejected_pair_aspect},{"max_pair_aspect",target.max_observed_pair_aspect},{"centroid_x_px",target.centroid_x_px},{"centroid_y_px",target.centroid_y_px},{"angular_error_rad",target.angular_error_rad},{"range_m",target.range_m},{"frame_age_ms",(sim_us-camera_us)*.001}});
       }
-      auto camera_dir=o.runtime; if(std::filesystem::exists(o.runtime/"camera"))camera_dir=o.runtime/"camera";
+      auto camera_dir=o.runtime;
+      {auto path_timing=runtime_profile.measure(RuntimeProfile::CameraPath,&sim_us);
+      if(std::filesystem::exists(o.runtime/"camera"))camera_dir=o.runtime/"camera";}
       try {
         auto camera_timing=runtime_profile.measure(RuntimeProfile::Camera,&sim_us);
         const auto meta=readJson(camera_dir/("camera_"+std::to_string(o.vehicle)+".json"));
