@@ -15,6 +15,8 @@
 namespace companion {
 namespace {
 constexpr size_t kMaxTriangles = 1000000;
+constexpr uint32_t kLeafTriangleLimit = 8;
+constexpr int kNodeVisitLimit = 4096;
 bool boxHit(const Eigen::Vector3f& low, const Eigen::Vector3f& high,
             const Eigen::Vector3d& origin, const Eigen::Vector3d& ray,const Eigen::Vector3d& inverse_ray,
             double far, double& near) {
@@ -47,7 +49,10 @@ TerrainMap::TerrainMap(std::vector<Triangle> triangles) {
   }
   if(triangles_.empty())throw std::invalid_argument("terrain has no nondegenerate faces");
   order_.resize(triangles_.size());std::iota(order_.begin(),order_.end(),0);
-  nodes_.reserve(triangles_.size()/16+32);build(0,order_.size());
+  // 中位数二分树的完整层数给出节点容量上界，避免建树过程中反复扩容。
+  size_t leaf_capacity=1;
+  while(leaf_capacity*kLeafTriangleLimit<triangles_.size())leaf_capacity*=2;
+  nodes_.reserve(2*leaf_capacity-1);build(0,order_.size());
   // 建树后按索引重排三角形，叶子可直接连续访问，临时顺序表随即释放。
   std::vector<Triangle> reordered;reordered.reserve(triangles_.size());
   for(const auto index:order_)reordered.push_back(triangles_[index]);
@@ -84,8 +89,8 @@ uint32_t TerrainMap::build(uint32_t begin,uint32_t end) {
     node.low=node.low.cwiseMin(p);node.high=node.high.cwiseMax(p);
   }
   const uint32_t id=nodes_.size();nodes_.push_back(node);
-  // 包围盒最长轴按三角形重心中位数二分；每叶最多 32 面，使查找跳过大块无关几何。
-  if(end-begin>32) {
+  // 包围盒最长轴按三角形重心中位数二分；小叶子减少同一包围盒内的无关三角形测试。
+  if(end-begin>kLeafTriangleLimit) {
     Eigen::Index axis; (node.high-node.low).maxCoeff(&axis);
     const auto mid=begin+(end-begin)/2;
     std::nth_element(order_.begin()+begin,order_.begin()+mid,order_.begin()+end,
@@ -112,7 +117,7 @@ bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ra
   int visits=0;bool found=false;double best=max_depth;
   while(pending) {
     // 超过资源上限时保守失败，未遍历完的结果不能证明是最近可见表面。
-    if(++visits>1024)return false;
+    if(++visits>kNodeVisitLimit)return false;
     const auto visit=stack[--pending];
     // 入栈时已验证包围盒；最近命中缩短后，只需比较缓存的进入深度。
     if(visit.near>best)continue;

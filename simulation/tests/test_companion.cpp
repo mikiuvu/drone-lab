@@ -115,6 +115,18 @@ static void terrainSurfaceTests() {
   assert(std::abs(hit.point.x()-1.0)<1e-9 && std::abs(hit.normal.z())<1e-9);
 }
 
+static void terrainTraversalBudgetTests() {
+  const TerrainMap::Triangle face{Eigen::Vector3f(2,-1,-1),Eigen::Vector3f(2,1,-1),Eigen::Vector3f(2,0,1)};
+  // 重叠面不能由最近深度剪枝；适量重复面仍须返回交点。
+  TerrainMap overlap(std::vector<TerrainMap::Triangle>(8192,face));
+  TerrainMap::Hit hit;
+  assert(overlap.raycast({0,0,0},{1,0,0},4,hit));
+  assert(hit.depth_m==2&&(hit.point-Eigen::Vector3d(2,0,0)).norm()<1e-12);
+  // 资源耗尽时即使已有交点，也不能将未完成的遍历当作最近命中。
+  TerrainMap exhausted(std::vector<TerrainMap::Triangle>(32768,face));
+  assert(!exhausted.raycast({0,0,0},{1,0,0},4,hit));
+}
+
 static void terrainEstimatorRegression() {
   using T=TerrainMap::Triangle;
   // Two finite vertical planes in each sensor's viewing frame. All winding signs
@@ -187,4 +199,4 @@ static int terrainDepthDiagnostic(const char* depth_path,const char* mesh_path) 
   return 0;
 }
 
-int main(int argc,char**argv){if(argc==2)return terrainBenchmark(argv[1]);if(argc==4&&std::string(argv[1])=="--depth-diagnostic")return terrainDepthDiagnostic(argv[2],argv[3]);heightAndPrediction();peerGate();sensorAndVisionGates();mavlinkCoordinateRoundTrip();terrainSurfaceTests();terrainEstimatorRegression();std::cout<<"PASS companion tests\n";}
+int main(int argc,char**argv){if(argc==2)return terrainBenchmark(argv[1]);if(argc==4&&std::string(argv[1])=="--depth-diagnostic")return terrainDepthDiagnostic(argv[2],argv[3]);heightAndPrediction();peerGate();sensorAndVisionGates();mavlinkCoordinateRoundTrip();terrainSurfaceTests();terrainTraversalBudgetTests();terrainEstimatorRegression();std::cout<<"PASS companion tests\n";}
