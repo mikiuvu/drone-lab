@@ -118,6 +118,42 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_landed()
         self.receive_status(lambda row: row["landed"])
 
+    def test_attitude_is_sampled_at_imu_time_and_old_attitude_is_ignored(self):
+        self.grounded()
+        started = time.monotonic()
+        while time.monotonic() - started < 8.3:
+            self.send_heartbeat()
+            self.send_landed()
+            stamp = 1_000_000 + int((time.monotonic() - started) * 1e6)
+            self.send_sensors(stamp)
+            time.sleep(0.02)
+        source = (stamp // 1000 + 100) * 1000
+
+        def send_sample(imu_stamp, attitude_stamp, yaw):
+            attitude = struct.pack("<Iffffff", attitude_stamp // 1000, 0, 0, yaw, 0, 0, 1)
+            self.mav.sendto(mavlink_packet(30, attitude, 39), ("127.0.0.1", self.runner_port))
+            imu = struct.pack("<Q13fH", imu_stamp, 0, 0, -9.80665, 0, 0, 1, 0, 0, 0,
+                              1013.25, 0, 0, 20, 0xFFFF)
+            self.mav.sendto(mavlink_packet(105, imu, 93), ("127.0.0.1", self.runner_port))
+            height = {"schema": 1, "kind": "height_assist", "source": "SIM_HEIGHT_ASSIST",
+                      "vehicle": 240, "sim_time_us": imu_stamp, "z_world_m": 0.516}
+            self.mav.sendto(json.dumps(height).encode("utf-8"), ("127.0.0.1", 16240))
+
+        def expect_yaw(expected):
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                estimates = [row for row in recorded_rows(self.root / "companion_240.jsonl")
+                             if row.get("kind") == "estimate" and row["sim_time_us"] >= source]
+                if estimates and abs(estimates[-1]["yaw_rad"] - expected) < 1e-6:
+                    return
+                time.sleep(0.01)
+            self.fail(f"Expected yaw {expected} at IMU exposure, latest: {estimates[-1] if estimates else None}")
+
+        send_sample(source + 20_000, source, 0)
+        expect_yaw(-0.02)
+        send_sample(source + 30_000, source - 1000, 1)
+        expect_yaw(-0.03)
+
     def test_stale_heartbeat_cannot_be_refreshed_by_ground_packets(self):
         self.grounded()
         deadline = time.monotonic() + 3.2

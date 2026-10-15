@@ -17,6 +17,7 @@
 #include "companion/latest_tof.hpp"
 #include "companion/vision_delay.hpp"
 #include "companion/flight_feedback.hpp"
+#include "companion/imu_attitude.hpp"
 #ifdef COMPANION_WITH_OPENCV
 #include "companion/rm_auto_aim.hpp"
 #endif
@@ -352,7 +353,11 @@ int main(int argc,char**argv){try{
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
   Eigen::Vector2d reliable_odometry_xy(config.initial_pose.x_m,config.initial_pose.y_m);
-  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double roll=0,pitch=0,yaw=0;bool attitude=false;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,first_imu_sim=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
+  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double yaw=0;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,first_imu_sim=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
+  companion::ImuAttitudeHistory attitude_history;
+  uint64_t latest_imu_boot_us=0,attitude_stamp_rejected=0,imu_stamp_rejected=0,imu_attitude_missing=0;
+  uint64_t max_attitude_extrapolation_us=0,max_attitude_interpolation_us=0;
+  std::array<uint64_t,3> imu_attitude_counts{};
   auto start=Clock::now(),last_publish=start,last_heartbeat=start,last_command=start;bool intervals_requested=false;std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
   auto fusion=[&](const companion::FusionReport&r,const char*kind,uint64_t stamp){emit({{"kind","fusion"},{"sensor_kind",kind},{"sim_time_us",stamp},{"accepted",r.accepted},{"gated",r.gated},{"stale",r.stale},{"degenerate",r.degenerate},{"inliers",r.inliers},{"reason",r.reason}});};
   // 单线程轮询：各通道每轮限制包数，避免繁忙通道使其他输入长期得不到处理。
@@ -424,27 +429,55 @@ int main(int argc,char**argv){try{
         }
       }
       if(target_sys==0||msg.sysid!=target_sys||msg.compid!=target_comp)continue;
-      if(msg.msgid==MAVLINK_MSG_ID_ATTITUDE){mavlink_attitude_t a;mavlink_msg_attitude_decode(&msg,&a);if(std::isfinite(a.roll)&&std::isfinite(a.pitch)&&std::isfinite(a.yaw)){roll=a.roll;pitch=a.pitch;yaw=a.yaw;attitude=true;attitude_rx=Clock::now();}}
+      if(msg.msgid==MAVLINK_MSG_ID_ATTITUDE){
+        mavlink_attitude_t a;mavlink_msg_attitude_decode(&msg,&a);
+        const auto stamp=companion::attitudeBootTimeUs(a.time_boot_ms,
+            latest_imu_boot_us?latest_imu_boot_us:attitude_history.latestTimeUs());
+        if(stamp&&std::isfinite(a.roll)&&std::isfinite(a.pitch)&&std::isfinite(a.yaw)&&
+            attitude_history.observe(*stamp,Eigen::Quaterniond(rotation(a.roll,-a.pitch,companion::kPi/2-a.yaw)))){
+          yaw=a.yaw;attitude_rx=Clock::now();
+        }else ++attitude_stamp_rejected;
+      }
       else if(msg.msgid==MAVLINK_MSG_ID_EXTENDED_SYS_STATE){mavlink_extended_sys_state_t state;mavlink_msg_extended_sys_state_decode(&msg,&state);native_feedback.landed(Clock::now(),state.landed_state==MAV_LANDED_STATE_ON_GROUND);flight=native_feedback.state(Clock::now());}
       else if(msg.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
         mavlink_highres_imu_t i; mavlink_msg_highres_imu_decode(&msg,&i);
+        if(!i.time_usec||i.time_usec<=latest_imu_boot_us||i.time_usec>static_cast<uint64_t>(std::numeric_limits<int64_t>::max())){
+          ++imu_stamp_rejected;continue;
+        }
+        latest_imu_boot_us=i.time_usec;
         // PX4 initializes and may reset its compass/yaw during early startup.
         // Do not interpret that estimator reset as physical angular motion.
-        if(!sim_us||!attitude||age(attitude_rx)>.25||age(start)<8.0) continue;
-        if(!first_imu){estimator.reset(sim_us);first_imu=i.time_usec;first_imu_sim=sim_us;bias_start=Clock::now();}
+        if(!sim_us||!attitude_history.latestTimeUs()||age(attitude_rx)>.25||age(start)<8.0) continue;
+        std::optional<Eigen::Vector3d> body_rate;
+        if((i.fields_updated&0x38)==0x38)body_rate=Eigen::Vector3d(i.xgyro,-i.ygyro,-i.zgyro);
+        const auto timed_attitude=attitude_history.at(i.time_usec,body_rate);
+        if(!timed_attitude){++imu_attitude_missing;continue;}
+        if(!first_imu){
+          estimator.reset(sim_us);first_imu=i.time_usec;first_imu_sim=sim_us;bias_start=Clock::now();
+          emit({{"kind","imu_clock_alignment"},{"sim_time_us",first_imu_sim},{"imu_boot_time_us",first_imu},
+              {"attitude_boot_time_us",attitude_history.latestTimeUs()}});
+        }
         // 把飞控 IMU 的时间增量映射到首包对应的仿真时刻，拒绝偏差过大的映射。
         int64_t mapped=static_cast<int64_t>(first_imu_sim)+static_cast<int64_t>(i.time_usec)-static_cast<int64_t>(first_imu);
         if(mapped<=0||std::llabs(mapped-static_cast<int64_t>(sim_us))>500000) continue;
-        // 飞控 NED 航向转 ENU：π/2-yaw；起点航向补偿只在首次对齐时确定。
-        const double raw_yaw=companion::wrapAngle(companion::kPi/2-yaw);
+        ++imu_attitude_counts[static_cast<std::size_t>(timed_attitude->mode)];
+        if(timed_attitude->mode==companion::ImuAttitudeMode::Extrapolated)
+          max_attitude_extrapolation_us=std::max(max_attitude_extrapolation_us,i.time_usec-timed_attitude->begin_us);
+        if(timed_attitude->mode==companion::ImuAttitudeMode::Interpolated)
+          max_attitude_interpolation_us=std::max(max_attitude_interpolation_us,timed_attitude->end_us-timed_attitude->begin_us);
+        const auto attitude_rotation=timed_attitude->body_to_world.toRotationMatrix();
+        const double roll_flu=std::atan2(attitude_rotation(2,1),attitude_rotation(2,2));
+        const double pitch_flu=std::atan2(-attitude_rotation(2,0),std::hypot(attitude_rotation(0,0),attitude_rotation(1,0)));
+        // 起点航向补偿只在首次对齐时确定；姿态已采样到本条 IMU 的源时间。
+        const double raw_yaw=std::atan2(attitude_rotation(1,0),attitude_rotation(0,0));
         if(!yaw_aligned){yaw_offset=companion::wrapAngle(config.initial_pose.yaw_rad-raw_yaw);yaw_aligned=true;}
         const double aligned_yaw=companion::wrapAngle(raw_yaw+yaw_offset);
         companion::ImuSample sample; sample.sim_time_us=static_cast<uint64_t>(mapped); sample.attitude_valid=true;
-        sample.roll_flu_rad=roll; sample.pitch_flu_rad=-pitch; sample.yaw_enu_rad=aligned_yaw;
+        sample.roll_flu_rad=roll_flu; sample.pitch_flu_rad=pitch_flu; sample.yaw_enu_rad=aligned_yaw;
         // 加速度计给的是比力：先 FRD→FLU，再旋到世界系并补重力，得到平移加速度。
         Eigen::Vector3d specific_flu(i.xacc,-i.yacc,-i.zacc);
         const double acceleration_yaw=estimator.estimate().pose.yaw_rad;
-        Eigen::Vector3d raw_linear=rotation(roll,-pitch,acceleration_yaw)*specific_flu+Eigen::Vector3d(0,0,-9.80665);
+        Eigen::Vector3d raw_linear=rotation(roll_flu,pitch_flu,acceleration_yaw)*specific_flu+Eigen::Vector3d(0,0,-9.80665);
         // 冲击识别：必须是当前撞击机、接近基地、超过阶段切换屏蔽期并出现减速度。
         // 这仍是传感器判断；Gazebo 接触日志由独立评估器核验，未作为这里的输入。
         if(team_enabled&&team_command.value("phase","")=="CONTACT"&&team_command.value("active_vehicle",-1)==o.vehicle&&flight.armed&&sim_us>last_impact_us+1000000&&sim_us>contact_enter_us+150000){
@@ -1056,7 +1089,10 @@ int main(int argc,char**argv){try{
         last_publish+std::chrono::milliseconds(20)));
   }
   const auto final_feedback=native_feedback.state(Clock::now());
-  emit({{"kind","stop"},{"sim_time_us",sim_us},{"armed_at_stop",final_feedback.armed},{"heartbeat_fresh",final_feedback.heartbeat_fresh},{"landed_fresh",final_feedback.landed_fresh},{"peer_send_drops",peers.send_drops},{"peer_last_errno",peers.last_send_errno},{"mav_send_drops",mav.send_drops},{"mav_last_errno",mav.last_send_errno}});return 0;
+  emit({{"kind","stop"},{"sim_time_us",sim_us},{"armed_at_stop",final_feedback.armed},{"heartbeat_fresh",final_feedback.heartbeat_fresh},{"landed_fresh",final_feedback.landed_fresh},{"peer_send_drops",peers.send_drops},{"peer_last_errno",peers.last_send_errno},{"mav_send_drops",mav.send_drops},{"mav_last_errno",mav.last_send_errno},
+      {"imu_attitude",{{"exact",imu_attitude_counts[0]},{"interpolated",imu_attitude_counts[1]},{"extrapolated",imu_attitude_counts[2]},
+          {"missing",imu_attitude_missing},{"attitude_stamp_rejected",attitude_stamp_rejected},{"imu_stamp_rejected",imu_stamp_rejected},
+          {"max_extrapolation_us",max_attitude_extrapolation_us},{"max_interpolation_gap_us",max_attitude_interpolation_us}}}});return 0;
 }catch(const std::exception&e){std::cerr<<"companion: "<<e.what()<<'\n';return 2;}}
 
 
