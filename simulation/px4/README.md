@@ -20,6 +20,20 @@ if ($LASTEXITCODE -ne 0) { throw 'PX4 logger diagnostic build failed' }
 
 诊断运行需要选择输出的 `bin/px4`；现有启动器的默认固件路径不变。`SDLOG_PROFILE=3` 包含估计器回放话题。逐话题跳号输出会增加运行时日志负载，耗时比较应保留相同诊断配置。
 
+## 里程计历史保留
+
+`--retain-visual-odometry` 构建使用 [8 条历史保留补丁](visual-odometry-log-retention.patch)。普通订阅者继续读取最新样本；logger 的全速里程计订阅按顺序取历史，每轮最多取 8 条。超过历史容量时仍跳过最旧记录，并由原有代号检查报告跳号。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+wsl -d Ubuntu-22.04 --exec python3 '/mnt/d/Robomaster code/drone/scripts/build_px4_logger_diagnostic.py' --sdk /home/devcontainers/drone-sim/PX4-Autopilot --output /home/devcontainers/drone-sim/build-logger-retention --retain-visual-odometry --check-retention-contract
+if ($LASTEXITCODE -ne 0) { throw 'PX4 odometry retention build or test failed' }
+```
+
+该模式重新编译 uORB 与 logger 相关对象。`--check-retention-contract` 额外构建原生库测试：基线应复现三条突发发布的历史缺失；候选应通过历史顺序、普通读取最新值、独立读取者、迟到订阅、溢出及 10 万次并发发布检查。结果保存在输出目录的 `retention-contract.json`，基线的预期断言失败不产生 core 文件。
+
+里程计公共队列深度保持 1，额外历史只通过 logger 使用的接口读取。验证范围与两组闭环结果见 [里程计发布历史与日志保留](../../docs/nano-logger-retention-20261016.md)。
+
 ## 分析
 
 输入完整性仍按 EKF2 索引逐条检查。例如：
