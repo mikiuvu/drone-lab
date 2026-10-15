@@ -99,14 +99,16 @@ uint32_t TerrainMap::build(uint32_t begin,uint32_t end) {
 
 bool TerrainMap::raycast(const Eigen::Vector3d& origin,const Eigen::Vector3d& ray,
                          double max_depth,Hit& hit) const {
-  if(!origin.allFinite()||!ray.allFinite()||!std::isfinite(max_depth)||max_depth<=0||ray.norm()<1e-9)return false;
+  if(!origin.allFinite()||!ray.allFinite()||!std::isfinite(max_depth)||max_depth<=0)return false;
   const double ray_norm=ray.norm();
+  if(ray_norm<1e-9)return false;
   Eigen::Vector3d inverse_ray=Eigen::Vector3d::Zero();
   for(int axis=0;axis<3;++axis)if(std::abs(ray(axis))>=1e-12)inverse_ray(axis)=1/ray(axis);
   double root_near;
   if(!boxHit(nodes_[0].low,nodes_[0].high,origin,ray,inverse_ray,max_depth,root_near))return false;
   struct Visit { uint32_t node; double near; };
-  std::array<Visit,64> stack{};size_t pending=1;stack[0]={0,root_near};
+  // 每个有效槽位在入栈时完整赋值，未使用槽位无需清零。
+  std::array<Visit,64> stack;size_t pending=1;stack[0]={0,root_near};
   int visits=0;bool found=false;double best=max_depth;
   while(pending) {
     // 超过资源上限时保守失败，未遍历完的结果不能证明是最近可见表面。
