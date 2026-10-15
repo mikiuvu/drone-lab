@@ -20,6 +20,16 @@ import xml.etree.ElementTree as ET
 
 from mesh_bounds import read_bounds
 
+NATIVE_SENSOR_NOISE = {
+    "angular_velocity": {"mean": 0.0, "stddev": 0.00018665,
+                         "dynamic_bias_stddev": 3.8785e-05,
+                         "dynamic_bias_correlation_time": 1000.0},
+    "linear_acceleration": {"mean": 0.0, "stddev": 0.00186,
+                            "dynamic_bias_stddev": 0.006,
+                            "dynamic_bias_correlation_time": 300.0},
+    "pressure": {"mean": 0.0, "stddev": 0.01},
+}
+
 
 # 创建并返回 XML 子节点；text 非 None 时转为字符串，属性通过 attrs 传入。
 def child(parent: ET.Element, tag: str, text: object | None = None, **attrs: str):
@@ -35,6 +45,23 @@ def child(parent: ET.Element, tag: str, text: object | None = None, **attrs: str
     if text is not None:
         node.text = str(text)
     return node
+
+
+def add_native_sensor_noise(sensor: ET.Element) -> None:
+    """为 micro 原生传感器使用 PX4 Gazebo x500_base 的高斯噪声与动态偏置参数。"""
+    if sensor.get("type") == "imu":
+        imu = child(sensor, "imu")
+        for group in ("angular_velocity", "linear_acceleration"):
+            vector = child(imu, group)
+            for axis in "xyz":
+                noise = child(child(vector, axis), "noise", type="gaussian")
+                for parameter, value in NATIVE_SENSOR_NOISE[group].items():
+                    child(noise, parameter, value)
+    elif sensor.get("type") == "air_pressure":
+        pressure = child(child(sensor, "air_pressure"), "pressure")
+        noise = child(pressure, "noise", type="gaussian")
+        for parameter, value in NATIVE_SENSOR_NOISE["pressure"].items():
+            child(noise, parameter, value)
 
 
 # @param mass 均匀长方体质量（kg）。
@@ -284,6 +311,11 @@ def generate(args):
         "base_model": str(source) if source else None,
     }
     if mode == "micro":
+        contract["native_sensor_noise"] = {
+            "profile": "px4_gz_x500_base", "parameters": copy.deepcopy(NATIVE_SENSOR_NOISE),
+            "units": {"angular_velocity": "rad/s", "linear_acceleration": "m/s^2",
+                      "pressure": "Pa", "dynamic_bias_correlation_time": "s"},
+        }
         idle_speed = hover_speed / 6.0
         parameters = {"CA_AIRFRAME": 0, "CA_ROTOR_COUNT": 4,
                       "THR_MDL_FAC": 0.0,
@@ -408,6 +440,7 @@ def generate(args):
                 sensor = child(base, "sensor", name=sensor_name, type=sensor_type)
                 child(sensor, "always_on", "true")
                 child(sensor, "update_rate", hz)
+                add_native_sensor_noise(sensor)
             for rotor_id, (x, y, direction, km) in enumerate(micro_rotors):
                 rotor = child(model, "link", name=f"rotor_{rotor_id}")
                 child(rotor, "gravity", "true")
