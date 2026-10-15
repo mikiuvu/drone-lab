@@ -835,10 +835,15 @@ int main(int argc,char**argv){try{
                 const bool prediction_usable=(periodic_valid||linear_valid)&&dive_track.measured;
                 const auto contact_deadline=team_command.value("contact_deadline_us",uint64_t(0));
                 const bool attempt_window=companion::diveAttemptFitsWindow(sim_us,contact_deadline,dive_timeout_s);
-                const bool commit_eligible=flight.armed&&team_ready&&prediction_usable&&attempt_window&&
+                const Eigen::Vector3d body_displacement=rotation(0,0,-e.pose.yaw_rad)*(aim-self);
+                const Eigen::Vector3d body_velocity=rotation(0,0,-e.pose.yaw_rad)*e.velocity_enu_mps;
+                const bool terminal_available=companion::terminalEntryVelocityCompatible(body_displacement,
+                    body_velocity,dive_impact_speed,dive_lateral_limit,dive_descent_limit,dive_min_forward);
+                const bool entry_eligible=flight.armed&&team_ready&&prediction_usable&&attempt_window&&
                     companion::diveCommitEligible(self,e.velocity_enu_mps,aim,e.pose.yaw_rad,heading,
                         dive_entry.z(),dive_track.measurement_time_us,sim_us,
                         dive.value("entry_height_tolerance_m",.12),dive.value("entry_yaw_tolerance_rad",.35));
+                const bool commit_eligible=entry_eligible&&terminal_available;
                 if(dive_entry_alignment){
                   target_velocity=std::clamp(target_velocity,-dive_linear_speed_limit,dive_linear_speed_limit);
                   const Eigen::Vector3d entry(dive_entry.x(),aim.y(),dive_entry.z());
@@ -868,16 +873,19 @@ int main(int argc,char**argv){try{
                         {"rail_fit_vy_mps",robust?robust->velocity_mps:0.0}});
                   }
                 }else{
-                  dive_committed=commit_eligible&&std::hypot(aim.x()-self.x(),aim.y()-self.y())<=dive_commit_range;
-                  if(!commit_eligible){aligning=true;alignment_velocity=desired;}
+                  const bool in_commit_range=std::hypot(aim.x()-self.x(),aim.y()-self.y())<=dive_commit_range;
+                  dive_committed=commit_eligible&&in_commit_range;
+                  if(!entry_eligible||(in_commit_range&&!terminal_available)){aligning=true;alignment_velocity=desired;}
                 }
                 if(!commit_eligible&&sim_us>=last_commit_gate_report_us+200000){
                   last_commit_gate_report_us=sim_us;
                   emit({{"kind","dive_commit_gate"},{"sim_time_us",sim_us},{"eligible",false},
                       {"attempt_window_available",attempt_window},{"contact_deadline_us",contact_deadline},
+                      {"terminal_motion_available",terminal_available},
                       {"prediction_usable",prediction_usable},{"track_measured",dive_track.measured},
                       {"measurement_time_us",dive_track.measurement_time_us},{"aim_source",source},
                       {"self_x_m",self.x()},{"self_z_m",self.z()},
+                      {"vertical_speed_mps",e.velocity_enu_mps.z()},
                       {"forward_speed_mps",e.velocity_enu_mps.x()*std::cos(heading)+e.velocity_enu_mps.y()*std::sin(heading)}});
                 }
                 if(dive_committed){dive_commit_us=sim_us;dive_aim_exposure_us=dive_track.valid?dive_track.measurement_time_us:sim_us;}
