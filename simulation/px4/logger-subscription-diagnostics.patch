@@ -1,0 +1,26 @@
+diff --git a/src/modules/logger/logged_topics.cpp b/src/modules/logger/logged_topics.cpp
+--- a/src/modules/logger/logged_topics.cpp
++++ b/src/modules/logger/logged_topics.cpp
+@@ -339,6 +339,7 @@
+ 
+ void LoggedTopics::add_estimator_replay_topics()
+ {
++	add_topic("logger_status");
+ 	// for estimator replay (need to be at full rate)
+ 	add_topic("ekf2_timestamps");
+ 
+diff --git a/src/modules/logger/logger.cpp b/src/modules/logger/logger.cpp
+--- a/src/modules/logger/logger.cpp
++++ b/src/modules/logger/logger.cpp
+@@ -456,6 +456,11 @@
+ 			if (updated && (sub.get_last_generation() != last_generation + 1)) {
+ 				// error, missed a message
+ 				_message_gaps++;
++				uint64_t sample_stamp = 0;
++				memcpy(&sample_stamp, buffer, sizeof(sample_stamp));
++				PX4_INFO("subscription gap topic=%s previous=%u current=%u sample_us=%llu",
++				         sub.get_topic()->o_name, last_generation, sub.get_last_generation(),
++				         static_cast<unsigned long long>(sample_stamp));
+ 			}
+ 
+ 		} else {
