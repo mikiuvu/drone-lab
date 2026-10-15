@@ -284,6 +284,7 @@ int main(int argc,char**argv){try{
   const double dive_aim_lateral_limit=dive.value("aim_lateral_limit_m",0.35);
   const double dive_arrival_acceleration=dive.value("arrival_acceleration_mps2",1.5);
   const bool dive_acceleration_arrival=dive.value("arrival_acceleration_enabled",false);
+  const std::string dive_arrival_reference=dive.value("arrival_reference",std::string("radial"));
   const double dive_aim_correction_rate=dive.value("aim_correction_rate_mps",0.0);
   const double dive_linear_speed_limit=dive.value("linear_speed_limit_mps",1.0);
   const double dive_reflection_half_width=dive.value("linear_reflection_half_width_m",0.0);
@@ -320,6 +321,10 @@ int main(int argc,char**argv){try{
   if(!std::isfinite(dive_arrival_acceleration)||dive_arrival_acceleration<=0||
      !std::isfinite(dive_aim_correction_rate)||dive_aim_correction_rate<0)
     throw std::runtime_error("invalid dive arrival acceleration or aim correction rate");
+  if(dive_arrival_reference!="radial"&&dive_arrival_reference!="plane")
+    throw std::runtime_error("invalid team_mission.dive_attack.arrival_reference");
+  if(dive_arrival_reference=="plane"&&(dive_min_forward<=0||dive_min_forward>dive_impact_speed))
+    throw std::runtime_error("invalid plane arrival speed limits");
   if(dive_weak_limit<0||dive_weak_limit>64)throw std::runtime_error("invalid team_mission.dive_attack.max_weak_contacts");
   if(!std::isfinite(dive_exit_margin)||dive_exit_margin<0||dive_exit_margin>5)
     throw std::runtime_error("invalid team_mission.dive_attack.exit_margin_m");
@@ -975,6 +980,10 @@ int main(int argc,char**argv){try{
               Eigen::Vector3d alignment_velocity=Eigen::Vector3d::Zero();
               const auto arrival_time=[&](const Eigen::Vector3d& aim){
                 const Eigen::Vector3d direction=aim-self;
+                if(dive_arrival_reference=="plane")
+                  return companion::estimatePlaneArrivalTime(direction,e.velocity_enu_mps,
+                      Eigen::Vector3d(std::cos(heading),std::sin(heading),0),dive_impact_speed,
+                      dive_min_forward,dive_acceleration_arrival?dive_arrival_acceleration:0.0).value_or(0.0);
                 const double distance=direction.norm();
                 if(!dive_acceleration_arrival){
                   const double speed=std::clamp(std::hypot(e.velocity_enu_mps.x(),e.velocity_enu_mps.y()),
@@ -1081,6 +1090,7 @@ int main(int argc,char**argv){try{
                 if(source!=dive_aim_source||dive_committed){
                   dive_aim_source=source;
                   emit({{"kind","dive_aim"},{"sim_time_us",sim_us},{"aim_source",source},{"lead_s",lead},{"committed",dive_committed},{"aim_x_m",aim.x()},{"aim_y_m",aim.y()},{"aim_z_m",aim.z()},{"predicted_confidence",predicted.valid?predicted.confidence:0.0},
+                      {"arrival_reference",dive_arrival_reference},{"arrival_acceleration_enabled",dive_acceleration_arrival},
                       {"entry_alignment",dive_entry_alignment},{"self_x_m",self.x()},{"self_y_m",self.y()},{"self_z_m",self.z()},
                       {"self_vx_mps",e.velocity_enu_mps.x()},{"self_vy_mps",e.velocity_enu_mps.y()},{"track_y_m",dive_track.position.y()},{"track_vy_mps",dive_track.velocity.y()},{"track_valid",dive_track.valid},
                       {"track_measured",dive_track.measured},{"measurement_time_us",dive_track.measurement_time_us},{"commit_eligible",commit_eligible}});

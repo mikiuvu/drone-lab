@@ -125,6 +125,23 @@ inline std::optional<double> estimateArrivalTime(double distance,double initial_
   const double time=initial>=0?2*distance/(initial+root):(root-initial)/acceleration;
   return std::isfinite(time)?std::optional<double>(time):std::nullopt;
 }
+/** @brief 沿单位法向估计到达目标平面的时间；横向位移和高度不增加穿面距离。
+ * @note acceleration=0 使用有界匀速模型；正值使用加速后限速模型。
+ *       displacement、velocity 与 normal 使用同一世界系，单位 m、m/s、无量纲。
+ */
+inline std::optional<double> estimatePlaneArrivalTime(const Eigen::Vector3d& displacement,
+    const Eigen::Vector3d& velocity,const Eigen::Vector3d& normal,double speed_limit,
+    double min_speed,double acceleration){
+  if(!displacement.allFinite()||!velocity.allFinite()||!normal.allFinite()||
+     !std::isfinite(normal.squaredNorm())||std::abs(normal.squaredNorm()-1)>1e-9||
+     !std::isfinite(speed_limit)||!std::isfinite(min_speed)||!std::isfinite(acceleration)||
+     speed_limit<=0||min_speed<=0||min_speed>speed_limit||acceleration<0)return std::nullopt;
+  const double distance=displacement.dot(normal),initial=velocity.dot(normal);
+  if(!std::isfinite(distance)||!std::isfinite(initial)||distance<0)return std::nullopt;
+  if(acceleration>0)return estimateArrivalTime(distance,initial,speed_limit,acceleration);
+  const double time=distance/std::clamp(initial,min_speed,speed_limit);
+  return std::isfinite(time)?std::optional<double>(time):std::nullopt;
+}
 
 /** @brief 对新的独立曝光修正瞄准 Y；陈旧、未来及重复曝光不改变目标。
  * @param max_rate 横向瞄准点最大修正速度，m/s；0 表示保持原瞄准点。

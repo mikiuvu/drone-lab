@@ -406,6 +406,19 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_attitude(3_000_000)
         self.assertFalse(any(row.get("kind") == "unrecoverable" for row in self.processed_input_rows()))
 
+    def test_arrival_reference_configuration_is_validated(self):
+        for reference, minimum, expected in (("radial", 1.2, 0), ("plane", 1.2, 0),
+                ("unknown", 1.2, 2), ("plane", 0, 2), ("plane", 4, 2)):
+            with self.subTest(reference=reference, minimum=minimum):
+                path = self.root / "arrival-map.json"
+                path.write_text(json.dumps({"spawns": [{"id": 239, "x": 0, "y": 0, "z": .516}],
+                    "walls": [], "team_mission": {"dive_attack": {"arrival_reference": reference,
+                        "min_forward_speed_mps": minimum}}}), encoding="utf-8")
+                completed = subprocess.run([str(BINARY), "--vehicle", "239", "--map", str(path),
+                    "--config", str(self.root / "config.json"), "--runtime", str(self.root / "arrival"),
+                    "--duration", "0.03"], capture_output=True, text=True, timeout=3)
+                self.assertEqual(completed.returncode, expected, completed.stderr)
+
     def test_armed_feedback_gap_latches_even_when_queued_heartbeat_is_healthy(self):
         self.grounded()
         self.send_heartbeat(armed=True)
