@@ -21,6 +21,15 @@ inline std::optional<Eigen::Vector3d> terminalVelocity(const Eigen::Vector3d& di
   if(!std::isfinite(scale)||scale<=0||!velocity.allFinite())return std::nullopt;
   return velocity;
 }
+/** @brief 提交时前向速度不超过三轴限速比例允许值，垂向不得远离目标；静止容差 0.05 m/s。 */
+inline bool terminalEntryVelocityCompatible(const Eigen::Vector3d& displacement,
+    const Eigen::Vector3d& velocity,double horizontal_limit,double lateral_limit,
+    double vertical_limit,double min_forward){
+  if(!velocity.allFinite()||!std::isfinite(min_forward)||min_forward<=0)return false;
+  const auto reference=terminalVelocity(displacement,horizontal_limit,lateral_limit,vertical_limit);
+  if(!reference||reference->x()<std::max(min_forward,velocity.x()))return false;
+  return !((displacement.z()<0&&velocity.z()>.05)||(displacement.z()>0&&velocity.z()<-.05));
+}
 /** @brief 剩余接触时窗须覆盖一次俯冲上限及 20 ms 导航周期；deadline=0 表示不限时。 */
 inline bool diveAttemptFitsWindow(uint64_t now,uint64_t deadline,double duration_s){
   if(!std::isfinite(duration_s)||duration_s<=0)return false;
