@@ -10,6 +10,8 @@ struct FlightFeedbackState {
   bool landed{false};
   bool offboard{false};
   bool auto_land{false};
+  bool failsafe_active{false};
+  bool failsafe_latched{false};
 };
 
 /** @brief 飞控反馈按本机单调时钟过期；未知状态不能确认停机或着地。 */
@@ -18,7 +20,7 @@ class FlightFeedback {
   using Clock = std::chrono::steady_clock;
   using Time = Clock::time_point;
 
-  void heartbeat(Time now, bool armed, bool offboard, bool auto_land) {
+  void heartbeat(Time now, bool armed, bool offboard, bool auto_land, bool failsafe = false) {
     // 重新连接或解锁状态变化后，等待新的着地消息，避免复用上一次飞行的反馈。
     if (!heartbeatFresh(now) || armed != armed_) landed_seen_ = false;
     heartbeat_rx_ = now;
@@ -26,6 +28,8 @@ class FlightFeedback {
     armed_ = armed;
     offboard_ = offboard;
     auto_land_ = auto_land;
+    failsafe_active_ = failsafe;
+    failsafe_latched_ = failsafe_latched_ || (armed && failsafe);
   }
 
   void landed(Time now, bool on_ground) {
@@ -44,6 +48,8 @@ class FlightFeedback {
     result.landed = result.landed_fresh && on_ground_;
     result.offboard = result.heartbeat_fresh && offboard_;
     result.auto_land = result.heartbeat_fresh && auto_land_;
+    result.failsafe_active = result.heartbeat_fresh && failsafe_active_;
+    result.failsafe_latched = failsafe_latched_;
     return result;
   }
 
@@ -57,6 +63,7 @@ class FlightFeedback {
   Time heartbeat_rx_{}, landed_rx_{};
   bool heartbeat_seen_{false}, landed_seen_{false};
   bool armed_{true}, on_ground_{false}, offboard_{false}, auto_land_{false};
+  bool failsafe_active_{false}, failsafe_latched_{false};
 };
 
 }  // namespace companion

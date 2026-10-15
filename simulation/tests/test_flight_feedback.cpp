@@ -38,4 +38,16 @@ int main() {
   assert(feedback.state(t + 3603ms).landed && !feedback.state(t + 3603ms).armed);
   assert(!feedback.state(t).heartbeat_fresh);
   assert(!feedback.state(t).landed_fresh);
+
+  companion::FlightFeedback failure;
+  failure.heartbeat(t, false, false, false, true);
+  assert(failure.state(t).failsafe_active && !failure.state(t).failsafe_latched);
+  failure.heartbeat(t + 1ms, true, false, false, true);
+  assert(failure.state(t + 1ms).failsafe_active && failure.state(t + 1ms).failsafe_latched);
+  failure.heartbeat(t + 2ms, true, false, true);
+  assert(!failure.state(t + 2ms).failsafe_active && failure.state(t + 2ms).failsafe_latched);
+  failure.heartbeat(t + 3ms, false, false, false);
+  failure.landed(t + 4ms, true);
+  assert(failure.state(t + 4ms).landed && failure.state(t + 4ms).failsafe_latched);
+  assert(failure.state(t + 4s).failsafe_latched && !failure.state(t + 4s).failsafe_active);
 }

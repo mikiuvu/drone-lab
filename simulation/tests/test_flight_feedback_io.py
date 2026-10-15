@@ -73,8 +73,8 @@ class FlightFeedbackIOTest(unittest.TestCase):
                 return row
         self.fail("Expected runner status did not arrive")
 
-    def send_heartbeat(self, armed=False, system=1, component=1):
-        payload = struct.pack("<IBBBBB", 6 << 16, 2, 12, 128 if armed else 0, 4, 3)
+    def send_heartbeat(self, armed=False, system=1, component=1, system_status=4, main_mode=6):
+        payload = struct.pack("<IBBBBB", main_mode << 16, 2, 12, 128 if armed else 0, system_status, 3)
         self.mav.sendto(mavlink_packet(0, payload, 50, system, component), ("127.0.0.1", self.runner_port))
 
     def send_landed(self, on_ground=True, system=1, component=1):
@@ -121,6 +121,38 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.assertFalse(row["landed_fresh"])
         self.send_landed(on_ground=False)
         self.receive_status(lambda row: row["landed_fresh"] and not row["landed"])
+
+    def test_native_failsafe_stops_task_and_remains_latched_after_recovery(self):
+        self.grounded()
+        self.send_heartbeat(armed=True, system_status=5, main_mode=2)
+        row = self.receive_status(lambda row: row["unrecoverable"], timeout=1)
+        self.assertTrue(row["native_failsafe_active"])
+        self.assertTrue(row["native_failsafe_latched"])
+        deadline = time.monotonic() + 1.2
+        while time.monotonic() < deadline:
+            self.send_heartbeat(armed=True, system_status=5, main_mode=2)
+            time.sleep(0.05)
+        rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertFalse(any(row.get("kind") == "command_request" for row in rows))
+        self.send_heartbeat(armed=True, main_mode=2)
+        row = self.receive_status(lambda row: row.get("native_failsafe_active") is False)
+        self.assertTrue(row["unrecoverable"])
+        self.assertTrue(row["native_failsafe_latched"])
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            rows = [json.loads(line) for line in (self.root / "companion_240.jsonl").read_text(encoding="utf-8").splitlines()]
+            if any(row.get("kind") == "command_request" and row.get("command") == "LAND" for row in rows):
+                break
+            time.sleep(0.02)
+        else:
+            self.fail("Landing request missing after native failsafe cleared")
+
+    def test_disarmed_preflight_warning_does_not_latch_task_failure(self):
+        self.grounded()
+        self.send_heartbeat(system_status=5)
+        row = self.receive_status(lambda row: row.get("native_failsafe_active") is True)
+        self.assertFalse(row["unrecoverable"])
+        self.assertFalse(row["native_failsafe_latched"])
 
     def test_other_vehicle_and_component_cannot_replace_feedback(self):
         self.grounded()
