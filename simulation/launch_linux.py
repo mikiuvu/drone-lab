@@ -443,6 +443,8 @@ def main():
     parser.add_argument("--actuation-log", action="store_true",
                         help="记录现有转子关节速度和命令，用于执行链路诊断")
     parser.add_argument("--horizontal-tof", action="store_true")
+    parser.add_argument("--imu-clock", choices=["arrival", "gazebo"], default="arrival",
+                        help="Companion IMU clock mapping for PX4 SITL")
     parser.add_argument("--vehicle-count", type=int)
     parser.add_argument("--vision-delay-ms", type=float, default=None)
     parser.add_argument("--visual-lateral-gate", type=float)
@@ -807,7 +809,7 @@ def main():
                     "--duration",
                     "0",
                     "--imu-clock",
-                    "gazebo",
+                    args.imu_clock,
                 ]
                 if args.fly:
                     command += ["--offboard", "--arm"]
