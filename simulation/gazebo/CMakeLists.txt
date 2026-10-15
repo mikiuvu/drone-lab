@@ -6,6 +6,12 @@ find_package(gz-transport13 REQUIRED)
 find_package(gz-msgs10 REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(nlohmann_json 3.10 REQUIRED)
+
+add_library(actuation_recorder SHARED src/actuation_recorder.cc)
+target_compile_features(actuation_recorder PRIVATE cxx_std_17)
+target_compile_options(actuation_recorder PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(actuation_recorder PRIVATE gz-sim8::gz-sim8 nlohmann_json::nlohmann_json)
 
 # 基地滑轨装甲板：模型关节驱动，接触由世界 Contact 系统处理。
 add_library(moving_armor_system SHARED src/moving_armor_system.cc)
@@ -36,6 +42,11 @@ target_link_libraries(tof_ray_visualizer PRIVATE
 option(DRONE_GAZEBO_BUILD_TESTS "Build sensor and visualization tests" ON)
 if(DRONE_GAZEBO_BUILD_TESTS)
   enable_testing()
+  add_executable(test_actuation_recorder ../tests/test_actuation_recorder.cpp)
+  target_compile_features(test_actuation_recorder PRIVATE cxx_std_17)
+  target_compile_options(test_actuation_recorder PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
+  target_link_libraries(test_actuation_recorder PRIVATE gz-sim8::gz-sim8 nlohmann_json::nlohmann_json)
+  add_test(NAME actuation_recorder COMMAND test_actuation_recorder)
   add_executable(test_uwb_occlusion
     ../tests/test_uwb_occlusion.cpp ../companion/src/terrain.cpp)
   target_include_directories(test_uwb_occlusion PRIVATE include ../companion/include)
