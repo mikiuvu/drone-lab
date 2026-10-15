@@ -1,5 +1,6 @@
 /** @file Native uORB publication retention and latest-sample subscription checks. */
 #include <uORB/uORBDeviceNode.hpp>
+#include <uORB/uORBManager.hpp>
 #include <uORB/topics/vehicle_odometry.h>
 #include <atomic>
 #include <cassert>
@@ -10,9 +11,9 @@
 namespace {
 bool retained(uORB::DeviceNode& node, vehicle_odometry_s& sample, unsigned& generation) {
 #ifdef RETENTION_CANDIDATE
-  return node.copy_retained(&sample, generation);
+  return uORB::Manager::orb_data_copy_retained(&node, &sample, generation);
 #else
-  return node.updates_available(generation) && node.copy(&sample, generation);
+  return uORB::Manager::orb_data_copy(&node, &sample, generation, true);
 #endif
 }
 void publish(uORB::DeviceNode& node, uint64_t stamp) {
@@ -24,6 +25,7 @@ void publish(uORB::DeviceNode& node, uint64_t stamp) {
 
 int main() {
   uORB::DeviceNode node(ORB_ID(vehicle_visual_odometry),0,"/obj/retention_contract");
+  node.mark_as_advertised();
   vehicle_odometry_s sample{};
   unsigned logger=0,control=0,independent=0;
   assert(node.get_queue_size()==1);
@@ -31,7 +33,7 @@ int main() {
   for(uint64_t expected=1;expected<=3;++expected) {
     assert(retained(node,sample,logger));
     assert(sample.timestamp==expected&&logger==expected);
-    assert(node.copy(&sample,control)&&sample.timestamp==3&&control==3);
+    assert(uORB::Manager::orb_data_copy(&node,&sample,control,false)&&sample.timestamp==3&&control==3);
   }
   assert(!retained(node,sample,logger));
   for(uint64_t expected=1;expected<=3;++expected) {
@@ -47,10 +49,12 @@ int main() {
   unsigned late=node.get_initial_generation();
   assert(retained(node,sample,late)&&sample.timestamp==15);
   uORB::DeviceNode ordinary(ORB_ID(vehicle_odometry),0,"/obj/ordinary_contract");
+  ordinary.mark_as_advertised();
   publish(ordinary,1);publish(ordinary,2);
   unsigned ordinary_reader=0;
   assert(retained(ordinary,sample,ordinary_reader)&&sample.timestamp==2);
   uORB::DeviceNode threaded(ORB_ID(vehicle_visual_odometry),0,"/obj/thread_contract");
+  threaded.mark_as_advertised();
   std::atomic<bool> done{false};
   std::thread writer([&](){for(uint64_t n=1;n<=100000;++n)publish(threaded,n);done=true;});
   unsigned cursor=0;uint64_t previous=0,reads=0;
