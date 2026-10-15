@@ -95,11 +95,12 @@ void colorAndPixelGeometry() {
 
 void sharedColorMasks(){
   PpmImage frame;frame.width=frame.height=256;frame.rgb.resize(256*256*3);
-  for(int mode=0;mode<4;++mode){
+  for(int mode=0;mode<5;++mode){
     ArmorDetectionConfig detection;
     if(mode){detection.enemy_color=ArmorColor::Blue;}
     if(mode==2){detection.min_blue_channel=0;detection.blue_over_red_ratio=1.8;detection.blue_over_green_ratio=2.3;}
     if(mode==3){detection.min_blue_channel=120;detection.blue_over_red_ratio=1.4;detection.blue_over_green_ratio=1.2;}
+    if(mode==4){detection.min_blue_channel=0;detection.blue_over_red_ratio=1.1;detection.blue_over_green_ratio=1.05;}
     for(int b=0;b<256;++b){
       if(mode>=2&&b!=0&&b!=1&&b!=119&&b!=120&&b!=159&&b!=160&&b!=200&&b!=254&&b!=255)continue;
       for(int g=0;g<256;++g)for(int r=0;r<256;++r){
