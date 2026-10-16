@@ -62,6 +62,38 @@ class TriangleScene:
         return None
 
 
+def formation_separation(config):
+    """检查等比例推进的编队航段中心距；圆形机体使用地图接触半径。"""
+    mission = config['team_mission']
+    cruise = mission['cruise_z_m']
+    paths = {}
+    for spawn in config['spawns']:
+        vehicle = spawn['id']
+        offset = next(p for p in mission['formation_offsets'] if p['id'] == vehicle)
+        assembly = next(p for p in mission['assembly'] if p['id'] == vehicle)
+        paths[vehicle] = np.asarray(
+            [[spawn['x'], spawn['y']]]
+            + [[p['x'] + offset['x'], p['y'] + offset['y']]
+               for p in mission['transit_waypoints']]
+            + [[assembly['x'], assembly['y']]], dtype=float)
+    checks = []
+    diameter = 2 * mission['contact_radius_m']
+    for first, second in itertools.combinations(paths, 2):
+        a, b = paths[first], paths[second]
+        for segment in range(len(a) - 1):
+            relative = a[segment] - b[segment]
+            change = (a[segment + 1] - a[segment]) - (b[segment + 1] - b[segment])
+            norm = float(change @ change)
+            fraction = float(np.clip(-(relative @ change) / norm, 0, 1)) if norm > 1e-12 else 0.0
+            distance = float(np.linalg.norm(relative + fraction * change))
+            checks.append({'vehicles': [first, second], 'segment': segment,
+                           'fraction': fraction, 'distance_m': distance,
+                           'body_gap_m': distance - diameter, 'passed': distance >= diameter})
+    return {'scope': 'synchronous_linear_transit', 'height_m': cruise, 'body_diameter_m': diameter,
+            'minimum_distance_m': min((row['distance_m'] for row in checks), default=None),
+            'segments': checks, 'passed': all(row['passed'] for row in checks)}
+
+
 def check_map(path, margin=.02):
     path = Path(path)
     config = json.loads(path.read_text(encoding='utf-8'))
@@ -103,8 +135,11 @@ def check_map(path, margin=.02):
     target_hit = scene.segment_hit(approach, target + direction * .03)
     if not target_hit or np.linalg.norm(np.asarray(target_hit['point_m']) - target) > .01:
         failures.append({'kind': 'target_surface', 'hit': target_hit})
+    separation = formation_separation(config)
+    failures.extend({'kind': 'formation_separation', **row} for row in separation['segments'] if not row['passed'])
     return {'map': config['name'], 'scope': 'static_mesh_clearance', 'margin_m': margin,
                 'triangle_count': len(triangles), 'homes': homes, 'transit_segments': routes,
+                'formation_separation': separation,
                 'target_hit': target_hit, 'failures': failures, 'passed': not failures}
 
 

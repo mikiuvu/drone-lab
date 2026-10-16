@@ -1,8 +1,11 @@
 """三角网格的航段求交与机体净空。"""
 
+import json
+from pathlib import Path
+
 import numpy as np
 
-from simulation.check_map import TriangleScene
+from simulation.check_map import TriangleScene, formation_separation
 
 
 def test_segment_returns_nearest_wall_and_ignores_geometry_outside_segment():
@@ -19,3 +22,17 @@ def test_body_envelope_detects_obstacle_missed_by_center_ray():
     scene = TriangleScene(face)
     assert scene.segment_hit([0, 0, 0], [2, 0, 0]) is None
     assert scene.corridor_hit([0, 0, 0], [2, 0, 0], .06, .01) is not None
+
+
+def test_hangar_departure_preserves_vehicle_order_and_body_separation():
+    path = Path(__file__).resolve().parents[1] / 'maps/rmuc_2027.json'
+    config = json.loads(path.read_text(encoding='utf-8'))
+    report = formation_separation(config)
+    assert report['passed']
+    assert report['minimum_distance_m'] >= .139
+    offsets = config['team_mission']['formation_offsets']
+    offsets[1].update(x=-.35, y=.35)
+    offsets[2].update(x=.35, y=-.35)
+    crossing = formation_separation(config)
+    assert not crossing['passed']
+    assert crossing['minimum_distance_m'] < .087
