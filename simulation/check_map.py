@@ -133,7 +133,7 @@ def check_map(path, margin=.02):
     radius = mission['contact_radius_m'] + margin
     half_height = mission['body_clearance_m'] + margin
     cruise = mission['cruise_z_m']
-    failures, homes, routes = [], [], []
+    failures, homes, routes, alignment_routes = [], [], [], []
     for spawn in config['spawns']:
         i = spawn['id']
         start = np.array([spawn[k] for k in ('x', 'y', 'z')])
@@ -156,6 +156,17 @@ def check_map(path, margin=.02):
         result['takeoff_hit'] = hit
         if hit:
             failures.append({'kind': 'takeoff', 'id': i, 'hit': hit})
+        alignment_height = mission.get('landing_alignment_height_m', 0)
+        if mission.get('sequential_landing') and alignment_height > 0:
+            alignment = [start[0], start[1], mission['home_ground_z_m'] + alignment_height]
+            # 水平对准误差计入包络，避免中心线通过而机体擦到托盘边框。
+            alignment_radius = radius + mission.get('landing_alignment_tolerance_m', 0)
+            hit = scene.corridor_hit(up, alignment, alignment_radius, half_height)
+            alignment_routes.append({'id': i, 'start_m': up.tolist(), 'end_m': alignment,
+                                     'radius_m': alignment_radius, 'half_height_m': half_height,
+                                     'hit': hit})
+            if hit:
+                failures.append({'kind': 'landing_alignment', 'id': i, 'hit': hit})
         homes.append(result)
         offset = next(p for p in mission['formation_offsets'] if p['id'] == i)
         points = [up]
@@ -193,6 +204,7 @@ def check_map(path, margin=.02):
                 'triangle_count': len(triangles), 'homes': homes, 'transit_segments': routes,
                 'formation_separation': separation,
                 'landing_waiting_separation': landing,
+                'landing_alignment_segments': alignment_routes,
                 'retreat_exit_segments': retreat_routes,
                 'target_hit': target_hit, 'failures': failures, 'passed': not failures}
 

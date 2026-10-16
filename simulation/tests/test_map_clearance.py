@@ -7,6 +7,7 @@ import numpy as np
 
 from simulation.check_map import (
     TriangleScene,
+    check_map,
     formation_separation,
     landing_waiting_separation,
 )
@@ -58,3 +59,21 @@ def test_completed_holding_rows_leave_wide_vertical_clearance():
     holding = {point['id']: point for point in config['team_mission']['completed_holding']}
     assert holding[2]['y'] - holding[0]['y'] >= .79
     assert holding[3]['y'] - holding[1]['y'] >= .79
+
+
+def test_alignment_descent_clears_tray_rim_with_position_tolerance(tmp_path):
+    path = Path(__file__).resolve().parents[1] / 'maps/rmuc_2027.json'
+    config = json.loads(path.read_text(encoding='utf-8'))
+    config['terrain_triangles_file'] = str((path.parent / config['terrain_triangles_file']).resolve())
+    candidate = tmp_path / 'map.json'
+    config['team_mission']['landing_alignment_height_m'] = .10
+    candidate.write_text(json.dumps(config), encoding='utf-8')
+    clear = check_map(candidate)
+    assert clear['passed'], clear['failures']
+    assert len(clear['landing_alignment_segments']) == 4
+
+    config['team_mission']['landing_alignment_height_m'] = .06
+    candidate.write_text(json.dumps(config), encoding='utf-8')
+    blocked = check_map(candidate)
+    assert not blocked['passed']
+    assert any(row['kind'] == 'landing_alignment' for row in blocked['failures'])

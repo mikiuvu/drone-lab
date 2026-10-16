@@ -322,7 +322,7 @@
     "contact_radius_m": 0.052,
     "position_gain": 2.5,
     "climb_speed_mps": 0.6,
-    "descent_speed_mps": 0.4,
+    "descent_speed_mps": 0.2,
     "landing_speed_mps": 0.22,
     "yaw_gain": 3.0,
     "yaw_rate_limit_rad_s": 2.0,
@@ -427,7 +427,7 @@
     "landing_alignment_tolerance_m": 0.025,
     "vertical_takeoff": true,
     "static_armor_localization": true,
-    "landing_alignment_height_m": 0.06,
+    "landing_alignment_height_m": 0.1,
     "landing_alignment_stable_s": 0.5,
     "landing_require_structural": true,
     "landing_order": [
