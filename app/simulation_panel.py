@@ -307,7 +307,7 @@ class LocalizationMap(QWidget):
             int(frame.left()), int(frame.bottom() + 22), int(frame.width()), 34
         )
         if self.terrain_image is not None:
-            self.legend.configure(3.7, self.dark)
+            self.legend.configure(self.config.get("terrain_height_max_m", 3.7), self.dark)
 
         # 5. 同机真值与估计共用颜色，以虚实线区分；当前匹配位置叠加机体尺寸框。
         #    轨迹用 QPainterPath 一次提交，逐段 drawLine 在长轨迹下会产生上万次调用。

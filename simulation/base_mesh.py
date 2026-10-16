@@ -41,7 +41,7 @@ def split_region(triangles, planes):
 
 def target_surfaces(triangles, specification):
     """灯条尺寸使用小装甲正面的米制坐标；不把壳体轮廓当作灯条。"""
-    u = np.array([0., 1., 0.])
+    u = np.asarray(specification.get('panel_right', [0., 1., 0.]))
     v = np.asarray(specification['panel_up'])
     center = np.asarray(specification['center_m'])
     panel = triangles[specification['panel_surface_faces']].astype(float)

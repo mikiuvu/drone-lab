@@ -12,7 +12,7 @@ def sha256(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def extract_step(source, output, deflection_m=0.003):
+def extract_step(source, output, deflection_m=0.003, healing=True):
     """输出毫米制 CAD 网格及部件目录；实例位置由装配树逐层相乘。"""
     from OCP.STEPCAFControl import STEPCAFControl_Reader
     from OCP.IFSelect import IFSelect_RetDone
@@ -45,6 +45,14 @@ def extract_step(source, output, deflection_m=0.003):
         raise ValueError(f'Cannot read STEP: {source}')
     # OCCT 的转移单位显式设为 mm，与 STEP 文件自己的单位声明分别处理。
     reader.Reader().SetSystemLengthUnit(1.0)
+    if not healing:
+        from OCP.collections import DataMap_TCollection_AsciiString_TCollection_AsciiString
+        from OCP.TCollection import TCollection_AsciiString
+        parameters = DataMap_TCollection_AsciiString_TCollection_AsciiString()
+        for mode in ('FixFreeShellMode', 'FixFreeFaceMode', 'FixFreeWireMode', 'FixSolidMode', 'FixSameParameterMode'):
+            parameters.Bind(TCollection_AsciiString('FixShape.' + mode), TCollection_AsciiString('0'))
+        reader.SetShapeFixParameters(parameters)
+    print('Transferring assembly', flush=True)
     if not reader.Transfer(document):
         raise ValueError(f'Cannot transfer STEP assembly: {source}')
     tool = XCAFDoc_DocumentTool.ShapeTool_s(document.Main())
@@ -89,6 +97,9 @@ def extract_step(source, output, deflection_m=0.003):
 
     for i in range(1, roots.Length() + 1):
         walk(roots.Value(i), TopLoc_Location(), [])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / 'parts.json').write_text(json.dumps(parts, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'Assembly: {len(parts)} parts', flush=True)
     chunks, ids = [], []
     face_of = getattr(TopoDS, 'Face_s', None) or TopoDS.Face
     for i, (shape, part) in enumerate(zip(shapes, parts)):
@@ -122,7 +133,7 @@ def extract_step(source, output, deflection_m=0.003):
     output.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output / 'cad_mesh.npz', triangles_mm=np.concatenate(chunks), part_ids=np.concatenate(ids))
     (output / 'parts.json').write_text(json.dumps(parts, ensure_ascii=False, indent=2), encoding='utf-8')
-    manifest = dict(source_sha256=sha256(source), deflection_m=deflection_m,
+    manifest = dict(source_sha256=sha256(source), deflection_m=deflection_m, healing=healing,
                     occt_transfer_unit='mm', part_count=len(parts), triangle_count=sum(map(len, chunks)))
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     return manifest

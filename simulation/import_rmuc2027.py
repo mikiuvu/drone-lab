@@ -60,11 +60,17 @@ def export_scene(triangles, part_ids, parts, config, output):
         raise ValueError('Unknown CAD part index')
     kept = ~np.isin(part_ids, excluded_ids)
     moving = kept & np.isin(part_ids, moving_ids)
+    if 'target_bounds_m' in specification:
+        low, high = np.asarray(specification['target_bounds_m'])
+        moving &= ((triangles.min(axis=1) >= low - 1e-6).all(axis=1)
+                   & (triangles.max(axis=1) <= high + 1e-6).all(axis=1))
     fixed = kept & ~moving
-    if not 0 < fixed.sum() <= 1_000_000:
-        raise ValueError(f'Static terrain has {fixed.sum()} faces; supported range is 1..1000000')
+    stationary = config.get('moving_armor', {}).get('motion_profile') == 'fixed'
+    prior = kept if stationary else fixed
+    if not 0 < prior.sum() <= 1_000_000:
+        raise ValueError(f'Static terrain has {prior.sum()} faces; supported range is 1..1000000')
     write_stl(output / 'terrain.stl', triangles[fixed])
-    triangles[fixed].astype('<f4').tofile(output / 'terrain_triangles.f32')
+    triangles[prior].astype('<f4').tofile(output / 'terrain_triangles.f32')
     tree = ET.ElementTree(ET.Element('sdf', version='1.9'))
     model = add(tree.getroot(), 'model', name=config['name'])
     add(model, 'static', 'true')
@@ -92,10 +98,11 @@ def export_scene(triangles, part_ids, parts, config, output):
     if moving.any():
         export_armor(triangles, part_ids, moving, config, output)
     bounds = config['bounds']
-    x, y, z = height_grid(triangles[fixed], step=.1, bounds=[bounds[k] for k in ('x_min', 'x_max', 'y_min', 'y_max')])
+    x, y, z = height_grid(triangles[prior], step=.1, bounds=[bounds[k] for k in ('x_min', 'x_max', 'y_min', 'y_max')])
     np.savez_compressed(output / 'terrain_height_grid.npz', x=x, y=y, z=z)
     return dict(original_triangle_count=len(triangles), retained_triangle_count=int(kept.sum()),
-                static_triangle_count=int(fixed.sum()), moving_triangle_count=int(moving.sum()),
+                static_triangle_count=int(prior.sum()), terrain_mesh_triangle_count=int(fixed.sum()),
+                target_triangle_count=int(moving.sum()), moving_triangle_count=0 if stationary else int(moving.sum()),
                 excluded_triangle_count=int((~kept).sum()), visual_material_count=visual_count,
                 world_bounds_m=[triangles[kept].min(axis=(0, 1)).tolist(), triangles[kept].max(axis=(0, 1)).tolist()],
                 derived_sha256=sha256(output / 'terrain.stl'), static_sha256=sha256(output / 'terrain_triangles.f32'))
@@ -162,11 +169,13 @@ def main():
     if sha256(source) != spec['source_sha256']:
         raise ValueError('STEP source hash does not match the map specification')
     if args.extract or args.extract_only or not (args.cache / 'manifest.json').exists():
-        extract_step(source, args.cache, spec['deflection_m'])
+        extract_step(source, args.cache, spec['deflection_m'], healing=spec.get('healing', True))
     if args.extract_only:
         return
     cache_manifest = json.loads((args.cache / 'manifest.json').read_text(encoding='utf-8'))
-    if cache_manifest['source_sha256'] != spec['source_sha256'] or cache_manifest['deflection_m'] != spec['deflection_m']:
+    if (cache_manifest['source_sha256'] != spec['source_sha256']
+            or cache_manifest['deflection_m'] != spec['deflection_m']
+            or cache_manifest.get('healing', True) != spec.get('healing', True)):
         raise ValueError('CAD cache does not match the source or mesh tolerance')
     parts = json.loads((args.cache / 'parts.json').read_text(encoding='utf-8'))
     with np.load(args.cache / 'cad_mesh.npz', allow_pickle=False) as data:
@@ -176,7 +185,7 @@ def main():
     metadata = export_scene(triangles, part_ids, parts, config, output)
     metadata.update(season=2027, version=config['version'], source_asset=spec['source_file'],
                     source_sha256=spec['source_sha256'], occt_transfer_unit='mm',
-                    world_from_cad_m=spec['world_from_cad_m'], deflection_m=spec['deflection_m'],
+                    world_from_cad_m=spec['world_from_cad_m'], deflection_m=spec['deflection_m'], healing=spec.get('healing', True),
                     excluded_part_ids=spec.get('excluded_part_ids', []), moving_part_ids=spec.get('moving_part_ids', []),
                     triangle_format='little-endian float32 Nx3x3, 36 bytes/triangle')
     (output / 'provenance.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')

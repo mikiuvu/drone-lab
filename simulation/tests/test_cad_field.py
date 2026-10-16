@@ -23,7 +23,8 @@ def test_invalid_frame_rejected(matrix):
         transform_triangles(np.zeros((1, 3, 3)), matrix)
 
 
-def test_step_nested_instances_match_kernel_bounds(tmp_path):
+@pytest.mark.parametrize('healing', [True, False])
+def test_step_nested_instances_match_kernel_bounds(tmp_path, healing):
     pytest.importorskip('OCP')
     from OCP.TDocStd import TDocStd_Document
     from OCP.TCollection import TCollection_ExtendedString
@@ -52,7 +53,7 @@ def test_step_nested_instances_match_kernel_bounds(tmp_path):
     source = tmp_path / 'assembly.step'
     assert writer.Write(str(source)) == IFSelect_RetDone
     cache = tmp_path / 'cache'
-    extract_step(source, cache)
+    extract_step(source, cache, healing=healing)
     with np.load(cache / 'cad_mesh.npz', allow_pickle=False) as data:
         vertices = data['triangles_mm']
     np.testing.assert_allclose(vertices.min(axis=(0, 1)), [-230, 100, 300], atol=1e-5)

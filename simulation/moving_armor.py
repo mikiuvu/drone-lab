@@ -1,5 +1,7 @@
-"""基地顶部飞镖检测模块沿原滑轨移动，小装甲板正面提供触压反馈。"""
+"""从场地原件分离装甲目标，提供固定安装或滑轨运动及板面触压反馈。"""
 
+import hashlib
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -22,27 +24,35 @@ def add_moving_armor(world, config, output=None, source=None):
     if output is None or source is None:
         raise ValueError("原模型分离需要输出目录和源三角网格")
     output = Path(output).resolve()
-    report = partition(source, output)
-    for include in list(world.findall("include")):
-        if "rmuc_2026_sentry26" in (include.findtext("uri") or ""):
-            world.remove(include)
-    fixed = node(world, "model", name="rmuc_2026_sentry26")
-    node(fixed, "static", "true")
-    link = node(fixed, "link", name="terrain")
+    prepared = config["moving_armor"].get("source") == "cad_mesh_partition"
+    if prepared:
+        output = Path(source).resolve().parent / "moving"
+        report = json.loads((output / "partition.json").read_text(encoding="utf-8"))
+        with Path(source).open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != report["static_sha256"]:
+            raise ValueError("CAD 装甲分组与静态地图版本不一致")
+    else:
+        report = partition(source, output)
 
     def mesh(parent, tag, name, path):
         item = node(parent, tag, name=name)
         node(node(node(item, "geometry"), "mesh"), "uri", str(path))
         return item
 
-    visual = mesh(link, "visual", "terrain_visual", output / "terrain_fixed.stl")
-    material = node(visual, "material")
-    node(material, "ambient", "0.42 0.48 0.50 1")
-    node(material, "diffuse", "0.55 0.61 0.63 1")
-    fixed_collision = mesh(
-        link, "collision", "terrain_collision", output / "terrain_fixed.stl"
-    )
-    node(node(node(fixed_collision, "surface"), "contact"), "collide_bitmask", 1)
+    if not prepared:
+        for include in list(world.findall("include")):
+            if "rmuc_2026_sentry26" in (include.findtext("uri") or ""):
+                world.remove(include)
+        fixed = node(world, "model", name="rmuc_2026_sentry26")
+        node(fixed, "static", "true")
+        link = node(fixed, "link", name="terrain")
+        visual = mesh(link, "visual", "terrain_visual", output / "terrain_fixed.stl")
+        material = node(visual, "material")
+        node(material, "ambient", "0.42 0.48 0.50 1")
+        node(material, "diffuse", "0.55 0.61 0.63 1")
+        fixed_collision = mesh(link, "collision", "terrain_collision", output / "terrain_fixed.stl")
+        node(node(node(fixed_collision, "surface"), "contact"), "collide_bitmask", 1)
     model = node(world, "model", name="enemy_base_moving_armor")
     node(model, "static", "false")
     anchor = node(model, "link", name="original_rail_anchor")
@@ -53,7 +63,8 @@ def add_moving_armor(world, config, output=None, source=None):
     armor = node(model, "link", name="armor")
     node(armor, "gravity", "false")
     inertial = node(armor, "inertial")
-    node(inertial, "pose", "11.58 0.0012 1.48 0 0 0")
+    center = report["target_center_m"] if prepared else [11.58, 0.0012, 1.48]
+    node(inertial, "pose", " ".join(str(v) for v in [*center, 0, 0, 0]))
     node(inertial, "mass", 0.2)
     inertia = node(inertial, "inertia")
     for key in ("ixx", "iyy", "izz"):
@@ -72,10 +83,11 @@ def add_moving_armor(world, config, output=None, source=None):
     material = node(visual, "material")
     for key in ("ambient", "diffuse", "emissive"):
         node(material, key, "0 0.03 1 1")
-    visual = mesh(armor, "visual", "green_dart_guide", output / "carriage_green_guide.stl")
-    material = node(visual, "material")
-    for key in ("ambient", "diffuse", "emissive"):
-        node(material, key, "0.01 1 0.01 1")
+    if report.get("material_faces", {}).get("green", 1):
+        visual = mesh(armor, "visual", "green_dart_guide", output / "carriage_green_guide.stl")
+        material = node(visual, "material")
+        for key in ("ambient", "diffuse", "emissive"):
+            node(material, key, "0.01 1 0.01 1")
     plate_collision = mesh(
         armor, "collision", "armor_plate", output / "armor_hit_surface.stl"
     )
@@ -87,15 +99,20 @@ def add_moving_armor(world, config, output=None, source=None):
     node(sensor, "always_on", "true")
     node(sensor, "topic", "/evaluation/enemy_base_moving_armor/contacts")
     node(node(sensor, "contact"), "collision", "armor_plate")
-    joint = node(model, "joint", name="armor_slide", type="prismatic")
+    stationary = config["moving_armor"].get("motion_profile") == "fixed"
+    joint = node(model, "joint", name="armor_slide", type="fixed" if stationary else "prismatic")
     node(joint, "parent", "original_rail_anchor")
     node(joint, "child", "armor")
+    if stationary:
+        config["terrain_triangles_file"] = str(Path(source).resolve())
+        config["moving_armor"]["partition"] = report
+        return model
     axis = node(joint, "axis")
     node(axis, "xyz", "0 1 0")
     limit = node(axis, "limit")
     travel = float(config["moving_armor"].get("half_travel_m", 0.28))
     speed = float(config["moving_armor"].get("speed_mps", 0.2))
-    if not 0 < travel <= 0.28 or not 0 <= speed <= 1:
+    if not 0 < travel <= report.get("max_half_travel_m", 0.28) or not 0 <= speed <= 1:
         raise ValueError("原滑轨运动参数超出范围")
     for key, value in [
         ("lower", -travel),
@@ -113,6 +130,6 @@ def add_moving_armor(world, config, output=None, source=None):
     node(plugin, "joint_name", "armor_slide")
     node(plugin, "half_travel_m", travel)
     node(plugin, "speed_mps", speed)
-    config["terrain_triangles_file"] = str(output / "terrain_fixed.f32")
+    config["terrain_triangles_file"] = str(Path(source).resolve() if prepared else output / "terrain_fixed.f32")
     config["moving_armor"]["partition"] = report
     return model
