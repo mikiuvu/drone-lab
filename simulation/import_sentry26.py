@@ -53,12 +53,12 @@ def height_grid(triangles, step=0.1, bounds=None):
         if abs(denominator) < 1e-9:
             continue
         xmin, ymin = (
-            np.searchsorted(x, tri[:, 0].min()),
-            np.searchsorted(y, tri[:, 1].min()),
+            np.searchsorted(x, float(tri[:, 0].min()) - step * 1e-6),
+            np.searchsorted(y, float(tri[:, 1].min()) - step * 1e-6),
         )
         xmax, ymax = (
-            np.searchsorted(x, tri[:, 0].max(), side="right"),
-            np.searchsorted(y, tri[:, 1].max(), side="right"),
+            np.searchsorted(x, float(tri[:, 0].max()) + step * 1e-6, side="right"),
+            np.searchsorted(y, float(tri[:, 1].max()) + step * 1e-6, side="right"),
         )
         if xmax <= xmin or ymax <= ymin:
             continue
