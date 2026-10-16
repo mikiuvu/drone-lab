@@ -58,6 +58,8 @@ struct TeamMissionConfig {
   double contact_exit_side = 0; // 接触航向左侧为正；0 按集结点决定待命侧。
   // true 时接触后直接飞往 completed_holding；false 时先经过 approach。
   bool retreat_holding_direct = false;
+  bool retreat_exit_enabled = false; // 退出时先到独立侧方航点，再进入本机待命位置。
+  TeamPoint retreat_exit{};
   // 已接触飞机的停留点；不配置则沿用 assembly。
   std::vector<TeamPoint> completed_holding;
   double home_ground_z_m = .5; // 起飞平台表面世界高度，m。

@@ -148,6 +148,7 @@ TeamMissionConfig readConfig(const std::string& path) {
   if(m.contains("completed_holding"))pointsById(m.at("completed_holding"),c.completed_holding,c.cruise_z_m);
   c.contact_exit_side=m.value("contact_exit_side",0.0);
   c.retreat_holding_direct=m.value("retreat_holding_direct",false);
+  if(m.contains("retreat_exit")){c.retreat_exit=point(m.at("retreat_exit"),c.cruise_z_m);c.retreat_exit_enabled=true;}
   c.approach = point(m.at("approach"),c.cruise_z_m);
   c.target = point(m.at("target"),c.approach.z);
   // 俯冲入口：默认由目标点推出——正前方 entry_standoff_m、上方 entry_height_m。

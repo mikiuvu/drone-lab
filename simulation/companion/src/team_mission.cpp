@@ -63,6 +63,8 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
   if(config_.completed_holding.empty())config_.completed_holding=config_.assembly;
   if(config_.completed_holding.size()!=n||!std::isfinite(config_.contact_exit_side))throw std::invalid_argument("退出集结点配置无效");
   for(auto&p:config_.completed_holding){if(!finite(p))throw std::invalid_argument("退出集结点无效");p.z=config_.cruise_z_m;}
+  if(config_.retreat_exit_enabled&&(!finite(config_.retreat_exit)||config_.pipelined_contact))
+    throw std::invalid_argument("侧方退出航点无效或与流水接触不兼容");
   if(config_.dive_attack){
     if(!finite(config_.dive_entry)||
        !std::isfinite(config_.dive_entry_tolerance_m)||config_.dive_entry_tolerance_m<=0||
@@ -129,7 +131,7 @@ void TeamMission::enter(TeamPhase p, uint64_t now) {
   phase_=p; phase_start_=now; stable_=false;
   if((p==TeamPhase::COMPLETE||p==TeamPhase::ABORTED)&&flight_start_)flight_end_=now;
   if (p==TeamPhase::CONTACT && activeVehicle()>=0) impact_baseline_=status_[activeVehicle()].impact_seq;
-  if (p==TeamPhase::RETREAT) retreat_assembly_=config_.retreat_holding_direct;
+  if (p==TeamPhase::RETREAT) retreat_assembly_=config_.retreat_holding_direct&&!config_.retreat_exit_enabled;
   if (p==TeamPhase::LAND_ALL) { landing_index_=0;landing_descending_=false;landing_approached_=false;landing_alignment_since_=0; }
   if (p==TeamPhase::RETURN_ALL || p==TeamPhase::ABORT_RETURN)
     return_index_=config_.transit_waypoints.empty()?-1:std::min(transit_index_-1,static_cast<int>(config_.transit_waypoints.size())-1);
@@ -278,7 +280,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
         if(turn_+1==static_cast<int>(config_.order.size())&&validForBarrier(a,sim,wall)&&forward<-.12){++turn_;enter(TeamPhase::RETURN_ALL,sim);break;}
         if(validForBarrier(a,sim,wall)&&forward<-.25)retreat_assembly_=true;
         if(validForBarrier(a,sim,wall)&&retreat_assembly_&&forward<-.25&&std::abs(lateral)>.18){if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);}
-      }else if(barrier(near(a,retreat_assembly_?config_.completed_holding[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
+      }else if(barrier(near(a,retreat_assembly_?config_.completed_holding[a]:config_.retreat_exit_enabled?config_.retreat_exit:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
     case TeamPhase::RETURN_ALL: case TeamPhase::ABORT_RETURN: if(return_index_>=0){if(barrier(routeNear(return_index_),sim)){--return_index_;stable_=false;phase_start_=sim;}}else if((config_.sequential_landing&&!aborted_)||barrier(allNear(true),sim))enter(TeamPhase::LAND_ALL,sim); break;
     default: break;
   }
@@ -290,6 +292,8 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       const auto& state=status_[id];
       if(statusFresh(id,sim,wall)&&state.landed&&!state.armed&&near(id,home,false)) {
         ++landing_index_;landing_descending_=false;landing_approached_=false;landing_alignment_since_=0;
+        // 逐架降落的期限属于当前成员；前机确认停机后，下一架获得完整阶段时窗。
+        phase_start_=sim;
       }else if(!landing_descending_) {
         auto overhead=home;overhead.z=config_.cruise_z_m;
         if(!landing_approached_&&state.armed&&near(id,overhead))landing_approached_=true;
@@ -341,6 +345,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       // 入口航点允许位置环减速完成爬升；目标设在入口之后会压缩可用爬升时间。
       const TeamPoint&staging=(config_.dive_attack&&phase_!=TeamPhase::RETREAT)?config_.dive_entry:config_.approach;
       p=phase_==TeamPhase::RETREAT&&retreat_assembly_?config_.completed_holding[i]:staging;
+      if(phase_==TeamPhase::RETREAT&&!retreat_assembly_&&config_.retreat_exit_enabled)p=config_.retreat_exit;
       if(phase_==TeamPhase::RETREAT&&config_.pipelined_contact&&!retreat_assembly_){p.x-=.45*std::cos(p.yaw);p.y-=.45*std::sin(p.yaw);}
     }
     // 下一架在侧方预备点等待，减少接近耗时；当前接触通道仍由 active_vehicle 独占。

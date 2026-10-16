@@ -371,6 +371,20 @@ void retreatHoldingDirect() {
   check(f.mission.phase() == TeamPhase::APPROACH && f.mission.activeVehicle() == 1,
         "到达停留点后未进入下一架");
 }
+void retreatUsesSeparateSideExitBeforeHolding() {
+  auto c=config(false,-1,false,true);
+  c.retreat_exit_enabled=true;c.retreat_exit={2,6,c.cruise_z_m,0};
+  Fixture f(c);f.contact();
+  f.set(0,f.c.target);++f.states[0].impact_seq;f.tick();
+  check(f.commands[0].target_x_m==c.retreat_exit.x&&f.commands[0].target_y_m==c.retreat_exit.y,
+        "侧方退出未先经过独立航点");
+  f.set(0,f.c.assembly[0]);f.settle();
+  check(f.mission.phase()==TeamPhase::RETREAT,"未经过侧方航点便完成退出");
+  f.set(0,c.retreat_exit);f.settle();
+  check(f.commands[0].target_y_m==f.c.assembly[0].y,"到达侧方航点后未转向本机待命位置");
+  f.set(0,f.c.assembly[0]);f.settle();
+  check(f.mission.phase()==TeamPhase::APPROACH&&f.mission.activeVehicle()==1,"待命点确认后未轮换");
+}
 }
 // 趴窝的成员要立刻记失败并越过，不能等接触超时干等。
 void landedVehicleFailsImmediately() {
@@ -471,6 +485,7 @@ void narrowHangarLandsOneVehicleAtATime() {
   auto c=config(false,-1,false,false,0,true);
   c.landing_alignment_height_m=.2;c.landing_require_structural=true;c.landing_alignment_stable_us=300000;
   c.landing_order={3,2,1,0};
+  c.stage_timeout_us=4000000;
   Fixture f(c);f.contact();
   for(int active=0;active<4;++active){
     if(active){f.set(active,f.c.approach);f.settle();}
@@ -501,7 +516,8 @@ void narrowHangarLandsOneVehicleAtATime() {
       const int next=f.c.landing_order[slot+1];
       check(f.commands[next].target_y_m==f.c.assembly[next].y,"当前机尚未停机便轮换");
     }
-    f.states[active].armed=false;f.tick();
+    f.states[active].armed=false;f.tick(-1,1100000);
+    check(!f.mission.aborted(),"逐架降落错误复用前机阶段期限");
     check(f.mission.phase()!=TeamPhase::COMPLETE,"未确认全部成员停机便完成");
   }
   f.settle();check(f.mission.phase()==TeamPhase::COMPLETE,"全员逐架着地停机后未完成");
@@ -546,6 +562,7 @@ int main() {
     visualApproachRangeGate(); visualRangeGateDisabledWithoutSetting(); visualGateIgnoresApproachYaw();
     diveAttackFliesThroughEntryGate(); diveEntryRejectsMisalignedHeading(); contactTimeoutSkipsFailedVehicle();
     approachTimeoutSkipsVehicleThatCannotReachEntry(); retreatHoldingDirect();
+    retreatUsesSeparateSideExitBeforeHolding();
     landedVehicleFailsImmediately(); landedDuringTakeoffIsNotFailure();
     allUnrecoverableWaitsForFreshLandingAndDisarm();
     partialLandingWaitsForSkippedMember();

@@ -165,6 +165,17 @@ def check_map(path, margin=.02):
     target_hit = scene.segment_hit(approach, target + direction * .03)
     if not target_hit or np.linalg.norm(np.asarray(target_hit['point_m']) - target) > .01:
         failures.append({'kind': 'target_surface', 'hit': target_hit})
+    retreat_routes = []
+    if 'retreat_exit' in mission:
+        exit_point = [mission['retreat_exit'][key] for key in ('x', 'y', 'z')]
+        segments = [('approach_to_exit', approach, exit_point)]
+        segments.extend((f'exit_to_hold_{p["id"]}', exit_point, [p['x'], p['y'], cruise])
+                        for p in mission['completed_holding'])
+        for name, start, end in segments:
+            hit = scene.corridor_hit(start, end, radius, half_height)
+            retreat_routes.append({'segment': name, 'start_m': list(start), 'end_m': list(end), 'hit': hit})
+            if hit:
+                failures.append({'kind': 'retreat_exit', 'segment': name, 'hit': hit})
     separation = formation_separation(config)
     failures.extend({'kind': 'formation_separation', **row} for row in separation['segments'] if not row['passed'])
     landing = landing_waiting_separation(config)
@@ -173,6 +184,7 @@ def check_map(path, margin=.02):
                 'triangle_count': len(triangles), 'homes': homes, 'transit_segments': routes,
                 'formation_separation': separation,
                 'landing_waiting_separation': landing,
+                'retreat_exit_segments': retreat_routes,
                 'target_hit': target_hit, 'failures': failures, 'passed': not failures}
 
 
