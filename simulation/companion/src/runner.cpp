@@ -456,7 +456,24 @@ int main(int argc,char**argv){try{
   RuntimeProfile runtime_profile;uint64_t profile_sim_us=0;
   const char* imu_record_env=std::getenv("DRONE_RECORD_IMU_INPUT");
   const bool record_imu_input=imu_record_env&&std::strcmp(imu_record_env,"1")==0;
+  const char* landing_record_env=std::getenv("DRONE_RECORD_LANDING_INPUT");
+  const bool record_landing_input=landing_record_env&&std::strcmp(landing_record_env,"1")==0;
+  const auto landing_recording=[&](){
+    if(!record_landing_input||!team_enabled)return false;
+    const auto phase=team_command.value("mission_phase",std::string{});
+    return phase=="LAND_ALL"||phase=="COMPLETE";
+  };
   auto emit=[&](json j){auto measured=runtime_profile.measure(RuntimeProfile::Log,&profile_sim_us);j["vehicle"]=o.vehicle;j["source"]="ESTIMATE";log<<j.dump()<<'\n';};
+  const auto recorded_estimate=[](const companion::Estimate& e){
+    json covariance=json::array();
+    for(int row=0;row<7;++row)for(int col=0;col<7;++col)covariance.push_back(e.covariance(row,col));
+    return json{{"sim_time_us",e.sim_time_us},
+        {"pose_m_rad",{e.pose.x_m,e.pose.y_m,e.pose.z_m,e.pose.roll_rad,e.pose.pitch_rad,e.pose.yaw_rad}},
+        {"velocity_enu_mps",{e.velocity_enu_mps.x(),e.velocity_enu_mps.y(),e.velocity_enu_mps.z()}},
+        {"covariance",covariance},{"localization_mode",e.localization_mode},
+        {"reference_origin",e.reference_origin},{"reference_seq",e.reference_seq},
+        {"reference_time_us",e.reference_time_us}};
+  };
   emit({{"kind","startup"},{"simulation_only",true},{"height_assist_allowed",true},{"map",o.map.string()},{"gnss_position_ignored",true},{"mavlink_local_port",o.local},{"mavlink_remote_port",o.remote}});
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
@@ -524,7 +541,21 @@ int main(int argc,char**argv){try{
     // 3. 测量按 kind 分流。UWB 必须配合邻机估计；仅有距离不能直接得到世界位置。
     // 碰撞后 0.4 s 暂不使用 ToF，避免剧烈姿态变化时错误的结构匹配。
     {auto measured=runtime_profile.measure(RuntimeProfile::Observations,&sim_us);
-    for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;sim_us=std::max(sim_us,stamp);profile_sim_us=sim_us;obs_rx=Clock::now();if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);else if(auto t=companion::parseTofDatagram(s,o.vehicle)){const auto disturbance=sensor_disturbance();if(!team_enabled||!disturbance||stamp>disturbance+400000)tof_queue.submit(*t);}else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);}}catch(const std::exception&){} }}
+    for(int n=0;n<256;++n){auto s=observation.receive();if(s.empty())break;try{
+      auto j=json::parse(s);uint64_t stamp=j.value("sim_time_us",uint64_t(0));
+      if(j.value("vehicle",-1)!=o.vehicle||!stamp)continue;
+      sim_us=std::max(sim_us,stamp);profile_sim_us=sim_us;obs_rx=Clock::now();
+      if(auto flow=companion::parseOpticalFlowDatagram(s,o.vehicle))fusion(estimator.fuseOpticalFlow(*flow),"optical_flow",stamp);
+      else if(auto anchor=companion::parseAnchorRangeDatagram(s,o.vehicle))fusion(estimator.fuseAnchorRange(*anchor),"uwb_anchor",stamp);
+      else if(auto t=companion::parseTofDatagram(s,o.vehicle)){
+        const auto disturbance=sensor_disturbance();
+        if(!team_enabled||!disturbance||stamp>disturbance+400000)tof_queue.submit(*t);
+      }else if(auto h=companion::parseHeightAssistDatagram(s,o.vehicle))fusion(estimator.fuseHeightAssist(*h),"height_assist",stamp);
+      else if(auto u=companion::parseUwbDatagram(s,o.vehicle)){
+        if(landing_recording())emit({{"kind","uwb_input"},{"sim_time_us",stamp},{"measurement",j}});
+        auto p=peer_cache.find(u->peer_id);if(p!=peer_cache.end())fusion(estimator.fuseUwb(*u,p->second),"uwb",stamp);
+      }
+    }catch(const std::exception&){} }}
     // 4. 更新邻机缓存；只保存配置机群成员，是否新鲜由融合器再次判断。
     //    同一通道还承载滑轨观测样本：滑轨全周期 5.6 s，学成一个模型需要两个以上完整
     //    周期（>11 s）的连续观测，而单机一次回合的视觉窗最长只有 9–10 s，谁都学不成，
@@ -556,7 +587,7 @@ int main(int argc,char**argv){try{
       if(target_sys==0||msg.sysid!=target_sys||msg.compid!=target_comp)continue;
       if(msg.msgid==MAVLINK_MSG_ID_ATTITUDE){
         mavlink_attitude_t a;mavlink_msg_attitude_decode(&msg,&a);
-        if(record_imu_input)emit({{"kind","attitude_input"},{"sim_time_us",sim_us},
+        if(record_imu_input||landing_recording())emit({{"kind","attitude_input"},{"sim_time_us",sim_us},
             {"receive_wall_us",wallUs(Clock::now())},{"time_boot_ms",a.time_boot_ms},
             {"rpy_frd_rad",{a.roll,a.pitch,a.yaw}},
             {"body_rate_frd_radps",{a.rollspeed,a.pitchspeed,a.yawspeed}}});
@@ -571,7 +602,7 @@ int main(int argc,char**argv){try{
       else if(msg.msgid==MAVLINK_MSG_ID_EXTENDED_SYS_STATE){mavlink_extended_sys_state_t state;mavlink_msg_extended_sys_state_decode(&msg,&state);native_feedback.landed(Clock::now(),state.landed_state==MAV_LANDED_STATE_ON_GROUND);flight=native_feedback.state(Clock::now());}
       else if(msg.msgid==MAVLINK_MSG_ID_HIGHRES_IMU){
         mavlink_highres_imu_t i; mavlink_msg_highres_imu_decode(&msg,&i);
-        if(record_imu_input)emit({{"kind","imu_input"},{"sim_time_us",sim_us},
+        if(record_imu_input||landing_recording())emit({{"kind","imu_input"},{"sim_time_us",sim_us},
             {"receive_wall_us",wallUs(Clock::now())},{"time_usec",i.time_usec},
             {"fields_updated",i.fields_updated},{"acceleration_frd_mps2",{i.xacc,i.yacc,i.zacc}},
             {"body_rate_frd_radps",{i.xgyro,i.ygyro,i.zgyro}},{"abs_pressure",i.abs_pressure}});
@@ -1301,7 +1332,23 @@ int main(int argc,char**argv){try{
             e.pose.z_m>team_settings.value("home_ground_z_m",.5)+.04&&
             e.pose.z_m<team_settings.value("home_ground_z_m",.5)+.12&&
             e.velocity_enu_mps.norm()<.12&&std::abs(e.pose.roll_rad)<.15&&std::abs(e.pose.pitch_rad)<.15;
-        fusion(estimator.fuseTof(*frame,low_landing_recovery),"tof",frame->sim_time_us);
+        const auto result=estimator.fuseTof(*frame,low_landing_recovery);
+        if(landing_recording()){
+          json recorded_peers=json::array();
+          for(const auto& entry:peer_cache){const auto& peer=entry.second;
+            recorded_peers.push_back({{"vehicle",peer.vehicle_id},{"sim_time_us",peer.sim_time_us},
+                {"position_m",{peer.pose.x_m,peer.pose.y_m,peer.pose.z_m}},
+                {"yaw_rad",peer.pose.yaw_rad},{"xy_structural_valid",peer.xy_structural_valid},
+                {"reference_origin",peer.reference_origin},{"reference_seq",peer.reference_seq},
+                {"reference_time_us",peer.reference_time_us}});
+          }
+          emit({{"kind","tof_input"},{"sim_time_us",frame->sim_time_us},{"sensor",frame->sensor_index},
+              {"distance_m",frame->distance_m},{"valid",frame->valid},
+              {"estimate_before",recorded_estimate(e)},{"estimate_after",recorded_estimate(estimator.estimate())},
+              {"armed",flight.armed},{"landed",flight.landed},{"team_command",team_command},
+              {"peers",recorded_peers},{"accepted",result.accepted},{"reason",result.reason}});
+        }
+        fusion(result,"tof",frame->sim_time_us);
       }
     // 每个导航周期发送控制后刷新日志；流缓冲区满时仍会自动写出。
     if(navigation_due){auto log_timing=runtime_profile.measure(RuntimeProfile::LogFlush,&sim_us);log.flush();}
