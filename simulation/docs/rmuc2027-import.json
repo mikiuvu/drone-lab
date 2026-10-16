@@ -1,0 +1,724 @@
+{
+  "mesh_triangle_count": 776888,
+  "retained_triangle_count": 776888,
+  "static_triangle_count": 776888,
+  "terrain_mesh_triangle_count": 776306,
+  "target_triangle_count": 582,
+  "moving_triangle_count": 0,
+  "excluded_triangle_count": 0,
+  "visual_material_count": 5,
+  "world_bounds_m": [
+    [
+      -14.00000286102295,
+      -8.001564979553223,
+      -0.2999999225139618
+    ],
+    [
+      14.0,
+      8.001564979553223,
+      3.499000072479248
+    ]
+  ],
+  "derived_sha256": "d2cd010fb661fb5632cc964cc5ec1e24d6e26d49b4e6e527159f10bb6af8bfac",
+  "static_sha256": "a5184e52c004b2baa0ef4db5141f4b8dc7fe86f63e16de623d05135e4050d4c6",
+  "season": 2027,
+  "version": "1.0.0",
+  "source_triangle_count": 4949667,
+  "simplification": {
+    "method": "quadric edge collapse per connected CAD surface",
+    "library_version": "0.2.0",
+    "source_faces": 4949667,
+    "result_faces": 776888,
+    "sampled_error_tolerance_m": 0.06,
+    "sampled_mean_error_tolerance_m": 0.004,
+    "weld_spacing_m": 0.001,
+    "error_sampling": "bidirectional nearest-surface distance; up to 250 face centroids and 250 vertices per part, fixed seed",
+    "sampled_max_error_m": 0.051005271628164976,
+    "parts": [
+      {
+        "part_id": 0,
+        "source_faces": 4742,
+        "result_faces": 4742,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 1,
+        "source_faces": 6034,
+        "result_faces": 6034,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 2,
+        "source_faces": 433854,
+        "result_faces": 54174,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01415411468530841,
+        "sampled_mean_error_m": 0.0011216606736174275
+      },
+      {
+        "part_id": 3,
+        "source_faces": 448149,
+        "result_faces": 67273,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.007718828169426233,
+        "sampled_mean_error_m": 0.0007621025798141604
+      },
+      {
+        "part_id": 4,
+        "source_faces": 170777,
+        "result_faces": 21175,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.010237189564043937,
+        "sampled_mean_error_m": 0.0011332552184991278
+      },
+      {
+        "part_id": 5,
+        "source_faces": 170777,
+        "result_faces": 21617,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.017356600450345355,
+        "sampled_mean_error_m": 0.0008546425822228782
+      },
+      {
+        "part_id": 6,
+        "source_faces": 208,
+        "result_faces": 208,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 7,
+        "source_faces": 208,
+        "result_faces": 208,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 8,
+        "source_faces": 8058,
+        "result_faces": 8058,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 9,
+        "source_faces": 1190,
+        "result_faces": 1190,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 10,
+        "source_faces": 1190,
+        "result_faces": 1190,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 11,
+        "source_faces": 72,
+        "result_faces": 72,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 12,
+        "source_faces": 72,
+        "result_faces": 72,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 13,
+        "source_faces": 275019,
+        "result_faces": 33056,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.017472607037855303,
+        "sampled_mean_error_m": 0.001262006857204432
+      },
+      {
+        "part_id": 14,
+        "source_faces": 82167,
+        "result_faces": 10124,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.027542873998758387,
+        "sampled_mean_error_m": 0.0010991864938155458
+      },
+      {
+        "part_id": 15,
+        "source_faces": 275019,
+        "result_faces": 32978,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.013902990825078052,
+        "sampled_mean_error_m": 0.0009072762789273832
+      },
+      {
+        "part_id": 16,
+        "source_faces": 82167,
+        "result_faces": 10335,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.006555732583645832,
+        "sampled_mean_error_m": 0.0008763312774507581
+      },
+      {
+        "part_id": 17,
+        "source_faces": 1816,
+        "result_faces": 1816,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 18,
+        "source_faces": 1816,
+        "result_faces": 1816,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 19,
+        "source_faces": 1312,
+        "result_faces": 1312,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 20,
+        "source_faces": 1312,
+        "result_faces": 1312,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 21,
+        "source_faces": 4426,
+        "result_faces": 4426,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 22,
+        "source_faces": 86,
+        "result_faces": 86,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 23,
+        "source_faces": 718,
+        "result_faces": 718,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 24,
+        "source_faces": 28,
+        "result_faces": 28,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 25,
+        "source_faces": 31624,
+        "result_faces": 11234,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0037169407840569203,
+        "sampled_mean_error_m": 0.00040245636307284434
+      },
+      {
+        "part_id": 26,
+        "source_faces": 31624,
+        "result_faces": 10906,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.009211043427793197,
+        "sampled_mean_error_m": 0.0005363127973281256
+      },
+      {
+        "part_id": 27,
+        "source_faces": 588,
+        "result_faces": 588,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 28,
+        "source_faces": 387398,
+        "result_faces": 60950,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.03692201945990707,
+        "sampled_mean_error_m": 0.0012744443026580265
+      },
+      {
+        "part_id": 29,
+        "source_faces": 211505,
+        "result_faces": 31473,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.010294015530218106,
+        "sampled_mean_error_m": 0.0006743764512153387
+      },
+      {
+        "part_id": 30,
+        "source_faces": 1996,
+        "result_faces": 1996,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 31,
+        "source_faces": 3472,
+        "result_faces": 3472,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 32,
+        "source_faces": 140,
+        "result_faces": 140,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 33,
+        "source_faces": 4422,
+        "result_faces": 4422,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 34,
+        "source_faces": 86,
+        "result_faces": 86,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 35,
+        "source_faces": 700,
+        "result_faces": 700,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 36,
+        "source_faces": 28,
+        "result_faces": 28,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 37,
+        "source_faces": 31624,
+        "result_faces": 11198,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01237364496139294,
+        "sampled_mean_error_m": 0.0005504511597107875
+      },
+      {
+        "part_id": 38,
+        "source_faces": 31624,
+        "result_faces": 10806,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01512563234557477,
+        "sampled_mean_error_m": 0.0006629477353693106
+      },
+      {
+        "part_id": 39,
+        "source_faces": 588,
+        "result_faces": 588,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 40,
+        "source_faces": 387398,
+        "result_faces": 61090,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.02015107945857616,
+        "sampled_mean_error_m": 0.0009631564448887022
+      },
+      {
+        "part_id": 41,
+        "source_faces": 211505,
+        "result_faces": 31493,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.012332570832087822,
+        "sampled_mean_error_m": 0.000673640153494406
+      },
+      {
+        "part_id": 42,
+        "source_faces": 1996,
+        "result_faces": 1996,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 43,
+        "source_faces": 3472,
+        "result_faces": 3472,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 44,
+        "source_faces": 140,
+        "result_faces": 140,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 45,
+        "source_faces": 4716,
+        "result_faces": 4716,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 46,
+        "source_faces": 26880,
+        "result_faces": 1334,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.016410208844880435,
+        "sampled_mean_error_m": 0.000912105965924499
+      },
+      {
+        "part_id": 47,
+        "source_faces": 31624,
+        "result_faces": 10770,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0035602016473376434,
+        "sampled_mean_error_m": 0.0004561514999978433
+      },
+      {
+        "part_id": 48,
+        "source_faces": 31624,
+        "result_faces": 9044,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.004589164369573849,
+        "sampled_mean_error_m": 0.0005879703397489962
+      },
+      {
+        "part_id": 49,
+        "source_faces": 4716,
+        "result_faces": 4716,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 50,
+        "source_faces": 26888,
+        "result_faces": 1334,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01183044098724525,
+        "sampled_mean_error_m": 0.0009630139333072916
+      },
+      {
+        "part_id": 51,
+        "source_faces": 31624,
+        "result_faces": 10768,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.007686375684278387,
+        "sampled_mean_error_m": 0.0004560176176142501
+      },
+      {
+        "part_id": 52,
+        "source_faces": 31624,
+        "result_faces": 8712,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.00665911355019784,
+        "sampled_mean_error_m": 0.0006910577419789554
+      },
+      {
+        "part_id": 53,
+        "source_faces": 100998,
+        "result_faces": 11092,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.03997492104643889,
+        "sampled_mean_error_m": 0.001215262050531407
+      },
+      {
+        "part_id": 54,
+        "source_faces": 18852,
+        "result_faces": 3140,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.009650406413310943,
+        "sampled_mean_error_m": 0.0008132180164127552
+      },
+      {
+        "part_id": 55,
+        "source_faces": 21854,
+        "result_faces": 2760,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.014512986902965055,
+        "sampled_mean_error_m": 0.0007299731685330697
+      },
+      {
+        "part_id": 56,
+        "source_faces": 21854,
+        "result_faces": 2164,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.011722089031942903,
+        "sampled_mean_error_m": 0.000930928782886136
+      },
+      {
+        "part_id": 57,
+        "source_faces": 21854,
+        "result_faces": 1952,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.018866279774526207,
+        "sampled_mean_error_m": 0.001331465569602018
+      },
+      {
+        "part_id": 58,
+        "source_faces": 21854,
+        "result_faces": 2572,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.018166567015640688,
+        "sampled_mean_error_m": 0.0010149860044541346
+      },
+      {
+        "part_id": 59,
+        "source_faces": 21854,
+        "result_faces": 1720,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.013769712592694808,
+        "sampled_mean_error_m": 0.0011274257238886628
+      },
+      {
+        "part_id": 60,
+        "source_faces": 21854,
+        "result_faces": 2196,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.017812998734190774,
+        "sampled_mean_error_m": 0.0009326860899572499
+      },
+      {
+        "part_id": 61,
+        "source_faces": 100998,
+        "result_faces": 11372,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.051005271628164976,
+        "sampled_mean_error_m": 0.0011725259754426184
+      },
+      {
+        "part_id": 62,
+        "source_faces": 18852,
+        "result_faces": 3070,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01688043298394399,
+        "sampled_mean_error_m": 0.0008015294580538648
+      },
+      {
+        "part_id": 63,
+        "source_faces": 21854,
+        "result_faces": 2812,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.019319249695556956,
+        "sampled_mean_error_m": 0.0006966458592286193
+      },
+      {
+        "part_id": 64,
+        "source_faces": 21854,
+        "result_faces": 2164,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.010871024922560944,
+        "sampled_mean_error_m": 0.0009015292175078723
+      },
+      {
+        "part_id": 65,
+        "source_faces": 21854,
+        "result_faces": 1948,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.012309037705766277,
+        "sampled_mean_error_m": 0.0012682442276236482
+      },
+      {
+        "part_id": 66,
+        "source_faces": 21854,
+        "result_faces": 2686,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.016461604570638506,
+        "sampled_mean_error_m": 0.0010628226060571616
+      },
+      {
+        "part_id": 67,
+        "source_faces": 21854,
+        "result_faces": 1746,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01019237205863373,
+        "sampled_mean_error_m": 0.0010118631449461363
+      },
+      {
+        "part_id": 68,
+        "source_faces": 21854,
+        "result_faces": 2098,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.01676294647640561,
+        "sampled_mean_error_m": 0.0013894557446027342
+      },
+      {
+        "part_id": 69,
+        "source_faces": 218,
+        "result_faces": 218,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 70,
+        "source_faces": 218,
+        "result_faces": 218,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 71,
+        "source_faces": 2704,
+        "result_faces": 2704,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 72,
+        "source_faces": 2704,
+        "result_faces": 2704,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 73,
+        "source_faces": 28,
+        "result_faces": 28,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 74,
+        "source_faces": 28,
+        "result_faces": 28,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0,
+        "sampled_mean_error_m": 0.0
+      },
+      {
+        "part_id": 75,
+        "source_faces": 31624,
+        "result_faces": 10792,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.0027216483193872043,
+        "sampled_mean_error_m": 0.0004817023758219711
+      },
+      {
+        "part_id": 76,
+        "source_faces": 31624,
+        "result_faces": 10942,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.004507937541882053,
+        "sampled_mean_error_m": 0.0005390209610501202
+      },
+      {
+        "part_id": 77,
+        "source_faces": 327880,
+        "result_faces": 45576,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.020449807103714326,
+        "sampled_mean_error_m": 0.0012035970328396256
+      },
+      {
+        "part_id": 78,
+        "source_faces": 109984,
+        "result_faces": 10169,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.008203444980619546,
+        "sampled_mean_error_m": 0.0008524481077651376
+      },
+      {
+        "part_id": 79,
+        "source_faces": 327880,
+        "result_faces": 45754,
+        "protected_faces": 581,
+        "sampled_max_error_m": 0.02408314671709749,
+        "sampled_mean_error_m": 0.001362623549192219
+      },
+      {
+        "part_id": 80,
+        "source_faces": 109984,
+        "result_faces": 10071,
+        "protected_faces": 0,
+        "sampled_max_error_m": 0.015127016091705109,
+        "sampled_mean_error_m": 0.0008299049881806721
+      }
+    ]
+  },
+  "source_asset": "docs/RMUC2027_V1.0.0装配体版本/RMUC2027_V1.0.0.stp",
+  "source_sha256": "a5ad3ede3b7674fc98f2e73b71717216383cb2b4b5dcdbe900c2038918bea8e0",
+  "occt_transfer_unit": "mm",
+  "world_from_cad_m": [
+    [
+      -1,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      -1,
+      0,
+      1.62434375
+    ],
+    [
+      0,
+      0,
+      1,
+      1.6413437
+    ],
+    [
+      0,
+      0,
+      0,
+      1
+    ]
+  ],
+  "deflection_m": 0.003,
+  "healing": true,
+  "excluded_part_ids": [],
+  "moving_part_ids": [
+    79
+  ],
+  "triangle_format": "little-endian float32 Nx3x3, 36 bytes/triangle"
+}

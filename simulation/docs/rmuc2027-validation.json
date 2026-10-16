@@ -1,0 +1,206 @@
+{
+  "date": "2026-10-16",
+  "map": "rmuc_2027",
+  "version": "1.0.0",
+  "source_sha256": "a5ad3ede3b7674fc98f2e73b71717216383cb2b4b5dcdbe900c2038918bea8e0",
+  "source_triangles": 4949667,
+  "simulation_triangles": 776888,
+  "python_regressions": {
+    "passed": 73,
+    "map_ui_launcher_recheck_passed": 20
+  },
+  "native_runner_build": {
+    "target": "drone_companion_runner",
+    "passed": true
+  },
+  "original_cad_clearance": {
+    "passed": true,
+    "scope": "static_mesh_clearance",
+    "checked_transit_segments": 24
+  },
+  "simulation_mesh_clearance": {
+    "passed": true,
+    "scope": "static_mesh_clearance",
+    "checked_transit_segments": 24
+  },
+  "pressure_surface": {
+    "original_cad_faces_identical": true
+  },
+  "vision": {
+    "expected_position_camera_m": [
+      0.0,
+      0.26,
+      0.65
+    ],
+    "position_camera_m": [
+      -0.00019326808848311135,
+      0.2605814119415018,
+      0.6507109262322154
+    ],
+    "position_error_m": 0.0009385139889201071,
+    "reprojection_error_px": 0.3635208593453739,
+    "valid": true
+  },
+  "pressure_probe": {
+    "peak_force_n": 259.34052670734206,
+    "positive_samples": 37,
+    "probe_mass_kg": 0.18,
+    "probe_radius_m": 0.052,
+    "drop_height_above_target_m": 0.8
+  },
+  "sitl": {
+    "scope": "world_load_and_takeoff",
+    "run": "run_20261016_162113",
+    "vehicle_count": 4,
+    "last_heights_m": [
+      2.3562092361161007,
+      2.2572790127662214,
+      2.1935890344311146,
+      2.2358787150567268
+    ],
+    "height_reference_m": 2.3,
+    "images": [
+      "gazebo",
+      "hangar"
+    ],
+    "stopped": true
+  },
+  "team_contact_baseline": {
+    "run": "run_20261016_171550",
+    "sim_seconds": 160.051,
+    "vehicle_count": 4,
+    "complete": false,
+    "aborted": true,
+    "completed": [],
+    "skipped": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "first_failure": "接触阶段超时，未取得达标撞击",
+    "final_reason": "降落阶段超时，等待着地停机反馈",
+    "phases": [
+      {
+        "time_s": 0.0,
+        "phase": "WAIT_READY"
+      },
+      {
+        "time_s": 4.281,
+        "phase": "TAKEOFF"
+      },
+      {
+        "time_s": 8.361,
+        "phase": "TRANSIT"
+      },
+      {
+        "time_s": 15.721,
+        "phase": "ASSEMBLE"
+      },
+      {
+        "time_s": 18.461,
+        "phase": "APPROACH"
+      },
+      {
+        "time_s": 22.361,
+        "phase": "CONTACT"
+      },
+      {
+        "time_s": 34.381,
+        "phase": "APPROACH"
+      },
+      {
+        "time_s": 38.601,
+        "phase": "CONTACT"
+      },
+      {
+        "time_s": 50.621,
+        "phase": "APPROACH"
+      },
+      {
+        "time_s": 54.981,
+        "phase": "CONTACT"
+      },
+      {
+        "time_s": 67.001,
+        "phase": "APPROACH"
+      },
+      {
+        "time_s": 71.141,
+        "phase": "CONTACT"
+      },
+      {
+        "time_s": 83.161,
+        "phase": "RETURN_ALL"
+      },
+      {
+        "time_s": 93.961,
+        "phase": "LAND_ALL"
+      },
+      {
+        "time_s": 134.041,
+        "phase": "ABORTED"
+      }
+    ],
+    "horizontal_error_samples": [
+      {
+        "vehicle": 0,
+        "time_s": 26.006,
+        "truth_xy_m": [
+          10.145166163949094,
+          -5.371281222684321
+        ],
+        "estimate_xy_m": [
+          10.501180950074229,
+          -0.2720197478922083
+        ],
+        "horizontal_error_m": 5.1116742967680135
+      },
+      {
+        "vehicle": 1,
+        "time_s": 42.012,
+        "truth_xy_m": [
+          9.67308369140612,
+          3.4147898021191203
+        ],
+        "estimate_xy_m": [
+          10.51196938441816,
+          -0.26875999675466555
+        ],
+        "horizontal_error_m": 3.7778655781702186
+      },
+      {
+        "vehicle": 2,
+        "time_s": 57.984,
+        "truth_xy_m": [
+          9.618821972589382,
+          3.4953955806135704
+        ],
+        "estimate_xy_m": [
+          10.518248651672701,
+          -0.26117142632759516
+        ],
+        "horizontal_error_m": 3.86274048166399
+      },
+      {
+        "vehicle": 3,
+        "time_s": 75.012,
+        "truth_xy_m": [
+          10.129504056270841,
+          -4.569325405730904
+        ],
+        "estimate_xy_m": [
+          10.529687591651449,
+          -0.2664211562451343
+        ],
+        "horizontal_error_m": 4.32147334160844
+      }
+    ],
+    "all_native_disarmed": true,
+    "shutdown": {
+      "run": "run_20261016_171550",
+      "manager_stopped": true,
+      "alive": []
+    }
+  }
+}
