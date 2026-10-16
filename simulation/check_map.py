@@ -124,6 +124,43 @@ def landing_waiting_separation(config):
             'segments': checks, 'passed': all(row['passed'] for row in checks)}
 
 
+def approach_waiting_separation(config):
+    """按水平投影检查非流水接近航线与待接触、已完成成员的净距。"""
+    mission = config['team_mission']
+    order = [] if mission.get('pipelined_contact') else mission['order']
+    assembly = {p['id']: np.array([p['x'], p['y']]) for p in mission['assembly']}
+    holding = {p['id']: np.array([p['x'], p['y']])
+               for p in mission.get('completed_holding', mission['assembly'])}
+    entry = mission['approach']
+    dive = mission.get('dive_attack', {})
+    if dive.get('enabled'):
+        entry = mission.get('dive_entry', {
+            'x': mission['target']['x'] - dive.get('entry_standoff_m', 1.35),
+            'y': mission['target']['y'],
+        })
+    end = np.array([entry['x'], entry['y']])
+    diameter = 2 * mission['contact_radius_m']
+    checks = []
+    for slot, vehicle in enumerate(order):
+        start = assembly[vehicle]
+        change = end - start
+        norm = float(change @ change)
+        for index, waiting in enumerate(order):
+            if waiting == vehicle:
+                continue
+            waiting_phase = 'completed_holding' if index < slot else 'assembly'
+            point = holding[waiting] if index < slot else assembly[waiting]
+            fraction = float(np.clip((point - start) @ change / norm, 0, 1)) if norm > 1e-12 else 0.0
+            distance = float(np.linalg.norm(start + fraction * change - point))
+            checks.append({'vehicle': vehicle, 'waiting_vehicle': waiting,
+                           'waiting_phase': waiting_phase, 'fraction': fraction,
+                           'distance_m': distance, 'passed': distance >= diameter})
+    return {'scope': 'nonpipelined_approach_horizontal_projection', 'order': order,
+            'body_diameter_m': diameter, 'entry_xy_m': end.tolist(),
+            'minimum_distance_m': min((row['distance_m'] for row in checks), default=None),
+            'segments': checks, 'passed': all(row['passed'] for row in checks)}
+
+
 def check_map(path, margin=.02):
     path = Path(path)
     config = json.loads(path.read_text(encoding='utf-8'))
@@ -200,10 +237,14 @@ def check_map(path, margin=.02):
     failures.extend({'kind': 'formation_separation', **row} for row in separation['segments'] if not row['passed'])
     landing = landing_waiting_separation(config)
     failures.extend({'kind': 'landing_waiting_separation', **row} for row in landing['segments'] if not row['passed'])
+    approach_separation = approach_waiting_separation(config)
+    failures.extend({'kind': 'approach_waiting_separation', **row}
+                    for row in approach_separation['segments'] if not row['passed'])
     return {'map': config['name'], 'scope': 'static_mesh_clearance', 'margin_m': margin,
                 'triangle_count': len(triangles), 'homes': homes, 'transit_segments': routes,
                 'formation_separation': separation,
                 'landing_waiting_separation': landing,
+                'approach_waiting_separation': approach_separation,
                 'landing_alignment_segments': alignment_routes,
                 'retreat_exit_segments': retreat_routes,
                 'target_hit': target_hit, 'failures': failures, 'passed': not failures}

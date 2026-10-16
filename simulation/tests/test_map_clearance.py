@@ -8,6 +8,7 @@ import numpy as np
 from simulation.check_map import (
     TriangleScene,
     check_map,
+    approach_waiting_separation,
     formation_separation,
     landing_waiting_separation,
 )
@@ -36,8 +37,8 @@ def test_hangar_departure_preserves_vehicle_order_and_body_separation():
     assert report['passed']
     assert report['minimum_distance_m'] >= .139
     offsets = config['team_mission']['formation_offsets']
-    offsets[1].update(x=-.35, y=.35)
-    offsets[2].update(x=.35, y=-.35)
+    offsets[0].update(x=.35, y=0)
+    offsets[3].update(x=-.35, y=0)
     crossing = formation_separation(config)
     assert not crossing['passed']
     assert crossing['minimum_distance_m'] < .087
@@ -77,3 +78,21 @@ def test_alignment_descent_clears_tray_rim_with_position_tolerance(tmp_path):
     blocked = check_map(candidate)
     assert not blocked['passed']
     assert any(row['kind'] == 'landing_alignment' for row in blocked['failures'])
+
+
+def test_contact_approach_does_not_cross_waiting_members():
+    path = Path(__file__).resolve().parents[1] / 'maps/rmuc_2027.json'
+    config = json.loads(path.read_text(encoding='utf-8'))
+    report = approach_waiting_separation(config)
+    assert report['passed']
+    assert report['minimum_distance_m'] >= .28
+    assert len(report['segments']) == 12
+    assert any(row['waiting_phase'] == 'completed_holding' for row in report['segments'])
+
+    for point in config['team_mission']['assembly']:
+        point.update(x=8.6 if point['id'] % 2 == 0 else 8.95,
+                     y=-1.85 if point['id'] < 2 else -1.5)
+    blocked = approach_waiting_separation(config)
+    assert not blocked['passed']
+    assert any(row['vehicle'] == 0 and row['waiting_vehicle'] == 3 and not row['passed']
+               for row in blocked['segments'])
