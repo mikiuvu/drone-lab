@@ -50,3 +50,11 @@ def test_front_row_lands_before_rear_row_to_keep_waiting_positions_clear():
     crossing = landing_waiting_separation(config)
     assert not crossing['passed']
     assert crossing['minimum_distance_m'] < crossing['body_diameter_m']
+
+
+def test_completed_holding_rows_leave_wide_vertical_clearance():
+    path = Path(__file__).resolve().parents[1] / 'maps/rmuc_2027.json'
+    config = json.loads(path.read_text(encoding='utf-8'))
+    holding = {point['id']: point for point in config['team_mission']['completed_holding']}
+    assert holding[2]['y'] - holding[0]['y'] >= .79
+    assert holding[3]['y'] - holding[1]['y'] >= .79
