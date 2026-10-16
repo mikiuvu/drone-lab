@@ -141,6 +141,15 @@ def check_map(path, margin=.02):
         result = {'id': i, 'ground_hit': ground}
         if not ground or abs(ground['point_m'][2] - mission['home_ground_z_m']) > .005:
             failures.append(dict(kind='home_ground', **result))
+        support = []
+        for angle in np.linspace(0, 2 * np.pi, 12, endpoint=False):
+            point = start + [mission['contact_radius_m'] * np.cos(angle),
+                             mission['contact_radius_m'] * np.sin(angle), 0]
+            hit = scene.segment_hit(point, point - [0, 0, 10])
+            support.append(hit)
+        result['support_hits'] = support
+        if any(hit is None or abs(hit['point_m'][2] - mission['home_ground_z_m']) > .005 for hit in support):
+            failures.append({'kind': 'home_body_support', 'id': i})
         up = start.copy()
         up[2] = cruise
         hit = scene.corridor_hit(start, up, radius, half_height)
