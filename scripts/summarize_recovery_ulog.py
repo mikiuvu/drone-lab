@@ -23,6 +23,57 @@ def rows(path):
     return result
 
 
+def vertical_velocity_up(frame, velocity, quaternion=None, pose_frame=None):
+    """将 ULog 外部速度转为向上分量；局部 NED/FRD 坐标的 Z 均向下。"""
+    velocity = np.asarray(velocity, dtype=float)
+    if velocity.shape != (3,) or not np.all(np.isfinite(velocity)):
+        return None
+    if frame in (1, 2):
+        return -float(velocity[2])
+    if frame != 3 or pose_frame not in (1, 2) or quaternion is None:
+        return None
+    quaternion = np.asarray(quaternion, dtype=float)
+    norm = np.linalg.norm(quaternion)
+    if quaternion.shape != (4,) or not np.isfinite(norm) or norm < 1e-12:
+        return None
+    w, x, y, z = quaternion / norm
+    down = np.array([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)])
+    return -float(down @ velocity)
+
+
+def velocity_consistency(ev, local, begin_us, end_us, max_age_us=50000):
+    """按外部量测采样时间匹配不晚于它的原生速度，不跨越陈旧数据。"""
+    result = {'native_begin_s': begin_us / 1e6, 'native_end_s': end_us / 1e6,
+              'max_native_age_ms': max_age_us / 1000, 'paired_samples': 0,
+              'invalid_or_unsupported_samples': 0, 'missing_native_samples': 0}
+    if not ev or not local:
+        result['available'] = False
+        return result
+    result['available'] = True
+    differences = []
+    for index in np.flatnonzero((ev['timestamp_sample'] >= begin_us) & (ev['timestamp_sample'] <= end_us)):
+        external = vertical_velocity_up(int(ev['velocity_frame'][index]),
+            [ev[f'velocity[{axis}]'][index] for axis in range(3)],
+            [ev[f'q[{axis}]'][index] for axis in range(4)], int(ev['pose_frame'][index]))
+        if external is None:
+            result['invalid_or_unsupported_samples'] += 1
+            continue
+        stamp = int(ev['timestamp_sample'][index])
+        previous = int(np.searchsorted(local['timestamp'], stamp, side='right')) - 1
+        if previous < 0 or stamp - int(local['timestamp'][previous]) > max_age_us or not np.isfinite(local['vz'][previous]):
+            result['missing_native_samples'] += 1
+            continue
+        differences.append(external + float(local['vz'][previous]))
+    result['paired_samples'] = len(differences)
+    if differences:
+        absolute = np.abs(differences)
+        result.update(absolute_difference_p50_mps=float(np.quantile(absolute, .5)),
+                      absolute_difference_p95_mps=float(np.quantile(absolute, .95)),
+                      absolute_difference_max_mps=float(np.max(absolute)),
+                      samples_over_1_mps=int(np.count_nonzero(absolute > 1.0)))
+    return result
+
+
 def load_segments(paths):
     topics = ["sensor_combined", "vehicle_imu_status", "vehicle_land_detected",
               "vehicle_status", "vehicle_visual_odometry", "vehicle_local_position"]
@@ -139,6 +190,16 @@ def summarize(run, ulog_root):
                 "samples": int(np.count_nonzero(select)),
                 "max_xy_norm_m": float(np.max(np.linalg.norm(position[finite_position], axis=1))) if np.any(finite_position) else None,
                 "velocity_samples_disabled": int(np.count_nonzero(~np.all(np.isfinite(velocity), axis=1)))}
+        alignment = next((item for item in log if item.get('kind') == 'imu_clock_alignment'), None)
+        row['post_contact_velocity'] = []
+        if alignment:
+            offset = alignment['sim_time_us'] - alignment['imu_boot_time_us']
+            for contact in (item for item in log if item.get('kind') == 'impact'):
+                begin = int(contact['sim_time_us']) - offset
+                consistency = velocity_consistency(ev, data.get('vehicle_local_position', {}), begin, begin + 4000000)
+                consistency.update(contact_time_s=contact['sim_time_us'] / 1e6,
+                                   observation_minus_native_us=offset)
+                row['post_contact_velocity'].append(consistency)
         result["vehicles"].append(row)
     result["all_stopped"] = all(row["armed_at_stop"] is False and row["native_landed"] is True
                                 and row["native_arming_state"] == 1 for row in result["vehicles"])
