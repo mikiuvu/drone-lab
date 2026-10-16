@@ -188,9 +188,12 @@ def prepare_world(output, map_path, config=None, contract=None, tof_rays=True, a
     if "home_marker" in config:
         overview = ET.SubElement(world, "model", name="home_overview")
         ET.SubElement(overview, "static").text = "true"
-        ET.SubElement(
-            overview, "pose"
-        ).text = "0 0 1.8 0 1.5707963267948966 1.5707963267948966"
+        center_x = sum(s["x"] for s in config["spawns"]) / len(config["spawns"])
+        center_y = sum(s["y"] for s in config["spawns"]) / len(config["spawns"])
+        camera_z = config["home_marker"]["ground_z_m"] + 1.3
+        ET.SubElement(overview, "pose").text = (
+            f"{center_x} {center_y} {camera_z} 0 1.5707963267948966 1.5707963267948966"
+        )
         link = ET.SubElement(overview, "link", name="camera")
         sensor = ET.SubElement(link, "sensor", name="home_overview", type="camera")
         ET.SubElement(sensor, "topic").text = "/operator/home_overview"
@@ -428,7 +431,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["start", "stop", "status", "gui"])
     parser.add_argument(
-        "--map", type=Path, default=ROOT / "maps" / "rmuc_2026_sentry26.json"
+        "--map", type=Path, default=ROOT / "maps" / "rmuc_2027.json"
     )
     parser.add_argument(
         "--mission", choices=["hover", "survey", "team_contact"], default="hover"
@@ -612,7 +615,7 @@ def main():
         }
         for i in range(3)
     ]
-    if config.get("moving_armor", {}).get("source") == "original_base_mesh":
+    if config.get("moving_armor", {}).get("source") in ("original_base_mesh", "cad_mesh_partition"):
         separation = config.get("team_mission", {}).get("visual_strip_separation_m")
         if separation is not None:
             settings["companion"]["camera"]["strip_center_separation_m"] = separation
@@ -811,6 +814,8 @@ def main():
                     "--imu-clock",
                     args.imu_clock,
                 ]
+                if "hover_z_m" in config:
+                    command += ["--takeoff-height", str(config["hover_z_m"])]
                 if args.fly:
                     command += ["--offboard", "--arm"]
                 if count > 10:

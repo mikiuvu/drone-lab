@@ -3,6 +3,7 @@
 
 """Render the configured team route and contact handoff geometry."""
 
+import argparse
 import json
 from pathlib import Path
 
@@ -17,7 +18,11 @@ from matplotlib.patches import Rectangle
 # 从地图和高度栅格绘制规划几何，保存 team-route.png；图中位置使用世界 XY 米制坐标。
 def main():
     root = Path(__file__).resolve().parent
-    path = root / "maps/rmuc_2026_sentry26.json"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--map", type=Path, default=root / "maps/rmuc_2027.json")
+    parser.add_argument("--output", type=Path, default=root / "docs/team-route.png")
+    args = parser.parse_args()
+    path = args.map
     config = json.loads(path.read_text(encoding="utf-8"))
     mission = config["team_mission"]
     with np.load(path.parent / config["terrain_height_grid"]) as grid:
@@ -28,13 +33,16 @@ def main():
         1, 2, figsize=(13, 5), gridspec_kw={"width_ratios": [2, 1]}
     )
     for axis in axes:
-        axis.pcolormesh(x, y, z, shading="nearest", cmap="terrain", vmin=0, vmax=3.5)
+        axis.pcolormesh(x, y, z, shading="nearest", cmap="terrain",
+                        vmin=config.get("terrain_height_min_m", 0),
+                        vmax=config.get("terrain_height_max_m", 3.7))
         axis.set_aspect("equal")
         axis.set_xlabel("X / m")
         axis.set_ylabel("Y / m")
     axes[0].set_title("全场规划航路")
-    axes[0].set_xlim(-14.6, 14.6)
-    axes[0].set_ylim(-8.1, 8.1)
+    bounds = config["bounds"]
+    axes[0].set_xlim(bounds["x_min"], bounds["x_max"])
+    axes[0].set_ylim(bounds["y_min"], bounds["y_max"])
     route = mission["transit_waypoints"] + [
         {
             "x": sum(p["x"] for p in mission["assembly"]) / len(mission["assembly"]),
@@ -58,9 +66,12 @@ def main():
             fontsize=8,
         )
     axes[1].set_title("基地接触与侧方待命")
-    axes[1].set_xlim(9.5, 11.65)
-    axes[1].set_ylim(-1.3, 1.3)
     approach, target = mission["approach"], mission["target"]
+    context = [approach, target] + mission["assembly"] + mission.get("completed_holding", [])
+    axes[1].set_xlim(min(point["x"] for point in context) - .3,
+                     max(point["x"] for point in context) + .3)
+    axes[1].set_ylim(min(point["y"] for point in context) - .3,
+                     max(point["y"] for point in context) + .3)
     axes[1].plot(
         [approach["x"], target["x"]],
         [approach["y"], target["y"]],
@@ -93,7 +104,7 @@ def main():
         )
     axes[1].legend(loc="lower right")
     figure.tight_layout()
-    figure.savefig(root / "docs/team-route.png", dpi=160)
+    figure.savefig(args.output, dpi=160)
     plt.close(figure)
 
 

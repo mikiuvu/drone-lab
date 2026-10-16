@@ -3,12 +3,11 @@
   "mission": {
     "mode": "localization",
     "explorer_vehicle": 0,
-    "policy": "Four-vehicle localization. Armor guidance disabled; selected map supplies optional prior survey waypoints."
+    "policy": "地图提供起点、航路与装甲目标；运行模式决定是否启用任务制导。"
   },
-  "purpose": "Real Gazebo + four PX4 SITL instances with static terrain localization and anchor-free peer ranging.",
+  "purpose": "Gazebo/PX4 机队仿真：静态地形定位与无固定锚点的机间测距。",
   "height_input": {
     "source": "SIM_HEIGHT_ASSIST",
-    "authorized_by_user": true,
     "reference": "Gazebo world ENU z in meters",
     "truth_fields_allowed": ["z_world_m"],
     "horizontal_truth_allowed": false
@@ -24,7 +23,6 @@
   },
   "limitations": [
     "Known spawn used once for initialization; height assisted thereafter.",
-    "Sentry26 2026 terrain reference.",
     "Micro dynamics use reference propulsion parameters.",
     "No NPU emulation or hardware timing equivalence."
   ]

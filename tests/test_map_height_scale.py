@@ -11,10 +11,15 @@ def test_color_mapping_uses_map_ceiling():
     assert first.pixelColor(0, 0) == second.pixelColor(0, 0)
 
 
+def test_negative_sloped_ground_has_distinct_colors():
+    image = terrain_image(np.array([[-.2, 0.]]), 3.5, -.25)
+    assert image.pixelColor(0, 0) != image.pixelColor(1, 0)
+
+
 def test_color_scale_change_invalidates_image_cache(tmp_path):
     source = tmp_path / 'terrain.npz'
     np.savez_compressed(source, z=np.array([[1.0]]))
-    config = dict(terrain_height_grid=str(source), terrain_height_max_m=2)
+    config = {'terrain_height_grid': str(source), 'terrain_height_max_m': 2}
     reader = SimulationReader(tmp_path)
     first, error = reader.read_terrain(config)
     assert not error

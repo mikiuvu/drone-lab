@@ -23,13 +23,15 @@ def local_path(value):
     return Path(value)
 
 
-def terrain_image(z, ceiling=3.7):
-    """@brief 按地图高度上限生成拥有独立像素内存的地形图。
+def terrain_image(z, ceiling=3.7, floor=0.0):
+    """@brief 按地图高度色标范围生成拥有独立像素内存的地形图。
     @param z 二维高度数组，单位 m；数组行方向与屏幕 Y 方向相反。
+    @param ceiling 色标高度上限，单位 m。
+    @param floor 色标高度下限，单位 m。
     """
-    if not np.isfinite(ceiling) or ceiling <= 0:
+    if not np.isfinite([floor, ceiling]).all() or ceiling <= floor:
         raise ValueError("Invalid terrain height color scale")
-    ratio = np.clip(np.nan_to_num(z, nan=0.0) / ceiling, 0, 1)
+    ratio = np.clip((np.nan_to_num(z, nan=floor) - floor) / (ceiling - floor), 0, 1)
     stops = np.array([[int(color[i:i + 2], 16) for i in (1, 3, 5)]
                       for color in theme.HEIGHT_STOPS[::2]], dtype=float)
     scaled = ratio * 2
@@ -119,10 +121,11 @@ class SimulationReader:
             path = path.resolve()
             stat = path.stat()
             ceiling = float(config.get("terrain_height_max_m", 3.7))
-            key = (str(path), stat.st_mtime_ns, stat.st_size, ceiling)
+            floor = float(config.get("terrain_height_min_m", 0.0))
+            key = (str(path), stat.st_mtime_ns, stat.st_size, ceiling, floor)
             if self.terrain_cache is None or self.terrain_cache[0] != key:
                 with np.load(path, allow_pickle=False) as data:
-                    image = terrain_image(data["z"], ceiling)
+                    image = terrain_image(data["z"], ceiling, floor)
                 self.terrain_cache = (key, image)
             return self.terrain_cache[1], ""
         except (OSError, KeyError, ValueError, TypeError) as exc:

@@ -12,7 +12,7 @@ from gz.transport13 import Node
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--world", default="rmuc_2026_sentry26")
+    parser.add_argument("--world", default="rmuc_2027")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)

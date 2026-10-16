@@ -3,6 +3,7 @@
 
 """Render configured team routes, home markers and model dimensions."""
 
+import argparse
 import json
 from pathlib import Path
 
@@ -16,13 +17,15 @@ from matplotlib.patches import Circle, Rectangle
 # 读取地图、尺寸核对数据与高度栅格，在全场和起点局部视图中绘制等比例几何并保存图片。
 def main():
     root = Path(__file__).resolve().parent
-    config = json.loads(
-        (root / "maps/rmuc_2026_sentry26.json").read_text(encoding="utf-8")
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--map", type=Path, default=root / "maps/rmuc_2027.json")
+    parser.add_argument("--output", type=Path, default=root / "docs/team-map.png")
+    args = parser.parse_args()
+    config = json.loads(args.map.read_text(encoding="utf-8"))
     scale = json.loads(
         (root / "docs/scale-verification.json").read_text(encoding="utf-8")
     )
-    grid = np.load(root / "models/terrain/rmuc_2026_sentry26/terrain_height_grid.npz")
+    grid = np.load(args.map.parent / config["terrain_height_grid"], allow_pickle=False)
     rcParams["font.family"] = "Microsoft YaHei"
     rcParams["axes.unicode_minus"] = False
     figure = Figure(figsize=(13, 6), layout="constrained")
@@ -36,8 +39,8 @@ def main():
             origin="lower",
             extent=[grid["x"][0], grid["x"][-1], grid["y"][0], grid["y"][-1]],
             cmap="terrain",
-            vmin=0,
-            vmax=3,
+            vmin=config.get("terrain_height_min_m", 0),
+            vmax=config.get("terrain_height_max_m", 3.7),
         )
         axis.set_aspect("equal")
         axis.set_xlabel("X / m")
@@ -74,16 +77,18 @@ def main():
         marker=".",
         label="编队中心航路",
     )
-    axes[0].add_patch(
-        Circle((11.6, 0), 0.75, fill=False, edgecolor="blue", linewidth=2)
-    )
-    axes[0].text(10, -1.5, "蓝方基地", color="blue")
-    axes[0].set_title("比赛区 28 × 15 m · 红方进攻蓝方基地")
+    base = config["team_mission"]["enemy_base"]
+    bx, by = base["center_x_m"], base["center_y_m"]
+    axes[0].add_patch(Circle((bx, by), 0.75, fill=False, edgecolor="blue", linewidth=2))
+    axes[0].text(bx - 1.6, by - 1.5, "蓝方基地", color="blue")
+    axes[0].set_title(config["label"])
     axes[0].legend(loc="upper left")
-    axes[1].set_xlim(-1.4, 1.4)
-    axes[1].set_ylim(-1.2, 1.4)
-    axes[1].set_title(f"中央起点：红框 {marker:.2f} m，机体 {sx:.3f} m")
-    figure.savefig(root / "docs/team-route.png", dpi=150)
+    homes = config["spawns"]
+    axes[1].set_xlim(min(p["x"] for p in homes) - .6, max(p["x"] for p in homes) + .6)
+    axes[1].set_ylim(min(p["y"] for p in homes) - .6, max(p["y"] for p in homes) + .6)
+    axes[1].set_title(f"起点：红框 {marker:.2f} m，机体 {sx:.3f} m")
+    figure.savefig(args.output, dpi=150)
+    grid.close()
 
 
 if __name__ == "__main__":

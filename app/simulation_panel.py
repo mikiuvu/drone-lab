@@ -77,14 +77,17 @@ class ColorbarLegend(QWidget):
         super().__init__(parent)
         self.setFixedHeight(34)
         self.ceiling = 3.7
+        self.floor = 0.0
         self.dark = False
 
-    def configure(self, ceiling, dark):
-        """@brief 更新高度上限与主题。
+    def configure(self, ceiling, dark, floor=0.0):
+        """@brief 更新高度色标范围与主题。
         @param ceiling 色标上端对应的高度，单位 m。
         @param dark 为真表示深色主题。
+        @param floor 色标下端对应的高度，单位 m。
         """
         self.ceiling, self.dark = float(ceiling), dark
+        self.floor = float(floor)
         self.update()
 
     def paintEvent(self, event):
@@ -96,7 +99,9 @@ class ColorbarLegend(QWidget):
         t = theme.tokens(self.dark)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        margin = 30
+        p.setFont(QFont("Microsoft YaHei UI", 9))
+        margin = max(30, p.fontMetrics().horizontalAdvance(f"{self.floor:g}") + 8,
+                     p.fontMetrics().horizontalAdvance(f"{self.ceiling:g} m") + 8)
         bar = QRectF(margin, 5, max(10, self.width() - 2 * margin), 10)
         gradient = QLinearGradient(bar.left(), 0, bar.right(), 0)
         for i, stop in enumerate(theme.HEIGHT_STOPS):
@@ -107,12 +112,11 @@ class ColorbarLegend(QWidget):
         p.setPen(QPen(QColor(t["border_strong"]), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(bar, 3, 3)
-        p.setFont(QFont("Microsoft YaHei UI", 9))
         p.setPen(QColor(t["ink_muted"]))
         p.drawText(
             QRectF(0, 2, margin - 6, 16),
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            "0",
+            f"{self.floor:g}",
         )
         p.drawText(
             QRectF(bar.right() + 6, 2, margin, 16),
@@ -307,7 +311,8 @@ class LocalizationMap(QWidget):
             int(frame.left()), int(frame.bottom() + 22), int(frame.width()), 34
         )
         if self.terrain_image is not None:
-            self.legend.configure(self.config.get("terrain_height_max_m", 3.7), self.dark)
+            self.legend.configure(self.config.get("terrain_height_max_m", 3.7), self.dark,
+                                  self.config.get("terrain_height_min_m", 0.0))
 
         # 5. 同机真值与估计共用颜色，以虚实线区分；当前匹配位置叠加机体尺寸框。
         #    轨迹用 QPainterPath 一次提交，逐段 drawLine 在长轨迹下会产生上万次调用。
@@ -410,7 +415,7 @@ class GazeboPanel(QWidget):
         self._closing = False
         self._shutdown_notified = False
         self.current_folder = None
-        self.current_map = self.root / "simulation/maps/rmuc_2026_sentry26.json"
+        self.current_map = self.root / "simulation/maps/rmuc_2027.json"
         self.map_config = {}
         self.flight_dashboard = None
         self.dark = False
@@ -610,6 +615,20 @@ class GazeboPanel(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(800)
+        self.map_choice.currentIndexChanged.connect(self._map_capacity)
+        self._map_capacity()
+
+    def _map_capacity(self):
+        """按地图机库容量调整机数上限。"""
+        capacity = 64
+        try:
+            config = json.loads(Path(self.map_choice.currentData()).read_text(encoding="utf-8"))
+            value = config.get("max_vehicle_count", 64)
+            if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 64:
+                capacity = value
+        except (OSError, ValueError, TypeError):
+            pass
+        self.vehicle_count.setMaximum(capacity)
 
     def set_theme(self, dark):
         """@brief 切换深浅主题并同步到地图与已打开的飞行窗口。

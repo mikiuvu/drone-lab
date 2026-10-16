@@ -13,6 +13,8 @@ from gz.transport13 import Node
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--sim-seconds", type=float, default=30)
+parser.add_argument("--map", type=Path)
+parser.add_argument("--gui", action="store_true")
 parser.add_argument("--vehicle-count", type=int)
 parser.add_argument("--vision-delay-ms", type=float, default=0)
 parser.add_argument("--visual-lateral-gate", type=float)
@@ -30,13 +32,16 @@ command = [
     "python3",
     str(root / "launch_linux.py"),
     "start",
-    "--gui",
     "--companions",
     "--fly",
     "--horizontal-tof",
     "--mission",
     args.mission,
 ]
+if args.map is not None:
+    command += ["--map", str(args.map)]
+if args.gui:
+    command += ["--gui"]
 command += ["--vision-delay-ms", str(args.vision_delay_ms)]
 if args.visual_lateral_gate is not None:
     command += ["--visual-lateral-gate", str(args.visual_lateral_gate)]
@@ -50,6 +55,7 @@ if args.flow_disable:
     command += ["--flow-disable"]
 subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 state = json.loads((root / "runtime/manager.json").read_text(encoding="utf-8"))
+os.environ.update(state.get("gazebo_environment", {}))
 done = threading.Event()
 last = [0.0]
 node = Node()
