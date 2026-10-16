@@ -113,6 +113,8 @@ TeamMissionConfig readConfig(const std::string& path) {
   c.route_tolerance_m=m.value("route_tolerance_m",c.return_tolerance_m);
   c.route_speed_tolerance_mps=m.value("route_speed_tolerance_mps",.30);
   c.fly_through_route=m.value("fly_through_route",false);
+  c.sequential_landing=m.value("sequential_landing",false);
+  if(m.contains("landing_alignment_tolerance_m"))c.landing_alignment_tolerance_m=number(m,"landing_alignment_tolerance_m");
   c.pipelined_contact=m.value("pipelined_contact",false);
   c.visual_contact=m.value("visual_contact",false);
   // 视觉进入距离：0 表示保持旧行为（锁定即进入接触）。
@@ -207,12 +209,12 @@ TeamVehicleStatus readStatus(const char* data, int length) {
   return s;
 }
 // 对失效成员在报文 phase 中显示 HOLD，同时保留 mission_phase 表示全队实际阶段。
-json commandJson(const TeamCommand& c) {
+json commandJson(const TeamCommand& c, TeamPhase mission_phase) {
   return {{"schema",1},{"kind","team_command"},{"vehicle",c.vehicle},
       {"sim_time_us",c.sim_time_us},{"sequence",c.sequence},
       {"contact_deadline_us",c.contact_deadline_us},
       {"phase",c.degraded && c.phase != TeamPhase::WAIT_READY ? "HOLD" : teamPhaseName(c.phase)},
-      {"mission_phase",teamPhaseName(c.phase)},
+      {"mission_phase",teamPhaseName(mission_phase)},
       {"active_vehicle",c.active_vehicle},{"target_x_m",c.target_x_m},{"target_y_m",c.target_y_m},
       {"target_z_m",c.target_z_m},{"target_yaw_rad",c.target_yaw_rad},
       {"contact_speed_mps",c.contact_speed_mps},{"paused",c.degraded},
@@ -323,7 +325,7 @@ int main(int argc, char** argv) {
       // 3. 发布节拍至少间隔 50 ms（现实时间）；状态机使用传入的仿真时间判阶段。
       const auto commands = mission.step(sim,wall); json targets = json::array(), vehicles = json::array();
       for (const auto& c : commands) {
-        const json value = commandJson(c); const auto payload = value.dump(); targets.push_back(value);
+        const json value = commandJson(c,mission.phase()); const auto payload = value.dump(); targets.push_back(value);
         sockaddr_in peer{}; peer.sin_family = AF_INET; peer.sin_port = htons(static_cast<uint16_t>(18000+c.vehicle));
         peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         if (sendto(udp.fd,payload.data(),static_cast<int>(payload.size()),0,

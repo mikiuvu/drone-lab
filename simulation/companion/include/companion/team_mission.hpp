@@ -40,6 +40,8 @@ struct TeamMissionConfig {
   std::vector<TeamPoint> transit_waypoints;
   std::vector<TeamPoint> formation_offsets;
   bool explicit_formation_offsets = false; // false 时由起飞点相对质心的位置计算。
+  bool sequential_landing = false; // 返航末段在编队位置等待，按 order 逐架对准起点并降落。
+  double landing_alignment_tolerance_m = .025; // 下降前的水平位置容差，m。
   std::vector<int> order{0, 1, 2, 3};
   double contact_speed_mps = .2, return_tolerance_m = .10; // 接触速度 m/s；到点 XY 容差 m。
   double route_tolerance_m = .10, route_speed_tolerance_mps = .30;
@@ -155,6 +157,9 @@ class TeamMission {
   bool stable_ = false, aborted_ = false, retreat_assembly_ = false;
   int turn_ = 0; // order 中的下标，不是机号；机号由 order[turn_] 获取。
   int transit_index_ = 0, return_index_ = -1;
+  size_t landing_index_ = 0;
+  bool landing_descending_ = false;
+  uint64_t landing_alignment_since_ = 0;
   std::vector<int> completed_;
   std::vector<int> skipped_; // 历史未完成轮次记录；恢复机仍可加入返航，记录不一定清除。
   std::string reason_;

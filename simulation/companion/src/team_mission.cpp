@@ -40,6 +40,7 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
       config_.cruise_z_m <= config_.home_ground_z_m + config_.body_clearance_m ||
       !std::isfinite(config_.contact_speed_mps) || config_.contact_speed_mps <= 0 ||
       !std::isfinite(config_.return_tolerance_m) || config_.return_tolerance_m <= 0 ||
+      !std::isfinite(config_.landing_alignment_tolerance_m) || config_.landing_alignment_tolerance_m <= 0 ||
       !std::isfinite(config_.route_tolerance_m) || config_.route_tolerance_m<=0 ||
       !std::isfinite(config_.route_speed_tolerance_mps) || config_.route_speed_tolerance_mps<=0 ||
       !config_.freshness_us || !config_.stable_us || !config_.loss_abort_us ||
@@ -118,6 +119,7 @@ void TeamMission::enter(TeamPhase p, uint64_t now) {
   if((p==TeamPhase::COMPLETE||p==TeamPhase::ABORTED)&&flight_start_)flight_end_=now;
   if (p==TeamPhase::CONTACT && activeVehicle()>=0) impact_baseline_=status_[activeVehicle()].impact_seq;
   if (p==TeamPhase::RETREAT) retreat_assembly_=config_.retreat_holding_direct;
+  if (p==TeamPhase::LAND_ALL) { landing_index_=0;landing_descending_=false;landing_alignment_since_=0; }
   if (p==TeamPhase::RETURN_ALL || p==TeamPhase::ABORT_RETURN)
     return_index_=config_.transit_waypoints.empty()?-1:std::min(transit_index_-1,static_cast<int>(config_.transit_waypoints.size())-1);
 }
@@ -266,11 +268,27 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
         if(validForBarrier(a,sim,wall)&&forward<-.25)retreat_assembly_=true;
         if(validForBarrier(a,sim,wall)&&retreat_assembly_&&forward<-.25&&std::abs(lateral)>.18){if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);}
       }else if(barrier(near(a,retreat_assembly_?config_.completed_holding[a]:config_.approach),sim)){if(!retreat_assembly_){retreat_assembly_=true;stable_=false;}else if(++turn_==static_cast<int>(config_.order.size()))enter(TeamPhase::RETURN_ALL,sim);else enter(TeamPhase::APPROACH,sim);} break; }
-    case TeamPhase::RETURN_ALL: case TeamPhase::ABORT_RETURN: if(return_index_>=0){if(barrier(routeNear(return_index_),sim)){--return_index_;stable_=false;phase_start_=sim;}}else if(barrier(allNear(true),sim))enter(TeamPhase::LAND_ALL,sim); break;
+    case TeamPhase::RETURN_ALL: case TeamPhase::ABORT_RETURN: if(return_index_>=0){if(barrier(routeNear(return_index_),sim)){--return_index_;stable_=false;phase_start_=sim;}}else if((config_.sequential_landing&&!aborted_)||barrier(allNear(true),sim))enter(TeamPhase::LAND_ALL,sim); break;
     default: break;
   }
   // 5. 路线屏障可以跳过失效成员，降落停机确认必须覆盖每个成员。
   if (phase_==TeamPhase::LAND_ALL) {
+    if(config_.sequential_landing&&!aborted_&&landing_index_<config_.order.size()) {
+      const int id=config_.order[landing_index_];
+      auto home=config_.homes[id];home.z=config_.home_ground_z_m+config_.body_clearance_m;
+      const auto& state=status_[id];
+      if(statusFresh(id,sim,wall)&&state.landed&&!state.armed&&near(id,home,false)) {
+        ++landing_index_;landing_descending_=false;landing_alignment_since_=0;
+      }else if(!landing_descending_) {
+        const bool aligned=validForBarrier(id,sim,wall)&&state.armed&&
+            std::hypot(state.x_m-home.x,state.y_m-home.y)<=config_.landing_alignment_tolerance_m&&
+            std::abs(state.z_m-config_.cruise_z_m)<=.08&&
+            std::hypot(state.vx_mps,state.vy_mps)<=.10&&std::abs(state.vz_mps)<=.12;
+        if(!aligned)landing_alignment_since_=0;
+        else if(!landing_alignment_since_)landing_alignment_since_=sim;
+        else if(sim-landing_alignment_since_>=config_.stable_us)landing_descending_=true;
+      }
+    }
     if(barrier(all_stopped&&(aborted_||all_unrecoverable||allNear(true,true)),sim))
       enter(aborted_||!skipped_.empty()?TeamPhase::ABORTED:TeamPhase::COMPLETE,sim);
   }
@@ -316,13 +334,27 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
       const double lateral=config_.contact_exit_side!=0?-std::copysign(.25,config_.contact_exit_side):(side>=0?.25:-.25);
       p=config_.approach;p.x-=.15*std::cos(heading)+lateral*std::sin(heading);p.y+=lateral*std::cos(heading)-.15*std::sin(heading);
     }
+    // 狭小机库只允许当前机靠近起点，其余机留在返航航路的分散位置。
+    if(phase_==TeamPhase::LAND_ALL&&config_.sequential_landing&&!aborted_) {
+      const auto slot=static_cast<size_t>(std::find(config_.order.begin(),config_.order.end(),static_cast<int>(i))-config_.order.begin());
+      if(slot>landing_index_) {
+        p=config_.transit_waypoints.empty()?config_.assembly[i]:config_.transit_waypoints.front();
+        if(!config_.transit_waypoints.empty()){p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;}
+        p.z=config_.cruise_z_m;p.yaw=config_.homes[i].yaw;c.phase=TeamPhase::RETURN_ALL;
+      }else if(slot==landing_index_&&!landing_descending_) {
+        p=config_.homes[i];p.z=config_.cruise_z_m;c.phase=TeamPhase::RETURN_ALL;
+      }
+    }
+    if(phase_==TeamPhase::LAND_ALL&&config_.sequential_landing&&aborted_&&seen_[i]) {
+      p.x=status_[i].x_m;p.y=status_[i].y_m;p.yaw=status_[i].yaw_rad;
+    }
     // 单机失效只覆盖该机目标；保持点来自上次有效估计，不能用失效状态不断刷新。
     if(c.degraded&&seen_[i])p=holds_[i];
     else if(seen_[i])holds_[i]={status_[i].x_m,status_[i].y_m,status_[i].z_m,status_[i].yaw_rad};
     c.target_x_m=p.x;c.target_y_m=p.y;c.target_z_m=p.z;c.target_yaw_rad=p.yaw;
     c.contact_speed_mps=(phase_==TeamPhase::CONTACT&&static_cast<int>(i)==c.active_vehicle&&!c.degraded)?config_.contact_speed_mps:0;
     auto home=config_.homes[i];home.z=config_.home_ground_z_m+config_.body_clearance_m;
-    const bool landing_disarm=phase_==TeamPhase::LAND_ALL&&(skipped_now_[i]||near(static_cast<int>(i),home,false));
+    const bool landing_disarm=phase_==TeamPhase::LAND_ALL&&(aborted_||skipped_now_[i]||near(static_cast<int>(i),home,false));
     c.disarm=(landing_disarm||phase_==TeamPhase::ABORTED||phase_==TeamPhase::COMPLETE)&&
         statusFresh(static_cast<int>(i),sim,wall)&&status_[i].landed;
     c.complete=phase_==TeamPhase::COMPLETE;

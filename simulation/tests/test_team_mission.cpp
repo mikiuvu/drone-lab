@@ -9,8 +9,9 @@ void check(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
 TeamMissionConfig config(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
-                         bool direct_retreat = false, uint64_t stage_timeout = 0) {
+                         bool direct_retreat = false, uint64_t stage_timeout = 0, bool sequential_landing = false) {
   TeamMissionConfig c; c.stable_us = 200000;
+  c.sequential_landing = sequential_landing;
   for (int i = 0; i < 4; ++i) {
     c.homes[i] = {double(i)-1.5,0,.5125,0};
     c.assembly[i] = {double(i)-1.5,4,1.2,0};
@@ -38,8 +39,8 @@ struct Fixture {
   uint64_t now = 1000000, wall = 1000000;
   std::vector<TeamCommand> commands{4};
   explicit Fixture(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
-                   bool direct_retreat = false, uint64_t stage_timeout = 0)
-      : c(config(transit, visual_entry_range, dive, direct_retreat, stage_timeout)), mission(c) {
+                   bool direct_retreat = false, uint64_t stage_timeout = 0, bool sequential_landing = false)
+      : c(config(transit, visual_entry_range, dive, direct_retreat, stage_timeout, sequential_landing)), mission(c) {
     for (int i = 0; i < 4; ++i) {
       states[i].vehicle = i; states[i].xy_valid = states[i].z_valid = states[i].ready = true;
       set(i,c.homes[i]);
@@ -464,6 +465,54 @@ void landingTimeoutKeepsLandingCommands() {
   for(auto& state:f.states)state.armed=false;
   f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"超时降落停机后没有确认终态");
 }
+void narrowHangarLandsOneVehicleAtATime() {
+  Fixture f(false,-1,false,false,0,true);f.contact();
+  for(int active=0;active<4;++active){
+    if(active){f.set(active,f.c.approach);f.settle();}
+    f.set(active,f.c.target);++f.states[active].impact_seq;f.tick();
+    f.set(active,f.c.approach);f.settle();
+    f.set(active,f.c.assembly[active]);f.settle();
+  }
+  f.tick();check(f.mission.phase()==TeamPhase::LAND_ALL,"逐架降落未在集结位置开始");
+  for(int i=1;i<4;++i)
+    check(f.commands[i].phase==TeamPhase::RETURN_ALL&&f.commands[i].target_y_m==f.c.assembly[i].y&&
+          f.commands[i].target_z_m==f.c.cruise_z_m,"等候机提前进入机库或下降");
+  for(int active=0;active<4;++active){
+    auto home=f.c.homes[active];home.z=f.c.cruise_z_m;f.set(active,home);
+    f.states[active].x_m+=f.c.landing_alignment_tolerance_m+.001;f.settle();
+    check(f.commands[active].phase==TeamPhase::RETURN_ALL,"对准误差超限仍下降");
+    f.set(active,home);f.states[active].vx_mps=.11;f.settle();
+    check(f.commands[active].phase==TeamPhase::RETURN_ALL,"水平速度过高仍下降");
+    f.states[active].vx_mps=0;f.settle();
+    check(f.commands[active].phase==TeamPhase::LAND_ALL,"已对准停稳仍未下降");
+    home.z=f.c.home_ground_z_m+f.c.body_clearance_m;f.set(active,home);f.states[active].landed=true;f.tick();
+    check(f.commands[active].disarm,"着地后未请求停机");
+    if(active<3)check(f.commands[active+1].target_y_m==f.c.assembly[active+1].y,"当前机尚未停机便轮换");
+    f.states[active].armed=false;f.tick();
+    check(f.mission.phase()!=TeamPhase::COMPLETE,"未确认全部成员停机便完成");
+  }
+  f.settle();check(f.mission.phase()==TeamPhase::COMPLETE,"全员逐架着地停机后未完成");
+}
+void narrowHangarTimeoutDescendsAtSeparatePositions() {
+  Fixture f(false,-1,false,false,2000000,true);f.contact();
+  for(int active=0;active<4;++active){
+    if(active){f.set(active,f.c.approach);f.settle();}
+    f.set(active,f.c.target);++f.states[active].impact_seq;f.tick();
+    f.set(active,f.c.approach);f.settle();
+    f.set(active,f.c.assembly[active]);f.settle();
+  }
+  f.tick();f.tick(-1,2100000);
+  check(f.mission.phase()==TeamPhase::LAND_ALL&&f.mission.aborted(),"逐架降落超时没有中止");
+  for(int i=0;i<4;++i){
+    check(f.commands[i].phase==TeamPhase::LAND_ALL&&!f.commands[i].disarm,"未着地中止机停机或仍在等待");
+    check(f.commands[i].target_x_m==f.states[i].x_m&&f.commands[i].target_y_m==f.states[i].y_m,
+          "降落中止后仍挤向同一机库");
+    f.states[i].landed=true;
+  }
+  f.tick();for(const auto& command:f.commands)check(command.disarm,"中止着地后未请求停机");
+  for(auto& state:f.states)state.armed=false;
+  f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"中止后未等待全员原生停机");
+}
 int main() {
   try {
     barriers(); physicalContactAndTimeout(); contactDeadlineRemainsFixed(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
@@ -474,6 +523,8 @@ int main() {
     allUnrecoverableWaitsForFreshLandingAndDisarm();
     partialLandingWaitsForSkippedMember();
     landingTimeoutKeepsLandingCommands();
+    narrowHangarLandsOneVehicleAtATime();
+    narrowHangarTimeoutDescendsAtSeparatePositions();
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

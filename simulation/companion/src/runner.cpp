@@ -910,6 +910,8 @@ int main(int argc,char**argv){try{
           double max_speed=team_settings.value("cruise_speed_mps",.35);if(!e.xy_valid)max_speed=std::min(max_speed,.12);
           double horizontal=desired.head<2>().norm();if(horizontal>max_speed)desired.head<2>()*=max_speed/horizontal;
           desired.z()=std::clamp(desired.z(),-team_settings.value("descent_speed_mps",.20),team_settings.value("climb_speed_mps",.35));
+          const bool vertical_takeoff=intention.mode=="TAKEOFF"&&team_settings.value("vertical_takeoff",false);
+          if(vertical_takeoff)desired.head<2>().setZero();
           if(intention.mode=="LAND_ALL")desired.z()=flight.landed?0.0:-team_settings.value("landing_speed_mps",.12);
           const bool touchdown_zone=intention.mode=="LAND_ALL"&&e.pose.z_m<team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.03;
           if(touchdown_zone)desired.head<2>().setZero();
@@ -925,6 +927,7 @@ int main(int argc,char**argv){try{
           double heading=team_command.at("target_yaw_rad").get<double>();
           const double yaw_limit=team_settings.value("yaw_rate_limit_rad_s",.5);
           intention.yaw_rate_ref_rad_s=std::clamp(companion::wrapAngle(heading-e.pose.yaw_rad)*team_settings.value("yaw_gain",.8),-yaw_limit,yaw_limit);
+          if(vertical_takeoff)intention.yaw_rate_ref_rad_s=0;
           if(touchdown_zone)intention.yaw_rate_ref_rad_s=0;
           // 终端接近仅使用相机角误差和视觉深度，绝不查询滑轨相位或板世界位置。
           if(visual_contact&&team_command.value("active_vehicle",-1)==o.vehicle&&

@@ -422,7 +422,10 @@
       "enabled": false
     },
     "stranded_ground_source": "terrain",
-    "stranded_ground_clearance_m": 0.08
+    "stranded_ground_clearance_m": 0.08,
+    "sequential_landing": true,
+    "landing_alignment_tolerance_m": 0.025,
+    "vertical_takeoff": true
   },
   "optical_flow": {
     "enabled": true,

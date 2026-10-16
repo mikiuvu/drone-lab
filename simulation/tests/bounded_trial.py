@@ -82,7 +82,11 @@ try:
                 team = json.loads(status_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if team.get("aborted") and team.get("paused"):
+            vehicles = team.get("vehicles", [])
+            if team.get("aborted") and vehicles and all(
+                vehicle.get("fresh") and vehicle.get("landed") and not vehicle.get("armed", True)
+                for vehicle in vehicles
+            ):
                 aborted = True
                 break
             if team.get("complete"):

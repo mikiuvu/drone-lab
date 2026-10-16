@@ -124,6 +124,42 @@ class FlightFeedbackIOTest(unittest.TestCase):
         self.send_landed()
         self.receive_status(lambda row: row["landed"])
 
+    def test_vertical_takeoff_suppresses_lateral_and_yaw_position_corrections(self):
+        self.stop_runner()
+        path = self.root / "map.json"
+        config = json.loads(path.read_text(encoding="utf-8"))
+        config["team_mission"] = {"vertical_takeoff": True}
+        path.write_text(json.dumps(config), encoding="utf-8")
+        self.process = subprocess.Popen([
+            str(BINARY), "--offboard", "--arm", "--vehicle", "240", "--map", str(path),
+            "--config", str(self.root / "config.json"), "--runtime", str(self.root),
+            "--mavlink-local-port", str(self.runner_port),
+            "--mavlink-remote-port", str(self.mav.getsockname()[1])],
+            stdout=subprocess.DEVNULL, stderr=self.errors)
+        started = time.monotonic()
+        sequence = 0
+        while time.monotonic() - started < 9.5:
+            self.send_heartbeat(armed=False)
+            self.send_landed()
+            stamp = 1_000_000 + int((time.monotonic() - started) * 1e6)
+            self.send_sensors(stamp)
+            sequence += 1
+            command = {"kind": "team_command", "vehicle": 240, "sequence": sequence,
+                       "sim_time_us": stamp, "phase": "TAKEOFF", "active_vehicle": -1,
+                       "target_x_m": 1.0, "target_y_m": 1.0, "target_z_m": 1.2,
+                       "target_yaw_rad": 1.0, "contact_speed_mps": 0}
+            self.mav.sendto(json.dumps(command).encode("utf-8"), ("127.0.0.1", 18240))
+            time.sleep(.01)
+        rows = recorded_rows(self.root / "companion_240.jsonl")
+        intentions = [row for row in rows if row.get("kind") == "control_intention"
+                      and row.get("mode") == "TAKEOFF" and row.get("safe_to_arm")]
+        self.assertTrue(intentions)
+        for row in intentions:
+            self.assertEqual(row["vx_flu_mps"], 0)
+            self.assertEqual(row["vy_flu_mps"], 0)
+            self.assertEqual(row["yaw_rate_ref_rad_s"], 0)
+            self.assertGreater(row["vz_flu_mps"], 0)
+
     def test_buffered_log_preserves_burst_order_and_stop(self):
         self.grounded()
         commands = list(range(1000, 1200))
