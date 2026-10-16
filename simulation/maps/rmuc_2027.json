@@ -29,12 +29,12 @@
   "walls": [],
   "initialization": {
     "type": "configured_spawn_prior",
-    "source": "CAD 部件 6：红方无人机停机坪托盘上的四个配置起点。"
+    "source": "CAD 红方无人机托盘内的四个配置起点，中心距至少 0.226 m。"
   },
   "spawns": [
     {
       "id": 0,
-      "x": -1.1313769999999999,
+      "x": -1.1923819999999998,
       "y": -1.032375,
       "z": 1.66,
       "roll": 0,
@@ -44,7 +44,7 @@
     {
       "id": 1,
       "x": -1.032382,
-      "y": -1.13137,
+      "y": -1.192375,
       "z": 1.66,
       "roll": 0,
       "pitch": 0,
@@ -53,7 +53,7 @@
     {
       "id": 2,
       "x": -1.032382,
-      "y": -0.9333800000000001,
+      "y": -0.872375,
       "z": 1.66,
       "roll": 0,
       "pitch": 0,
@@ -61,7 +61,7 @@
     },
     {
       "id": 3,
-      "x": -0.933387,
+      "x": -0.8723819999999999,
       "y": -1.032375,
       "z": 1.66,
       "roll": 0,
@@ -207,7 +207,7 @@
   "home_marker": {
     "size_m": 0.1,
     "line_width_m": 0.004,
-    "ground_z_m": 1.601000022479248,
+    "ground_z_m": 1.600000023841858,
     "color": [
       1,
       0,
@@ -220,7 +220,7 @@
     "cruise_speed_mps": 4,
     "contact_speed_mps": 0.35,
     "return_tolerance_m": 0.14,
-    "home_ground_z_m": 1.601000022479248,
+    "home_ground_z_m": 1.600000023841858,
     "team": "red",
     "enemy_base": {
       "side": "blue",
@@ -427,7 +427,7 @@
     "landing_alignment_tolerance_m": 0.025,
     "vertical_takeoff": true,
     "static_armor_localization": true,
-    "landing_alignment_height_m": 0.08,
+    "landing_alignment_height_m": 0.06,
     "landing_alignment_stable_s": 0.5,
     "landing_require_structural": true,
     "landing_order": [
@@ -435,7 +435,14 @@
       2,
       1,
       0
-    ]
+    ],
+    "bounded_landing_relocalization": true,
+    "retreat_exit": {
+      "x": 10.3,
+      "y": 2.6,
+      "z": 2.3,
+      "yaw": 0
+    }
   },
   "optical_flow": {
     "enabled": true,

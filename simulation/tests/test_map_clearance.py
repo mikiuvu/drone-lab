@@ -49,4 +49,4 @@ def test_front_row_lands_before_rear_row_to_keep_waiting_positions_clear():
     config['team_mission']['landing_order'] = [0, 1, 2, 3]
     crossing = landing_waiting_separation(config)
     assert not crossing['passed']
-    assert crossing['minimum_distance_m'] < .05
+    assert crossing['minimum_distance_m'] < crossing['body_diameter_m']
