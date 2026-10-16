@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from gz.msgs10.clock_pb2 import Clock
 from gz.transport13 import Node
 
 root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+from launch_linux import alive
 parser = argparse.ArgumentParser()
 parser.add_argument("--sim-seconds", type=float, default=30)
 parser.add_argument("--map", type=Path)
@@ -55,6 +58,7 @@ if args.flow_disable:
     command += ["--flow-disable"]
 subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 state = json.loads((root / "runtime/manager.json").read_text(encoding="utf-8"))
+server = next(item for item in state["processes"] if item["name"] == "gazebo")
 os.environ.update(state.get("gazebo_environment", {}))
 done = threading.Event()
 last = [0.0]
@@ -76,6 +80,8 @@ try:
     aborted = False
     complete_seen = None
     while not done.wait(0.2):
+        if not alive(server):
+            raise RuntimeError("Gazebo server exited: " + server["log"])
         status_path = Path(state["run_dir"]) / "team_status.json"
         if args.mission == "team_contact" and status_path.exists():
             try:
@@ -95,6 +101,12 @@ try:
                     break
         if time.monotonic() > deadline:
             raise RuntimeError("Simulation stalled")
+except Exception as error:
+    (Path(state["run_dir"]) / "failed_trial.json").write_text(
+        json.dumps({"run": Path(state["run_dir"]).name, "error": str(error),
+                    "sim_seconds": last[0], "native_shutdown_confirmed": False}, indent=2) + "\n",
+        encoding="utf-8")
+    raise
 finally:
     active = json.loads((root / "runtime/manager.json").read_text(encoding="utf-8"))
     if active.get("run_dir") == state["run_dir"]:
