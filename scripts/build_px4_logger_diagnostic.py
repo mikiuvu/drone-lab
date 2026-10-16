@@ -50,7 +50,9 @@ def link_command(raw, archive, binary):
     return command
 
 
-def build_diagnostic(sdk, build, output, patch, retention=False):
+def build_diagnostic(sdk, build, output, patch, retention=False, imu_replay=False):
+    if imu_replay and not retention:
+        raise ValueError('IMU replay retention requires visual odometry retention')
     sdk, build, patch = (p.resolve(strict=True) for p in (sdk, build, patch))
     output = output.resolve()
     if output == sdk or output == build or sdk in output.parents or build in output.parents:
@@ -77,6 +79,9 @@ def build_diagnostic(sdk, build, output, patch, retention=False):
         shutil.copy2(original, target)
         originals[name] = sha256(original)
     apply_diagnostic_patch(source_root, patch)
+    imu_patch = Path(__file__).resolve().parents[1] / 'simulation/px4/imu-replay-log-retention.patch'
+    if imu_replay:
+        apply_diagnostic_patch(source_root, imu_patch)
     original_archive = build / 'src/modules/logger/libmodules__logger.a'
     archive = output / original_archive.name
     shutil.copy2(original_archive, archive)
@@ -126,12 +131,15 @@ def build_diagnostic(sdk, build, output, patch, retention=False):
         'diagnostic_sources': {name: sha256(source_root / name) for name in sorted(copied_names)},
         'compile_argv': compile_commands, 'link_argv': link,
         'visual_odometry_retention': retention,
+        'imu_replay_retention': imu_replay,
     }
+    if imu_replay:
+        manifest['imu_patch_sha256'] = sha256(imu_patch)
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     return manifest
 
 
-def check_retention_contract(sdk, build, output, manifest):
+def check_retention_contract(sdk, build, output, manifest, topic='vehicle_visual_odometry'):
     """将原生 uORB 测试链接到基线与候选静态库，分别验证突发发布。"""
     import resource
 
@@ -142,17 +150,25 @@ def check_retention_contract(sdk, build, output, manifest):
     renamed_main = output / 'px4-main-renamed.o'
     subprocess.run(['objcopy', '--redefine-sym', 'main=px4_original_main',
                     str(build / original_main), str(renamed_main)], check=True)
-    results = {'source_sha256': sha256(test), 'variants': {}}
+    macros = {'vehicle_visual_odometry': None, 'sensor_combined': 'TEST_SENSOR_COMBINED',
+              'ekf2_timestamps': 'TEST_EKF2_TIMESTAMPS'}
+    if topic not in macros:
+        raise ValueError('unsupported retention contract topic')
+    suffix = '' if topic == 'vehicle_visual_odometry' else '-' + topic
+    results = {'source_sha256': sha256(test), 'topic': topic, 'variants': {}}
 
     def disable_core():
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
     for variant in ('baseline', 'candidate'):
-        obj, binary = (output / ('retention-contract-' + variant + suffix) for suffix in ('.o', ''))
+        obj, binary = (output / ('retention-contract-' + variant + suffix + extension)
+                       for extension in ('.o', ''))
         argv = list(entry['arguments']) if 'arguments' in entry else shlex.split(entry['command'])
         argv[argv.index('-c') + 1] = str(test)
         argv[argv.index('-o') + 1] = str(obj)
         argv.append('-UNDEBUG')
+        if macros[topic]:
+            argv.append('-D' + macros[topic])
         if variant == 'candidate':
             argv[1:1] = ['-DRETENTION_CANDIDATE', '-I' + str(output / 'source/platforms/common'),
                          '-I' + str(output / 'source/platforms/common/uORB')]
@@ -170,7 +186,8 @@ def check_retention_contract(sdk, build, output, manifest):
                                 timeout=20, preexec_fn=disable_core)
         results['variants'][variant] = {'exit_code': result.returncode, 'stdout': result.stdout,
                                        'stderr': result.stderr, 'binary_sha256': sha256(binary)}
-    (output / 'retention-contract.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
+    (output / ('retention-contract' + suffix + '.json')).write_text(
+        json.dumps(results, indent=2) + '\n', encoding='utf-8')
     baseline, candidate = (results['variants'][name] for name in ('baseline', 'candidate'))
     if baseline['exit_code'] != -6 or 'sample.timestamp==expected' not in baseline['stderr']:
         raise RuntimeError('基线没有复现预期的突发发布缺失')
@@ -185,16 +202,24 @@ def main():
     parser.add_argument('--build-dir', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--retain-visual-odometry', action='store_true', help='保留 8 条里程计发布历史供 logger 读取')
+    parser.add_argument('--retain-imu-replay', action='store_true', help='为 IMU 和 EKF2 时间索引各保留 16 条发布历史')
     parser.add_argument('--check-retention-contract', action='store_true', help='运行基线与候选的原生 uORB 读取测试')
     args = parser.parse_args()
     if args.check_retention_contract and not args.retain_visual_odometry:
         parser.error('--check-retention-contract requires --retain-visual-odometry')
+    if args.retain_imu_replay and not args.retain_visual_odometry:
+        parser.error('--retain-imu-replay requires --retain-visual-odometry')
     name = 'visual-odometry-log-retention.patch' if args.retain_visual_odometry else 'logger-subscription-diagnostics.patch'
     patch = Path(__file__).resolve().parents[1] / 'simulation/px4' / name
     manifest = build_diagnostic(args.sdk, args.build_dir or args.sdk / 'build/px4_sitl_default',
-                                args.output, patch, retention=args.retain_visual_odometry)
+                                args.output, patch, retention=args.retain_visual_odometry,
+                                imu_replay=args.retain_imu_replay)
     if args.check_retention_contract:
         check_retention_contract(args.sdk.resolve(), Path(manifest['build']), args.output.resolve(), manifest)
+        if args.retain_imu_replay:
+            for topic in ('sensor_combined', 'ekf2_timestamps'):
+                check_retention_contract(args.sdk.resolve(), Path(manifest['build']),
+                                         args.output.resolve(), manifest, topic=topic)
     print(json.dumps({k: manifest[k] for k in ('output', 'baseline_binary_sha256', 'diagnostic_binary_sha256')}))
 
 

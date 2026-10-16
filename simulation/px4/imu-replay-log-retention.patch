@@ -1,0 +1,54 @@
+--- a/platforms/common/uORB/uORBDeviceNode.hpp
++++ b/platforms/common/uORB/uORBDeviceNode.hpp
+@@ -188,8 +188,14 @@
+ 
+ 	uint8_t get_queue_size() const { return _meta->o_queue; }
+ 
+-	/** Retain bounded visual odometry history for logging; ordinary readers keep the topic policy. */
+-	uint8_t get_retention_queue_size() const { return id() == ORB_ID::vehicle_visual_odometry ? 8 : _meta->o_queue; }
++	/** Retain bounded replay history for logging; ordinary readers keep the topic policy. */
++	uint8_t get_retention_queue_size() const
++	{
++		if (id() == ORB_ID::sensor_combined || id() == ORB_ID::ekf2_timestamps) {
++			return 16;
++		}
++		return id() == ORB_ID::vehicle_visual_odometry ? 8 : _meta->o_queue;
++	}
+ 
+ 
+ 	int8_t subscriber_count() const { return _subscriber_count; }
+@@ -269,7 +275,7 @@
+ 	/** Read the oldest retained publication without changing ordinary subscription policy. */
+ 	bool copy_retained(void *dst, unsigned &generation)
+ 	{
+-		if (id() != ORB_ID::vehicle_visual_odometry) {
++		if (get_retention_queue_size() == get_queue_size()) {
+ 			return copy(dst, generation);
+ 		}
+ 
+--- a/src/modules/logger/logger.cpp
++++ b/src/modules/logger/logger.cpp
+@@ -451,7 +451,10 @@
+ 		if (sub.get_interval_us() == 0) {
+ 			// record gaps in full rate (no interval) messages
+ 			const unsigned last_generation = sub.get_last_generation();
+-			updated = static_cast<ORB_ID>(sub.get_topic()->o_id) == ORB_ID::vehicle_visual_odometry ? sub.update_retained(buffer) : sub.update(buffer);
++			const ORB_ID topic = static_cast<ORB_ID>(sub.get_topic()->o_id);
++			const bool retain = topic == ORB_ID::vehicle_visual_odometry
++					    || topic == ORB_ID::sensor_combined || topic == ORB_ID::ekf2_timestamps;
++			updated = retain ? sub.update_retained(buffer) : sub.update(buffer);
+ 
+ 			if (updated && (sub.get_last_generation() != last_generation + 1)) {
+ 				// error, missed a message
+@@ -761,7 +764,10 @@
+ 				 */
+ 				const bool try_to_subscribe = (sub_idx == next_subscribe_topic_index);
+ 
+-				const unsigned budget = static_cast<ORB_ID>(sub.get_topic()->o_id) == ORB_ID::vehicle_visual_odometry && sub.get_interval_us() == 0 ? 8 : 1;
++				const ORB_ID topic = static_cast<ORB_ID>(sub.get_topic()->o_id);
++				const unsigned capacity = topic == ORB_ID::vehicle_visual_odometry ? 8
++					: (topic == ORB_ID::sensor_combined || topic == ORB_ID::ekf2_timestamps ? 16 : 1);
++				const unsigned budget = sub.get_interval_us() == 0 ? capacity : 1;
+ 				for (unsigned remaining = budget; remaining > 0
+ 				     && copy_if_updated(sub_idx, _msg_buffer + sizeof(ulog_message_data_s), try_to_subscribe); --remaining) {
+ 					// each message consists of a header followed by an orb data object

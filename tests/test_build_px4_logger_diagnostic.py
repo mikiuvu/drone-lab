@@ -13,6 +13,14 @@ SPEC.loader.exec_module(builder)
 
 
 class DiagnosticLinkTests(unittest.TestCase):
+    def test_imu_retention_requires_base_retention_before_any_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            with self.assertRaisesRegex(ValueError, 'requires visual'):
+                builder.build_diagnostic(Path('missing-sdk'), Path('missing-build'), output,
+                                         Path('missing-patch'), imu_replay=True)
+            self.assertFalse(output.exists())
+
     def test_patch_inside_parent_repository_only_changes_copied_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
