@@ -695,11 +695,18 @@ int main(int argc,char**argv){try{
             request.strip_height_m=team_settings.value("visual_strip_height_m",.055);
             request.bottom_separation_m=team_settings.value("visual_bottom_separation_m",0.0);
             uint64_t exposure_pose_time_us=0;
+            Eigen::Vector3d exposure_velocity=Eigen::Vector3d::Zero();
+            double exposure_velocity_variance_y=0,exposure_y_vy_covariance=0;
+            bool exposure_xy_valid=false,exposure_flow_valid=false;
             if(!pose_history.empty()){
               auto nearest=std::min_element(pose_history.begin(),pose_history.end(),[&](const auto&a,const auto&b){return std::llabs(static_cast<int64_t>(a.sim_time_us)-static_cast<int64_t>(stamp))<std::llabs(static_cast<int64_t>(b.sim_time_us)-static_cast<int64_t>(stamp));});
               if(std::llabs(static_cast<int64_t>(nearest->sim_time_us)-static_cast<int64_t>(stamp))<80000){
                 request.exposure_pose=nearest->pose;request.exposure_covariance=nearest->covariance.topLeftCorner<4,4>();request.pose_valid=true;
                 exposure_pose_time_us=nearest->sim_time_us;
+                exposure_velocity=nearest->velocity_enu_mps;
+                exposure_velocity_variance_y=nearest->covariance(5,5);
+                exposure_y_vy_covariance=nearest->covariance(1,5);
+                exposure_xy_valid=nearest->xy_valid;exposure_flow_valid=nearest->flow_valid;
               }
             }
             const auto guide_config=team_settings.value("green_guide",json::object());
@@ -731,7 +738,11 @@ int main(int argc,char**argv){try{
                 if(exposure_pose_valid)projection.update({{"pose_x_m",exposure_pose.x_m},
                   {"pose_y_m",exposure_pose.y_m},{"pose_z_m",exposure_pose.z_m},
                   {"pose_roll_rad",exposure_pose.roll_rad},{"pose_pitch_rad",exposure_pose.pitch_rad},
-                  {"pose_yaw_rad",exposure_pose.yaw_rad},{"pose_variance_y_m2",exposure_variance_y}});
+                  {"pose_yaw_rad",exposure_pose.yaw_rad},{"pose_variance_y_m2",exposure_variance_y},
+                  {"pose_vx_mps",exposure_velocity.x()},{"pose_vy_mps",exposure_velocity.y()},
+                  {"pose_vz_mps",exposure_velocity.z()},{"pose_velocity_variance_y_m2ps2",exposure_velocity_variance_y},
+                  {"pose_y_vy_covariance_m2_per_s",exposure_y_vy_covariance},
+                  {"pose_xy_valid",exposure_xy_valid},{"pose_flow_valid",exposure_flow_valid}});
                 emit(std::move(projection));
               }
             }
