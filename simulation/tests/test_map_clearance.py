@@ -67,7 +67,7 @@ def test_alignment_descent_clears_tray_rim_with_position_tolerance(tmp_path):
     config = json.loads(path.read_text(encoding='utf-8'))
     config['terrain_triangles_file'] = str((path.parent / config['terrain_triangles_file']).resolve())
     candidate = tmp_path / 'map.json'
-    config['team_mission']['landing_alignment_height_m'] = .10
+    config['team_mission']['landing_alignment_height_m'] = .08
     candidate.write_text(json.dumps(config), encoding='utf-8')
     clear = check_map(candidate)
     assert clear['passed'], clear['failures']

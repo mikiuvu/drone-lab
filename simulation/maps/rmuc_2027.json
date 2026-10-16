@@ -427,7 +427,7 @@
     "landing_alignment_tolerance_m": 0.025,
     "vertical_takeoff": true,
     "static_armor_localization": true,
-    "landing_alignment_height_m": 0.1,
+    "landing_alignment_height_m": 0.08,
     "landing_alignment_stable_s": 0.5,
     "landing_require_structural": true,
     "landing_order": [
