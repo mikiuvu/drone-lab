@@ -26,6 +26,9 @@ const char* teamPhaseName(TeamPhase p) {
 // 初始化先校验成员数量和路径，再分配状态数组；避免把配置不一致当成飞行失联。
 TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
   const size_t n = config_.homes.size();
+  if(!config_.landing_yaw_rad.empty()&&(!config_.sequential_landing||config_.landing_yaw_rad.size()!=n||
+      std::any_of(config_.landing_yaw_rad.begin(),config_.landing_yaw_rad.end(),[](double yaw){return !std::isfinite(yaw);})))
+    throw std::invalid_argument("逐架降落朝向配置无效");
   if (n == 0 || config_.assembly.size() != n || config_.order.size() != n)
     throw std::invalid_argument("队伍数量必须为正且配置长度一致");
   std::vector<bool> used(n);
@@ -301,6 +304,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
             config_.home_ground_z_m+config_.landing_alignment_height_m:config_.cruise_z_m;
         const bool aligned=landing_approached_&&validForBarrier(id,sim,wall)&&state.armed&&
             (!config_.landing_require_structural||state.xy_reason=="STRUCTURAL")&&
+            (config_.landing_yaw_rad.empty()||std::abs(std::remainder(state.yaw_rad-config_.landing_yaw_rad[id],6.283185307))<=.10)&&
             std::hypot(state.x_m-home.x,state.y_m-home.y)<=config_.landing_alignment_tolerance_m&&
             std::abs(state.z_m-alignment_z)<=.035&&
             std::hypot(state.vx_mps,state.vy_mps)<=.10&&std::abs(state.vz_mps)<=.12;
@@ -367,6 +371,7 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
         p=config_.homes[i];p.z=landing_approached_&&config_.landing_alignment_height_m>0?
             config_.home_ground_z_m+config_.landing_alignment_height_m:config_.cruise_z_m;c.phase=TeamPhase::RETURN_ALL;
       }
+      if(slot==landing_index_&&!config_.landing_yaw_rad.empty())p.yaw=config_.landing_yaw_rad[i];
     }
     if(phase_==TeamPhase::LAND_ALL&&config_.sequential_landing&&aborted_&&seen_[i]) {
       p.x=status_[i].x_m;p.y=status_[i].y_m;p.yaw=status_[i].yaw_rad;

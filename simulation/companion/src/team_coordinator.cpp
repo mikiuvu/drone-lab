@@ -114,6 +114,7 @@ TeamMissionConfig readConfig(const std::string& path) {
   c.route_speed_tolerance_mps=m.value("route_speed_tolerance_mps",.30);
   c.fly_through_route=m.value("fly_through_route",false);
   c.sequential_landing=m.value("sequential_landing",false);
+  if(m.contains("landing_yaw_rad"))c.landing_yaw_rad=m.at("landing_yaw_rad").get<std::vector<double>>();
   if(m.contains("landing_alignment_tolerance_m"))c.landing_alignment_tolerance_m=number(m,"landing_alignment_tolerance_m");
   if(m.contains("landing_alignment_height_m"))c.landing_alignment_height_m=number(m,"landing_alignment_height_m");
   c.landing_require_structural=m.value("landing_require_structural",false);

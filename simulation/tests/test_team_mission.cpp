@@ -1,6 +1,7 @@
 #include "companion/team_mission.hpp"
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -481,12 +482,14 @@ void landingTimeoutKeepsLandingCommands() {
   for(auto& state:f.states)state.armed=false;
   f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"超时降落停机后没有确认终态");
 }
-void narrowHangarLandsOneVehicleAtATime() {
+void narrowHangarLandsOneVehicleAtATime(bool with_headings=false) {
   auto c=config(false,-1,false,false,0,true);
   c.landing_alignment_height_m=.2;c.landing_require_structural=true;c.landing_alignment_stable_us=300000;
   c.landing_order={3,2,1,0};
+  if(with_headings)c.landing_yaw_rad={.30,.20,.10,.40};
   c.stage_timeout_us=4000000;
   Fixture f(c);f.contact();
+  check(f.commands[0].target_yaw_rad==c.approach.yaw,"降落朝向改变了接触阶段航向");
   for(int active=0;active<4;++active){
     if(active){f.set(active,f.c.approach);f.settle();}
     f.set(active,f.c.target);++f.states[active].impact_seq;f.tick();
@@ -501,6 +504,7 @@ void narrowHangarLandsOneVehicleAtATime() {
     const int active=f.c.landing_order[slot];
     auto home=f.c.homes[active];home.z=f.c.cruise_z_m;f.set(active,home);
     f.settle();check(f.commands[active].target_z_m==f.c.home_ground_z_m+.2,"未在托盘上方停稳对准");
+    if(with_headings)check(f.commands[active].target_yaw_rad==c.landing_yaw_rad[active],"降落未采用本机朝向");
     home.z=f.c.home_ground_z_m+.2;f.set(active,home);
     f.states[active].x_m+=f.c.landing_alignment_tolerance_m+.001;f.settle();
     check(f.commands[active].phase==TeamPhase::RETURN_ALL,"对准误差超限仍下降");
@@ -508,7 +512,13 @@ void narrowHangarLandsOneVehicleAtATime() {
     check(f.commands[active].phase==TeamPhase::RETURN_ALL,"水平速度过高仍下降");
     f.states[active].vx_mps=0;f.states[active].xy_reason="PEER_REFERENCE";f.settle();
     check(f.commands[active].phase==TeamPhase::RETURN_ALL,"仅有队友参考时仍下降");
-    f.states[active].xy_reason="STRUCTURAL";f.settle();
+    f.states[active].xy_reason="STRUCTURAL";
+    if(with_headings){
+      f.states[active].yaw_rad=c.landing_yaw_rad[active]+.11;f.settle();
+      check(f.commands[active].phase==TeamPhase::RETURN_ALL,"未对准降落朝向便开始下降");
+      home.yaw=c.landing_yaw_rad[active];f.set(active,home);
+    }
+    f.settle();
     check(f.commands[active].phase==TeamPhase::LAND_ALL,"已对准停稳仍未下降");
     home.z=f.c.home_ground_z_m+f.c.body_clearance_m;f.set(active,home);f.states[active].landed=true;f.tick();
     check(f.commands[active].disarm,"着地后未请求停机");
@@ -543,6 +553,12 @@ void narrowHangarTimeoutDescendsAtSeparatePositions() {
   f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"中止后未等待全员原生停机");
 }
 void landingAlignmentHeightStaysAboveTheBodyAndBelowCruise() {
+  for(const auto& headings:std::vector<std::vector<double>>{{0},{0,0,0,std::numeric_limits<double>::quiet_NaN()}}){
+    auto c=config(false,-1,false,false,0,true);c.landing_yaw_rad=headings;
+    bool rejected=false;
+    try { TeamMission mission(c); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"无效的降落朝向被接受");
+  }
   for(double height:{-.1,.005,1.0}) {
     auto c=config();c.landing_alignment_height_m=height;
     bool rejected=false;
@@ -568,6 +584,7 @@ int main() {
     partialLandingWaitsForSkippedMember();
     landingTimeoutKeepsLandingCommands();
     narrowHangarLandsOneVehicleAtATime();
+    narrowHangarLandsOneVehicleAtATime(true);
     narrowHangarTimeoutDescendsAtSeparatePositions();
     landingAlignmentHeightStaysAboveTheBodyAndBelowCruise();
     std::cout << "队伍任务测试通过\n"; return 0;

@@ -42,6 +42,7 @@ struct TeamMissionConfig {
   bool explicit_formation_offsets = false; // false 时由起飞点相对质心的位置计算。
   bool sequential_landing = false; // 返航末段在编队位置等待，逐架对准起点并降落。
   std::vector<int> landing_order; // 为空时沿用接触顺序。
+  std::vector<double> landing_yaw_rad; // 按机号配置降落朝向；为空时沿用起点朝向。
   double landing_alignment_tolerance_m = .025; // 下降前的水平位置容差，m。
   double landing_alignment_height_m = 0; // 对准平台上方高度，m；0 使用巡航高度。
   uint64_t landing_alignment_stable_us = 0; // 0 沿用 stable_us。
