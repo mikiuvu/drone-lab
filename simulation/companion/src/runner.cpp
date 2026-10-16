@@ -694,10 +694,12 @@ int main(int argc,char**argv){try{
             request.pnp_variance_m2=visual_pose_variance;
             request.strip_height_m=team_settings.value("visual_strip_height_m",.055);
             request.bottom_separation_m=team_settings.value("visual_bottom_separation_m",0.0);
+            uint64_t exposure_pose_time_us=0;
             if(!pose_history.empty()){
               auto nearest=std::min_element(pose_history.begin(),pose_history.end(),[&](const auto&a,const auto&b){return std::llabs(static_cast<int64_t>(a.sim_time_us)-static_cast<int64_t>(stamp))<std::llabs(static_cast<int64_t>(b.sim_time_us)-static_cast<int64_t>(stamp));});
               if(std::llabs(static_cast<int64_t>(nearest->sim_time_us)-static_cast<int64_t>(stamp))<80000){
                 request.exposure_pose=nearest->pose;request.exposure_covariance=nearest->covariance.topLeftCorner<4,4>();request.pose_valid=true;
+                exposure_pose_time_us=nearest->sim_time_us;
               }
             }
             const auto guide_config=team_settings.value("green_guide",json::object());
@@ -717,7 +719,22 @@ int main(int argc,char**argv){try{
                 request.guide_y_gate_m=.4;request.guide_z_gate_m=.10;
               }
             }
-            if(vision_worker.submit(std::move(request)))requested_frame_seq=seq;
+            const auto exposure_pose=request.exposure_pose;
+            const bool exposure_pose_valid=request.pose_valid;
+            const double exposure_variance_y=request.exposure_covariance(1,1);
+            if(vision_worker.submit(std::move(request))){
+              requested_frame_seq=seq;
+              if(runtime_profile.enabled){
+                json projection={{"kind","vision_projection_input"},{"sim_time_us",stamp},
+                  {"submitted_sim_us",sim_us},{"frame_seq",seq},{"pose_valid",exposure_pose_valid},
+                  {"pose_time_us",exposure_pose_time_us}};
+                if(exposure_pose_valid)projection.update({{"pose_x_m",exposure_pose.x_m},
+                  {"pose_y_m",exposure_pose.y_m},{"pose_z_m",exposure_pose.z_m},
+                  {"pose_roll_rad",exposure_pose.roll_rad},{"pose_pitch_rad",exposure_pose.pitch_rad},
+                  {"pose_yaw_rad",exposure_pose.yaw_rad},{"pose_variance_y_m2",exposure_variance_y}});
+                emit(std::move(projection));
+              }
+            }
           }
         }else if(seq!=frame_seq){frame_seq=seq;camera_us=stamp;emit({{"kind","camera_metadata"},{"sim_time_us",camera_us},{"frame_seq",frame_seq},{"detection_skipped",true}});}
         }
