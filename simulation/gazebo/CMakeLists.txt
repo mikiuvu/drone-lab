@@ -64,6 +64,21 @@ if(DRONE_GAZEBO_BUILD_TESTS)
   add_test(NAME tof_ray_visualizer COMMAND test_tof_ray_visualizer)
 endif()
 
+option(DRONE_GAZEBO_BUILD_INTEGRATION_TESTS "Build tests requiring installed Gazebo physics systems" OFF)
+if(DRONE_GAZEBO_BUILD_INTEGRATION_TESTS)
+  enable_testing()
+  add_executable(test_gazebo_imu_impulse ../tests/test_gazebo_imu_impulse.cpp)
+  target_compile_features(test_gazebo_imu_impulse PRIVATE cxx_std_17)
+  target_compile_options(test_gazebo_imu_impulse PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(test_gazebo_imu_impulse PRIVATE
+    gz-sim8::gz-sim8 gz-transport13::gz-transport13 gz-msgs10::gz-msgs10 nlohmann_json::nlohmann_json)
+  add_test(NAME gazebo_imu_impulse COMMAND test_gazebo_imu_impulse
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/imu_impulse.sdf
+    ${CMAKE_CURRENT_BINARY_DIR}/imu_impulse_samples.json)
+  set_tests_properties(gazebo_imu_impulse PROPERTIES
+    ENVIRONMENT "GZ_PARTITION=drone-imu-impulse-check" TIMEOUT 30)
+endif()
+
 add_executable(sensor_gateway src/sensor_gateway.cc)
 target_compile_features(sensor_gateway PRIVATE cxx_std_17)
 target_compile_options(sensor_gateway PRIVATE -Wall -Wextra -Wpedantic)
