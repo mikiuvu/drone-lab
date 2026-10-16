@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Circle
 
 
 # 从地图和高度栅格绘制规划几何，保存 team-route.png；图中位置使用世界 XY 米制坐标。
@@ -54,20 +54,17 @@ def main():
     )
     for home in config["spawns"]:
         axes[0].add_patch(
-            Rectangle(
-                (home["x"] - 0.15, home["y"] - 0.15), 0.3, 0.3, fill=False, ec="red"
-            )
+            Circle((home["x"], home["y"]), mission["contact_radius_m"], fill=False, ec="red")
         )
-        axes[0].annotate(
-            f"H{home['id']}",
-            (home["x"], home["y"]),
-            xytext=(3, 7),
-            textcoords="offset points",
-            fontsize=8,
-        )
+    axes[0].annotate("四机机库",
+        np.mean([[point["x"], point["y"]] for point in config["spawns"]], axis=0),
+        xytext=(-42, -24), textcoords="offset points", fontsize=8,
+        arrowprops={"arrowstyle": "->", "lw": .8})
     axes[1].set_title("基地接触与侧方待命")
     approach, target = mission["approach"], mission["target"]
     context = [approach, target] + mission["assembly"] + mission.get("completed_holding", [])
+    if "retreat_exit" in mission:
+        context.append(mission["retreat_exit"])
     axes[1].set_xlim(min(point["x"] for point in context) - .3,
                      max(point["x"] for point in context) + .3)
     axes[1].set_ylim(min(point["y"] for point in context) - .3,
@@ -90,18 +87,25 @@ def main():
         )
     for point in mission.get("completed_holding", []):
         axes[1].plot(point["x"], point["y"], "^", color="#00853d")
-    for side in [1] if mission.get("contact_exit_side") == -1 else [-1, 1]:
-        exit_side = mission.get("contact_exit_side") or side
-        axes[1].plot(
-            approach["x"] - 0.15, approach["y"] + side * 0.25, "D", color="#6747a0"
-        )
-        axes[1].plot(
-            [target["x"], approach["x"] - 0.45, approach["x"] - 0.6],
-            [target["y"], approach["y"], approach["y"] + exit_side * 0.4],
-            "--",
-            color="#c5222c",
-            lw=1.5,
-        )
+    if "retreat_exit" in mission:
+        exit_point = mission["retreat_exit"]
+        axes[1].plot([target["x"], approach["x"], exit_point["x"]],
+                     [target["y"], approach["y"], exit_point["y"]],
+                     "D--", color="#c5222c", lw=1.5, label="退出航点")
+        for point in mission.get("completed_holding", []):
+            axes[1].plot([exit_point["x"], point["x"]], [exit_point["y"], point["y"]],
+                         "--", color="#00853d", lw=1)
+    else:
+        for side in [1] if mission.get("contact_exit_side") == -1 else [-1, 1]:
+            exit_side = mission.get("contact_exit_side") or side
+            axes[1].plot(
+                approach["x"] - 0.15, approach["y"] + side * 0.25, "D", color="#6747a0"
+            )
+            axes[1].plot(
+                [target["x"], approach["x"] - 0.45, approach["x"] - 0.6],
+                [target["y"], approach["y"], approach["y"] + exit_side * 0.4],
+                "--", color="#c5222c", lw=1.5,
+            )
     axes[1].legend(loc="lower right")
     figure.tight_layout()
     figure.savefig(args.output, dpi=160)
