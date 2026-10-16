@@ -7,7 +7,8 @@
   "simulation_triangles": 776888,
   "python_regressions": {
     "passed": 73,
-    "map_ui_launcher_recheck_passed": 20
+    "map_ui_launcher_recheck_passed": 20,
+    "latest_map_and_physical_validation_recheck_passed": 13
   },
   "native_runner_build": {
     "target": "drone_companion_runner",
@@ -640,8 +641,598 @@
     "checked_pair_segments": 36
   },
   "native_regressions": {
-    "passed": 20,
-    "flight_feedback_io_cases": 20,
-    "team_mission_includes_sequential_landing": true
-  }
+    "passed": 21,
+    "flight_feedback_io_cases": 21,
+    "includes_static_landmark_and_partial_map_priority": true
+  },
+  "fixed_landmark_and_landing_trials": [
+    {
+      "run": "run_20261016_181657",
+      "passed": false,
+      "failures": [
+        "mission_not_complete",
+        "mission_contact_members_incomplete",
+        "drone_collision",
+        "vehicle_0_truth_home_not_confirmed",
+        "vehicle_1_truth_home_not_confirmed",
+        "vehicle_2_pressure_not_qualified",
+        "vehicle_2_truth_home_not_confirmed",
+        "vehicle_3_pressure_not_qualified",
+        "vehicle_3_truth_home_not_confirmed",
+        "unrecoverable_protection"
+      ],
+      "mission_phase": "ABORTED",
+      "flight_elapsed_s": 97.36,
+      "qualified_pressure_n": {
+        "0": [
+          429.2058
+        ],
+        "1": [
+          443.9258
+        ],
+        "2": [],
+        "3": []
+      },
+      "truth_home_xy_tolerance_m": 0.05,
+      "truth_home_z_tolerance_m": 0.035,
+      "truth_max_age_s": 0.2,
+      "landings": [
+        {
+          "vehicle": 0,
+          "xy_error_m": 0.08583078994853698,
+          "z_error_m": 6.524257494255892e-07,
+          "truth_age_s": 0.011,
+          "passed": false
+        },
+        {
+          "vehicle": 1,
+          "xy_error_m": 0.07461098708273557,
+          "z_error_m": 3.861533911964088e-06,
+          "truth_age_s": 0.011,
+          "passed": false
+        },
+        {
+          "vehicle": 2,
+          "xy_error_m": 13.018447902794158,
+          "z_error_m": 1.0866763528774608,
+          "truth_age_s": 0.011,
+          "passed": false
+        },
+        {
+          "vehicle": 3,
+          "xy_error_m": 12.182180895395712,
+          "z_error_m": 1.0869999591521853,
+          "truth_age_s": 0.011,
+          "passed": false
+        }
+      ],
+      "drone_contact_pair_samples": 110,
+      "configuration": {
+        "static_armor_localization": true,
+        "landing_alignment_height_m": null,
+        "landing_alignment_stable_s": null,
+        "landing_require_structural": null,
+        "landing_order": null,
+        "impact_speed_mps": 3.0
+      },
+      "landmark_fusion": [
+        {
+          "vehicle": 0,
+          "accepted": 94,
+          "rejections": {
+            "landmark_innovation_gated": 2
+          }
+        },
+        {
+          "vehicle": 1,
+          "accepted": 16,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        },
+        {
+          "vehicle": 2,
+          "accepted": 9,
+          "rejections": {}
+        },
+        {
+          "vehicle": 3,
+          "accepted": 10,
+          "rejections": {}
+        }
+      ]
+    },
+    {
+      "run": "run_20261016_182230",
+      "passed": false,
+      "failures": [
+        "drone_collision",
+        "vehicle_0_truth_home_not_confirmed"
+      ],
+      "mission_phase": "COMPLETE",
+      "flight_elapsed_s": 88.94,
+      "qualified_pressure_n": {
+        "0": [
+          292.1991
+        ],
+        "1": [
+          303.2629
+        ],
+        "2": [
+          288.51
+        ],
+        "3": [
+          303.9634
+        ]
+      },
+      "truth_home_xy_tolerance_m": 0.05,
+      "truth_home_z_tolerance_m": 0.035,
+      "truth_max_age_s": 0.2,
+      "landings": [
+        {
+          "vehicle": 0,
+          "xy_error_m": 0.09960910505516722,
+          "z_error_m": 6.708769526575509e-07,
+          "truth_age_s": 0.003,
+          "passed": false
+        },
+        {
+          "vehicle": 1,
+          "xy_error_m": 0.034857917179322795,
+          "z_error_m": 0.03199931849928461,
+          "truth_age_s": 0.003,
+          "passed": true
+        },
+        {
+          "vehicle": 2,
+          "xy_error_m": 0.028978134362040754,
+          "z_error_m": 0.00019327357097664866,
+          "truth_age_s": 0.003,
+          "passed": true
+        },
+        {
+          "vehicle": 3,
+          "xy_error_m": 0.005389133337903154,
+          "z_error_m": 8.757657641300653e-06,
+          "truth_age_s": 0.003,
+          "passed": true
+        }
+      ],
+      "drone_contact_pair_samples": 2534,
+      "configuration": {
+        "static_armor_localization": true,
+        "landing_alignment_height_m": null,
+        "landing_alignment_stable_s": null,
+        "landing_require_structural": null,
+        "landing_order": null,
+        "impact_speed_mps": 1.5
+      },
+      "landmark_fusion": [
+        {
+          "vehicle": 0,
+          "accepted": 14,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        },
+        {
+          "vehicle": 1,
+          "accepted": 11,
+          "rejections": {
+            "landmark_innovation_gated": 3
+          }
+        },
+        {
+          "vehicle": 2,
+          "accepted": 13,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        },
+        {
+          "vehicle": 3,
+          "accepted": 13,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        }
+      ]
+    },
+    {
+      "run": "run_20261016_182910",
+      "passed": false,
+      "failures": [
+        "mission_not_complete",
+        "drone_collision",
+        "vehicle_0_truth_home_not_confirmed",
+        "vehicle_1_truth_home_not_confirmed",
+        "vehicle_2_truth_home_not_confirmed",
+        "vehicle_3_truth_home_not_confirmed"
+      ],
+      "mission_phase": "ABORTED",
+      "flight_elapsed_s": 103.16,
+      "qualified_pressure_n": {
+        "0": [
+          293.3232
+        ],
+        "1": [
+          300.3005
+        ],
+        "2": [
+          299.6015
+        ],
+        "3": [
+          306.8078
+        ]
+      },
+      "truth_home_xy_tolerance_m": 0.05,
+      "truth_home_z_tolerance_m": 0.035,
+      "truth_max_age_s": 0.2,
+      "landings": [
+        {
+          "vehicle": 0,
+          "xy_error_m": 0.1782467257980874,
+          "z_error_m": 0.00017222080973633425,
+          "truth_age_s": 0.005,
+          "passed": false
+        },
+        {
+          "vehicle": 1,
+          "xy_error_m": 1.1115129193401367,
+          "z_error_m": 1.3593364509906798,
+          "truth_age_s": 0.005,
+          "passed": false
+        },
+        {
+          "vehicle": 2,
+          "xy_error_m": 1.085655227916926,
+          "z_error_m": 1.3396767401849838,
+          "truth_age_s": 0.005,
+          "passed": false
+        },
+        {
+          "vehicle": 3,
+          "xy_error_m": 0.5661140126972498,
+          "z_error_m": 1.3408395796603678,
+          "truth_age_s": 0.005,
+          "passed": false
+        }
+      ],
+      "drone_contact_pair_samples": 32,
+      "configuration": {
+        "static_armor_localization": true,
+        "landing_alignment_height_m": 0.2,
+        "landing_alignment_stable_s": 0.5,
+        "landing_require_structural": true,
+        "landing_order": null,
+        "impact_speed_mps": 1.5
+      },
+      "landmark_fusion": [
+        {
+          "vehicle": 0,
+          "accepted": 12,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        },
+        {
+          "vehicle": 1,
+          "accepted": 12,
+          "rejections": {}
+        },
+        {
+          "vehicle": 2,
+          "accepted": 12,
+          "rejections": {
+            "landmark_innovation_gated": 4
+          }
+        },
+        {
+          "vehicle": 3,
+          "accepted": 12,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        }
+      ]
+    },
+    {
+      "run": "run_20261016_183704",
+      "passed": false,
+      "failures": [
+        "mission_not_complete",
+        "drone_collision"
+      ],
+      "mission_phase": "ABORTED",
+      "flight_elapsed_s": 99.33999999999999,
+      "qualified_pressure_n": {
+        "0": [
+          292.0632
+        ],
+        "1": [
+          304.6447
+        ],
+        "2": [
+          305.8749
+        ],
+        "3": [
+          305.8494
+        ]
+      },
+      "truth_home_xy_tolerance_m": 0.05,
+      "truth_home_z_tolerance_m": 0.035,
+      "truth_max_age_s": 0.2,
+      "landings": [
+        {
+          "vehicle": 0,
+          "xy_error_m": 0.029339075834917027,
+          "z_error_m": 1.5343574726323084e-06,
+          "truth_age_s": 0.024,
+          "passed": true
+        },
+        {
+          "vehicle": 1,
+          "xy_error_m": 0.02551499145083382,
+          "z_error_m": 5.340315440971466e-07,
+          "truth_age_s": 0.024,
+          "passed": true
+        },
+        {
+          "vehicle": 2,
+          "xy_error_m": 0.011496655028422627,
+          "z_error_m": 5.384585097800709e-07,
+          "truth_age_s": 0.024,
+          "passed": true
+        },
+        {
+          "vehicle": 3,
+          "xy_error_m": 0.023432500597662307,
+          "z_error_m": 0.00017895856596772397,
+          "truth_age_s": 0.024,
+          "passed": true
+        }
+      ],
+      "drone_contact_pair_samples": 4,
+      "configuration": {
+        "static_armor_localization": true,
+        "landing_alignment_height_m": 0.08,
+        "landing_alignment_stable_s": 0.5,
+        "landing_require_structural": true,
+        "landing_order": null,
+        "impact_speed_mps": 1.5
+      },
+      "landmark_fusion": [
+        {
+          "vehicle": 0,
+          "accepted": 12,
+          "rejections": {}
+        },
+        {
+          "vehicle": 1,
+          "accepted": 10,
+          "rejections": {}
+        },
+        {
+          "vehicle": 2,
+          "accepted": 12,
+          "rejections": {}
+        },
+        {
+          "vehicle": 3,
+          "accepted": 12,
+          "rejections": {}
+        }
+      ]
+    },
+    {
+      "run": "run_20261016_184436",
+      "passed": false,
+      "failures": [
+        "mission_not_complete",
+        "vehicle_0_truth_home_not_confirmed"
+      ],
+      "mission_phase": "ABORTED",
+      "flight_elapsed_s": 102.38,
+      "qualified_pressure_n": {
+        "0": [
+          293.4371
+        ],
+        "1": [
+          301.1056
+        ],
+        "2": [
+          298.9234
+        ],
+        "3": [
+          301.1832
+        ]
+      },
+      "truth_home_xy_tolerance_m": 0.05,
+      "truth_home_z_tolerance_m": 0.035,
+      "truth_max_age_s": 0.2,
+      "landings": [
+        {
+          "vehicle": 0,
+          "xy_error_m": 1.491473795619497,
+          "z_error_m": 1.3593991044094476,
+          "truth_age_s": 0.022,
+          "passed": false
+        },
+        {
+          "vehicle": 1,
+          "xy_error_m": 0.011502473334674239,
+          "z_error_m": 6.971129784538732e-08,
+          "truth_age_s": 0.022,
+          "passed": true
+        },
+        {
+          "vehicle": 2,
+          "xy_error_m": 0.0011959887771465537,
+          "z_error_m": 8.757396408709539e-06,
+          "truth_age_s": 0.022,
+          "passed": true
+        },
+        {
+          "vehicle": 3,
+          "xy_error_m": 0.00815426529525017,
+          "z_error_m": 6.169465804894969e-08,
+          "truth_age_s": 0.022,
+          "passed": true
+        }
+      ],
+      "drone_contact_pair_samples": 0,
+      "configuration": {
+        "static_armor_localization": true,
+        "landing_alignment_height_m": 0.08,
+        "landing_alignment_stable_s": 0.5,
+        "landing_require_structural": true,
+        "landing_order": [
+          3,
+          2,
+          1,
+          0
+        ],
+        "impact_speed_mps": 1.5
+      },
+      "landmark_fusion": [
+        {
+          "vehicle": 0,
+          "accepted": 13,
+          "rejections": {}
+        },
+        {
+          "vehicle": 1,
+          "accepted": 12,
+          "rejections": {}
+        },
+        {
+          "vehicle": 2,
+          "accepted": 12,
+          "rejections": {}
+        },
+        {
+          "vehicle": 3,
+          "accepted": 13,
+          "rejections": {}
+        }
+      ]
+    },
+    {
+      "run": "run_20261016_185436",
+      "passed": false,
+      "failures": [
+        "mission_not_complete",
+        "vehicle_0_truth_home_not_confirmed",
+        "vehicle_1_truth_home_not_confirmed",
+        "vehicle_2_truth_home_not_confirmed"
+      ],
+      "mission_phase": "ABORTED",
+      "flight_elapsed_s": 104.6,
+      "qualified_pressure_n": {
+        "0": [
+          292.0646
+        ],
+        "1": [
+          306.5885
+        ],
+        "2": [
+          306.3434
+        ],
+        "3": [
+          302.9056
+        ]
+      },
+      "truth_home_xy_tolerance_m": 0.05,
+      "truth_home_z_tolerance_m": 0.035,
+      "truth_max_age_s": 0.2,
+      "landings": [
+        {
+          "vehicle": 0,
+          "xy_error_m": 1.603280239056032,
+          "z_error_m": 1.3640194776859362,
+          "truth_age_s": 0.01,
+          "passed": false
+        },
+        {
+          "vehicle": 1,
+          "xy_error_m": 1.346051418070279,
+          "z_error_m": 1.365524294048695,
+          "truth_age_s": 0.01,
+          "passed": false
+        },
+        {
+          "vehicle": 2,
+          "xy_error_m": 0.7313430065551977,
+          "z_error_m": 1.344557274688603,
+          "truth_age_s": 0.01,
+          "passed": false
+        },
+        {
+          "vehicle": 3,
+          "xy_error_m": 0.0021628035237311175,
+          "z_error_m": 5.323942156021388e-07,
+          "truth_age_s": 0.01,
+          "passed": true
+        }
+      ],
+      "drone_contact_pair_samples": 0,
+      "configuration": {
+        "static_armor_localization": true,
+        "landing_alignment_height_m": 0.08,
+        "landing_alignment_stable_s": 0.5,
+        "landing_require_structural": true,
+        "landing_order": [
+          3,
+          2,
+          1,
+          0
+        ],
+        "impact_speed_mps": 1.5
+      },
+      "landmark_fusion": [
+        {
+          "vehicle": 0,
+          "accepted": 12,
+          "rejections": {}
+        },
+        {
+          "vehicle": 1,
+          "accepted": 11,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        },
+        {
+          "vehicle": 2,
+          "accepted": 11,
+          "rejections": {
+            "landmark_innovation_gated": 1
+          }
+        },
+        {
+          "vehicle": 3,
+          "accepted": 12,
+          "rejections": {}
+        }
+      ]
+    }
+  ],
+  "landing_waiting_separation": {
+    "scope": "sequential_cruise_approach",
+    "order": [
+      3,
+      2,
+      1,
+      0
+    ],
+    "body_diameter_m": 0.104,
+    "minimum_distance_m": 0.6999999999999997,
+    "passed": true
+  },
+  "latest_shutdown": {
+    "run": "run_20261016_185436",
+    "manager_stopped": true,
+    "alive": []
+  },
+  "team_physical_validation_passed": false
 }
