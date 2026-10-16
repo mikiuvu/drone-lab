@@ -94,6 +94,36 @@ def formation_separation(config):
             'segments': checks, 'passed': all(row['passed'] for row in checks)}
 
 
+def landing_waiting_separation(config):
+    """检查逐架返航的巡航高度接近线段与其余等候机的中心距。"""
+    mission = config['team_mission']
+    order = mission.get('landing_order', mission['order']) if mission.get('sequential_landing') else []
+    homes = {p['id']: np.array([p['x'], p['y']]) for p in config['spawns']}
+    holds = {}
+    for vehicle in order:
+        if mission['transit_waypoints']:
+            point = mission['transit_waypoints'][0]
+            offset = next(p for p in mission['formation_offsets'] if p['id'] == vehicle)
+            holds[vehicle] = np.array([point['x'] + offset['x'], point['y'] + offset['y']])
+        else:
+            point = next(p for p in mission['assembly'] if p['id'] == vehicle)
+            holds[vehicle] = np.array([point['x'], point['y']])
+    diameter = 2 * mission['contact_radius_m']
+    checks = []
+    for slot, vehicle in enumerate(order):
+        change = homes[vehicle] - holds[vehicle]
+        norm = float(change @ change)
+        for waiting in order[slot + 1:]:
+            relative = holds[vehicle] - holds[waiting]
+            fraction = float(np.clip(-(relative @ change) / norm, 0, 1)) if norm > 1e-12 else 0.0
+            distance = float(np.linalg.norm(relative + fraction * change))
+            checks.append({'vehicle': vehicle, 'waiting_vehicle': waiting, 'fraction': fraction,
+                           'distance_m': distance, 'passed': distance >= diameter})
+    return {'scope': 'sequential_cruise_approach', 'order': order, 'body_diameter_m': diameter,
+            'minimum_distance_m': min((row['distance_m'] for row in checks), default=None),
+            'segments': checks, 'passed': all(row['passed'] for row in checks)}
+
+
 def check_map(path, margin=.02):
     path = Path(path)
     config = json.loads(path.read_text(encoding='utf-8'))
@@ -137,9 +167,12 @@ def check_map(path, margin=.02):
         failures.append({'kind': 'target_surface', 'hit': target_hit})
     separation = formation_separation(config)
     failures.extend({'kind': 'formation_separation', **row} for row in separation['segments'] if not row['passed'])
+    landing = landing_waiting_separation(config)
+    failures.extend({'kind': 'landing_waiting_separation', **row} for row in landing['segments'] if not row['passed'])
     return {'map': config['name'], 'scope': 'static_mesh_clearance', 'margin_m': margin,
                 'triangle_count': len(triangles), 'homes': homes, 'transit_segments': routes,
                 'formation_separation': separation,
+                'landing_waiting_separation': landing,
                 'target_hit': target_hit, 'failures': failures, 'passed': not failures}
 
 

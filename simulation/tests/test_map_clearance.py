@@ -5,7 +5,11 @@ from pathlib import Path
 
 import numpy as np
 
-from simulation.check_map import TriangleScene, formation_separation
+from simulation.check_map import (
+    TriangleScene,
+    formation_separation,
+    landing_waiting_separation,
+)
 
 
 def test_segment_returns_nearest_wall_and_ignores_geometry_outside_segment():
@@ -36,3 +40,13 @@ def test_hangar_departure_preserves_vehicle_order_and_body_separation():
     crossing = formation_separation(config)
     assert not crossing['passed']
     assert crossing['minimum_distance_m'] < .087
+
+
+def test_front_row_lands_before_rear_row_to_keep_waiting_positions_clear():
+    path = Path(__file__).resolve().parents[1] / 'maps/rmuc_2027.json'
+    config = json.loads(path.read_text(encoding='utf-8'))
+    assert landing_waiting_separation(config)['passed']
+    config['team_mission']['landing_order'] = [0, 1, 2, 3]
+    crossing = landing_waiting_separation(config)
+    assert not crossing['passed']
+    assert crossing['minimum_distance_m'] < .05

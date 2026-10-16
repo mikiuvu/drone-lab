@@ -390,7 +390,7 @@
       "entry_height_tolerance_m": 0.08,
       "entry_yaw_tolerance_rad": 0.35,
       "approach_timeout_s": 20.0,
-      "impact_speed_mps": 3.0,
+      "impact_speed_mps": 1.5,
       "min_forward_speed_mps": 1.2,
       "commit_range_m": 0.9,
       "descent_limit_mps": 1.5,
@@ -426,7 +426,16 @@
     "sequential_landing": true,
     "landing_alignment_tolerance_m": 0.025,
     "vertical_takeoff": true,
-    "static_armor_localization": true
+    "static_armor_localization": true,
+    "landing_alignment_height_m": 0.08,
+    "landing_alignment_stable_s": 0.5,
+    "landing_require_structural": true,
+    "landing_order": [
+      3,
+      2,
+      1,
+      0
+    ]
   },
   "optical_flow": {
     "enabled": true,

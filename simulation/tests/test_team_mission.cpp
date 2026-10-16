@@ -2,6 +2,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 using namespace companion;
 namespace {
@@ -40,7 +41,8 @@ struct Fixture {
   std::vector<TeamCommand> commands{4};
   explicit Fixture(bool transit = false, double visual_entry_range = -1.0, bool dive = false,
                    bool direct_retreat = false, uint64_t stage_timeout = 0, bool sequential_landing = false)
-      : c(config(transit, visual_entry_range, dive, direct_retreat, stage_timeout, sequential_landing)), mission(c) {
+      : Fixture(config(transit, visual_entry_range, dive, direct_retreat, stage_timeout, sequential_landing)) {}
+  explicit Fixture(TeamMissionConfig custom):c(std::move(custom)),mission(c) {
     for (int i = 0; i < 4; ++i) {
       states[i].vehicle = i; states[i].xy_valid = states[i].z_valid = states[i].ready = true;
       set(i,c.homes[i]);
@@ -466,7 +468,10 @@ void landingTimeoutKeepsLandingCommands() {
   f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"超时降落停机后没有确认终态");
 }
 void narrowHangarLandsOneVehicleAtATime() {
-  Fixture f(false,-1,false,false,0,true);f.contact();
+  auto c=config(false,-1,false,false,0,true);
+  c.landing_alignment_height_m=.2;c.landing_require_structural=true;c.landing_alignment_stable_us=300000;
+  c.landing_order={3,2,1,0};
+  Fixture f(c);f.contact();
   for(int active=0;active<4;++active){
     if(active){f.set(active,f.c.approach);f.settle();}
     f.set(active,f.c.target);++f.states[active].impact_seq;f.tick();
@@ -474,20 +479,28 @@ void narrowHangarLandsOneVehicleAtATime() {
     f.set(active,f.c.assembly[active]);f.settle();
   }
   f.tick();check(f.mission.phase()==TeamPhase::LAND_ALL,"逐架降落未在集结位置开始");
-  for(int i=1;i<4;++i)
+  for(int i=0;i<4;++i)if(i!=f.c.landing_order.front())
     check(f.commands[i].phase==TeamPhase::RETURN_ALL&&f.commands[i].target_y_m==f.c.assembly[i].y&&
           f.commands[i].target_z_m==f.c.cruise_z_m,"等候机提前进入机库或下降");
-  for(int active=0;active<4;++active){
+  for(size_t slot=0;slot<f.c.landing_order.size();++slot){
+    const int active=f.c.landing_order[slot];
     auto home=f.c.homes[active];home.z=f.c.cruise_z_m;f.set(active,home);
+    f.settle();check(f.commands[active].target_z_m==f.c.home_ground_z_m+.2,"未在托盘上方停稳对准");
+    home.z=f.c.home_ground_z_m+.2;f.set(active,home);
     f.states[active].x_m+=f.c.landing_alignment_tolerance_m+.001;f.settle();
     check(f.commands[active].phase==TeamPhase::RETURN_ALL,"对准误差超限仍下降");
     f.set(active,home);f.states[active].vx_mps=.11;f.settle();
     check(f.commands[active].phase==TeamPhase::RETURN_ALL,"水平速度过高仍下降");
-    f.states[active].vx_mps=0;f.settle();
+    f.states[active].vx_mps=0;f.states[active].xy_reason="PEER_REFERENCE";f.settle();
+    check(f.commands[active].phase==TeamPhase::RETURN_ALL,"仅有队友参考时仍下降");
+    f.states[active].xy_reason="STRUCTURAL";f.settle();
     check(f.commands[active].phase==TeamPhase::LAND_ALL,"已对准停稳仍未下降");
     home.z=f.c.home_ground_z_m+f.c.body_clearance_m;f.set(active,home);f.states[active].landed=true;f.tick();
     check(f.commands[active].disarm,"着地后未请求停机");
-    if(active<3)check(f.commands[active+1].target_y_m==f.c.assembly[active+1].y,"当前机尚未停机便轮换");
+    if(slot+1<f.c.landing_order.size()) {
+      const int next=f.c.landing_order[slot+1];
+      check(f.commands[next].target_y_m==f.c.assembly[next].y,"当前机尚未停机便轮换");
+    }
     f.states[active].armed=false;f.tick();
     check(f.mission.phase()!=TeamPhase::COMPLETE,"未确认全部成员停机便完成");
   }
@@ -513,6 +526,20 @@ void narrowHangarTimeoutDescendsAtSeparatePositions() {
   for(auto& state:f.states)state.armed=false;
   f.settle();check(f.mission.phase()==TeamPhase::ABORTED,"中止后未等待全员原生停机");
 }
+void landingAlignmentHeightStaysAboveTheBodyAndBelowCruise() {
+  for(double height:{-.1,.005,1.0}) {
+    auto c=config();c.landing_alignment_height_m=height;
+    bool rejected=false;
+    try { TeamMission mission(c); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"不安全的降落对准高度被接受");
+  }
+  for(const auto& order:std::vector<std::vector<int>>{{0,1},{0,1,1,3},{0,1,2,4}}) {
+    auto c=config();c.landing_order=order;
+    bool rejected=false;
+    try { TeamMission mission(c); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"无效的降落顺序被接受");
+  }
+}
 int main() {
   try {
     barriers(); physicalContactAndTimeout(); contactDeadlineRemainsFixed(); sequentialAndLanding(); staleAndAbort(); transitAndReverse(); inputGates(); contactGates(); repeatedLossKeepsOneRecord();
@@ -525,6 +552,7 @@ int main() {
     landingTimeoutKeepsLandingCommands();
     narrowHangarLandsOneVehicleAtATime();
     narrowHangarTimeoutDescendsAtSeparatePositions();
+    landingAlignmentHeightStaysAboveTheBodyAndBelowCruise();
     std::cout << "队伍任务测试通过\n"; return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

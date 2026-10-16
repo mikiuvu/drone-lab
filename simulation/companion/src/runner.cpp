@@ -896,7 +896,8 @@ int main(int argc,char**argv){try{
         // 阶段指令过期时保留计时器，等待有效指令后再检查持续时间。
         if(command_fresh){
           const std::string phase_now=team_command.value("phase","");
-          const bool airborne_phase=phase_now=="TRANSIT"||phase_now=="ASSEMBLE"||phase_now=="APPROACH"||phase_now=="CONTACT"||phase_now=="RETREAT"||phase_now=="RETURN_ALL"||phase_now=="ABORT_RETURN";
+          const bool landing_mission=team_command.value("mission_phase",std::string{})=="LAND_ALL";
+          const bool airborne_phase=!landing_mission&&(phase_now=="TRANSIT"||phase_now=="ASSEMBLE"||phase_now=="APPROACH"||phase_now=="CONTACT"||phase_now=="RETREAT"||phase_now=="RETURN_ALL"||phase_now=="ABORT_RETURN");
           double support_z=team_settings.value("home_ground_z_m",.5);
           if(stranded_ground_source=="terrain"){
             support_z=config.floor_z_m;

@@ -34,6 +34,13 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
       throw std::invalid_argument("接触顺序必须包含每个机号一次");
     used[id] = true;
   }
+  if(config_.landing_order.empty())config_.landing_order=config_.order;
+  if(config_.landing_order.size()!=n)throw std::invalid_argument("降落顺序长度无效");
+  used.assign(n,false);
+  for(int id:config_.landing_order) {
+    if(id<0||static_cast<size_t>(id)>=n||used[id])throw std::invalid_argument("降落顺序必须包含每个机号一次");
+    used[id]=true;
+  }
   auto finite = [](const TeamPoint& p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) && std::isfinite(p.yaw); };
   if (!std::isfinite(config_.cruise_z_m) || !std::isfinite(config_.home_ground_z_m) ||
       !std::isfinite(config_.body_clearance_m) || config_.body_clearance_m <= 0 ||
@@ -41,6 +48,10 @@ TeamMission::TeamMission(TeamMissionConfig c) : config_(std::move(c)) {
       !std::isfinite(config_.contact_speed_mps) || config_.contact_speed_mps <= 0 ||
       !std::isfinite(config_.return_tolerance_m) || config_.return_tolerance_m <= 0 ||
       !std::isfinite(config_.landing_alignment_tolerance_m) || config_.landing_alignment_tolerance_m <= 0 ||
+      !std::isfinite(config_.landing_alignment_height_m) || config_.landing_alignment_height_m < 0 ||
+      (config_.landing_alignment_height_m>0 &&
+       (config_.landing_alignment_height_m<=config_.body_clearance_m ||
+        config_.home_ground_z_m+config_.landing_alignment_height_m>=config_.cruise_z_m)) ||
       !std::isfinite(config_.route_tolerance_m) || config_.route_tolerance_m<=0 ||
       !std::isfinite(config_.route_speed_tolerance_mps) || config_.route_speed_tolerance_mps<=0 ||
       !config_.freshness_us || !config_.stable_us || !config_.loss_abort_us ||
@@ -119,7 +130,7 @@ void TeamMission::enter(TeamPhase p, uint64_t now) {
   if((p==TeamPhase::COMPLETE||p==TeamPhase::ABORTED)&&flight_start_)flight_end_=now;
   if (p==TeamPhase::CONTACT && activeVehicle()>=0) impact_baseline_=status_[activeVehicle()].impact_seq;
   if (p==TeamPhase::RETREAT) retreat_assembly_=config_.retreat_holding_direct;
-  if (p==TeamPhase::LAND_ALL) { landing_index_=0;landing_descending_=false;landing_alignment_since_=0; }
+  if (p==TeamPhase::LAND_ALL) { landing_index_=0;landing_descending_=false;landing_approached_=false;landing_alignment_since_=0; }
   if (p==TeamPhase::RETURN_ALL || p==TeamPhase::ABORT_RETURN)
     return_index_=config_.transit_waypoints.empty()?-1:std::min(transit_index_-1,static_cast<int>(config_.transit_waypoints.size())-1);
 }
@@ -273,20 +284,26 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
   }
   // 5. 路线屏障可以跳过失效成员，降落停机确认必须覆盖每个成员。
   if (phase_==TeamPhase::LAND_ALL) {
-    if(config_.sequential_landing&&!aborted_&&landing_index_<config_.order.size()) {
-      const int id=config_.order[landing_index_];
+    if(config_.sequential_landing&&!aborted_&&landing_index_<config_.landing_order.size()) {
+      const int id=config_.landing_order[landing_index_];
       auto home=config_.homes[id];home.z=config_.home_ground_z_m+config_.body_clearance_m;
       const auto& state=status_[id];
       if(statusFresh(id,sim,wall)&&state.landed&&!state.armed&&near(id,home,false)) {
-        ++landing_index_;landing_descending_=false;landing_alignment_since_=0;
+        ++landing_index_;landing_descending_=false;landing_approached_=false;landing_alignment_since_=0;
       }else if(!landing_descending_) {
-        const bool aligned=validForBarrier(id,sim,wall)&&state.armed&&
+        auto overhead=home;overhead.z=config_.cruise_z_m;
+        if(!landing_approached_&&state.armed&&near(id,overhead))landing_approached_=true;
+        const double alignment_z=config_.landing_alignment_height_m>0?
+            config_.home_ground_z_m+config_.landing_alignment_height_m:config_.cruise_z_m;
+        const bool aligned=landing_approached_&&validForBarrier(id,sim,wall)&&state.armed&&
+            (!config_.landing_require_structural||state.xy_reason=="STRUCTURAL")&&
             std::hypot(state.x_m-home.x,state.y_m-home.y)<=config_.landing_alignment_tolerance_m&&
-            std::abs(state.z_m-config_.cruise_z_m)<=.08&&
+            std::abs(state.z_m-alignment_z)<=.035&&
             std::hypot(state.vx_mps,state.vy_mps)<=.10&&std::abs(state.vz_mps)<=.12;
         if(!aligned)landing_alignment_since_=0;
         else if(!landing_alignment_since_)landing_alignment_since_=sim;
-        else if(sim-landing_alignment_since_>=config_.stable_us)landing_descending_=true;
+        else if(sim-landing_alignment_since_>=
+            (config_.landing_alignment_stable_us?config_.landing_alignment_stable_us:config_.stable_us))landing_descending_=true;
       }
     }
     if(barrier(all_stopped&&(aborted_||all_unrecoverable||allNear(true,true)),sim))
@@ -336,13 +353,14 @@ std::vector<TeamCommand> TeamMission::step(uint64_t sim, uint64_t wall) {
     }
     // 狭小机库只允许当前机靠近起点，其余机留在返航航路的分散位置。
     if(phase_==TeamPhase::LAND_ALL&&config_.sequential_landing&&!aborted_) {
-      const auto slot=static_cast<size_t>(std::find(config_.order.begin(),config_.order.end(),static_cast<int>(i))-config_.order.begin());
+      const auto slot=static_cast<size_t>(std::find(config_.landing_order.begin(),config_.landing_order.end(),static_cast<int>(i))-config_.landing_order.begin());
       if(slot>landing_index_) {
         p=config_.transit_waypoints.empty()?config_.assembly[i]:config_.transit_waypoints.front();
         if(!config_.transit_waypoints.empty()){p.x+=config_.formation_offsets[i].x;p.y+=config_.formation_offsets[i].y;}
         p.z=config_.cruise_z_m;p.yaw=config_.homes[i].yaw;c.phase=TeamPhase::RETURN_ALL;
       }else if(slot==landing_index_&&!landing_descending_) {
-        p=config_.homes[i];p.z=config_.cruise_z_m;c.phase=TeamPhase::RETURN_ALL;
+        p=config_.homes[i];p.z=landing_approached_&&config_.landing_alignment_height_m>0?
+            config_.home_ground_z_m+config_.landing_alignment_height_m:config_.cruise_z_m;c.phase=TeamPhase::RETURN_ALL;
       }
     }
     if(phase_==TeamPhase::LAND_ALL&&config_.sequential_landing&&aborted_&&seen_[i]) {

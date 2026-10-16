@@ -115,6 +115,13 @@ TeamMissionConfig readConfig(const std::string& path) {
   c.fly_through_route=m.value("fly_through_route",false);
   c.sequential_landing=m.value("sequential_landing",false);
   if(m.contains("landing_alignment_tolerance_m"))c.landing_alignment_tolerance_m=number(m,"landing_alignment_tolerance_m");
+  if(m.contains("landing_alignment_height_m"))c.landing_alignment_height_m=number(m,"landing_alignment_height_m");
+  c.landing_require_structural=m.value("landing_require_structural",false);
+  if(m.contains("landing_alignment_stable_s")) {
+    const double seconds=number(m,"landing_alignment_stable_s");
+    if(seconds<0||seconds>10)throw std::invalid_argument("降落对准稳定时间无效");
+    c.landing_alignment_stable_us=static_cast<uint64_t>(seconds*1e6);
+  }
   c.pipelined_contact=m.value("pipelined_contact",false);
   c.visual_contact=m.value("visual_contact",false);
   // 视觉进入距离：0 表示保持旧行为（锁定即进入接触）。
@@ -172,6 +179,11 @@ TeamMissionConfig readConfig(const std::string& path) {
   c.order.clear();
   for (const auto& value : order) {
     json id = {{"id",value}}; c.order.push_back(vehicleId(id,"id",c.homes.size()));
+  }
+  if(m.contains("landing_order")) {
+    const auto& landing=m.at("landing_order");
+    if(!landing.is_array()||landing.size()!=c.homes.size())throw std::invalid_argument("降落顺序无效");
+    for(const auto& value:landing){json id={{"id",value}};c.landing_order.push_back(vehicleId(id,"id",c.homes.size()));}
   }
   if (m.contains("transit_waypoints")) {
     if (!m.at("transit_waypoints").is_array()) throw std::invalid_argument("航路配置无效");

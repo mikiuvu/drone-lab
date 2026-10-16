@@ -111,6 +111,35 @@ class FlightFeedbackIOTest(unittest.TestCase):
              "vx_body_mps": 0, "vy_body_mps": 0, "quality": 1, "variance_m2s2": 0.001}]:
             self.mav.sendto(json.dumps(sample).encode("utf-8"), ("127.0.0.1", 16240))
 
+    def test_landing_alignment_near_platform_does_not_latch_airborne_stranding(self):
+        started = time.monotonic()
+        sequence = 0
+
+        def pump(aligning):
+            nonlocal sequence
+            self.send_heartbeat(armed=aligning)
+            self.send_landed(on_ground=not aligning)
+            stamp = 1_000_000 + int((time.monotonic() - started) * 1e6)
+            self.send_sensors(stamp)
+            sequence += 1
+            command = {"kind": "team_command", "vehicle": 240, "sequence": sequence,
+                       "sim_time_us": stamp, "phase": "RETURN_ALL" if aligning else "TAKEOFF",
+                       "mission_phase": "LAND_ALL" if aligning else "TAKEOFF", "active_vehicle": -1,
+                       "target_x_m": 0, "target_y_m": 0, "target_z_m": .58,
+                       "target_yaw_rad": 0, "contact_speed_mps": 0}
+            self.mav.sendto(json.dumps(command).encode("utf-8"), ("127.0.0.1", 18240))
+            time.sleep(.02)
+
+        while time.monotonic() - started < 9.3:
+            pump(False)
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            pump(True)
+        rows = recorded_rows(self.root / "companion_240.jsonl")
+        self.assertFalse(any(row.get("kind") == "unrecoverable" for row in rows))
+        self.assertTrue(any(row.get("kind") == "control_intention" and row.get("mode") == "RETURN_ALL"
+                            and row.get("safe_to_arm") for row in rows))
+
     def test_ground_feedback_expires_while_heartbeats_continue(self):
         self.grounded()
         deadline = time.monotonic() + 0.8
