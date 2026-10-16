@@ -38,6 +38,7 @@ void Estimator::reset(uint64_t now) {
   state_.covariance(2,2)=std::max(state_.covariance(2,2),config_.initial_z_sigma_m*config_.initial_z_sigma_m); state_.initialized=true; state_.xy_valid=false; state_.localization_mode="INITIALIZING"; state_.sim_time_us=now;
   assimilated_tof_us_.fill(0);
   last_landmark_us_=0;
+  terrain_recovery_since_us_=terrain_recovery_last_us_=0;
   attitude_begin_=attitude_count_=0;
   last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
 }
@@ -198,8 +199,9 @@ std::optional<Eigen::Matrix3d> Estimator::attitudeDelta(uint64_t stamp) const {
   return (latest.orientation.conjugate()*exposure).toRotationMatrix();
 }
 
-FusionReport Estimator::fuseTof(const TofFrame& frame) {
+FusionReport Estimator::fuseTof(const TofFrame& frame,bool bounded_recovery) {
   FusionReport report;
+  if(!bounded_recovery)terrain_recovery_since_us_=terrain_recovery_last_us_=0;
   if(frame.sensor_index<0 || frame.sensor_index>=3 || !frame.sim_time_us ||
      frame.sim_time_us<=last_tof_us_[frame.sensor_index]) {
     report.stale=true;report.reason="tof_invalid_or_duplicate";return report;
@@ -209,6 +211,10 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     report.stale=true;report.reason="tof_stale";return report;
   }
   last_tof_us_[frame.sensor_index]=frame.sim_time_us;tof_cache_[frame.sensor_index]=frame;
+  struct ConfirmationGuard {
+    uint64_t& since;uint64_t& latest;bool keep{false};
+    ~ConfirmationGuard(){if(!keep)since=latest=0;}
+  } confirmation{terrain_recovery_since_us_,terrain_recovery_last_us_};
   std::array<std::optional<Eigen::Matrix3d>,3> attitude_deltas;
   std::array<bool,3> rotated{};bool missing_attitude=false,exposure_ready=false;
   for(const auto& cached:tof_cache_){
@@ -226,7 +232,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
   Eigen::Vector3d values=Eigen::Vector3d::Zero();
   int count=0,rank=0;
   double sum_squared=0;
-  for(int iteration=0;iteration<5;++iteration) {
+  const auto linearize=[&](Eigen::Vector3d& step) {
     info.setZero(); Eigen::Vector3d gradient=Eigen::Vector3d::Zero();
     count=0;sum_squared=0; int independent_normals=0; Eigen::Vector3d first_normal=Eigen::Vector3d::Zero();
     const auto current_rotation=rotation(working.roll_rad,working.pitch_rad,working.yaw_rad);
@@ -257,7 +263,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     }
     if(count<(config_.terrain?8:2)){
       report.stale=missing_attitude&&!exposure_ready;report.degenerate=!report.stale;
-      report.reason=report.stale?"tof_attitude_history_missing":"too_few_structural_returns";return report;
+      report.reason=report.stale?"tof_attitude_history_missing":"too_few_structural_returns";return false;
     }
     // 相邻像素共享系统误差，按每 8 个像素最多贡献一个独立样本，避免信息量虚高。
     const double correlated=std::max(1.0,count/8.0);
@@ -265,26 +271,53 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     // 2. I 的特征向量给出约束方向，特征值表示信息强度。单墙通常缺沿墙方向信息；
     //    只对超过阈值的方向求 δ=-I⁺g，弱方向保留先验，避免退化矩阵强行求逆。
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(info);
-    if(solver.info()!=Eigen::Success){report.reason="structure_eigen_failure";return report;}
+    if(solver.info()!=Eigen::Success){report.reason="structure_eigen_failure";return false;}
     values=solver.eigenvalues();modes=solver.eigenvectors();
     const double threshold=std::max(0.1,values(2)*(config_.terrain?1e-3:1e-4));
-    Eigen::Vector3d step=Eigen::Vector3d::Zero();rank=0;
+    step.setZero();rank=0;
     for(int axis=0;axis<3;++axis)if(values(axis)>threshold) {
       ++rank;step-=modes.col(axis)*(modes.col(axis).dot(gradient)/values(axis));
     }
-    if(!rank){report.degenerate=true;report.reason="structure_unobservable";return report;}
-    if(config_.terrain && independent_normals<2){report.degenerate=true;report.gated=true;report.reason="terrain_normals_not_independent";return report;}
+    if(!rank){report.degenerate=true;report.reason="structure_unobservable";return false;}
+    if(config_.terrain && independent_normals<2){report.degenerate=true;report.gated=true;report.reason="terrain_normals_not_independent";return false;}
+    return true;
+  };
+  for(int iteration=0;iteration<5;++iteration) {
+    Eigen::Vector3d step;
+    if(!linearize(step))return report;
+    report.inliers=count;report.innovation_norm=std::sqrt(sum_squared/count);
     step*=std::min(1.0,0.2/std::max(step.norm(),1e-9));
     working.x_m+=step.x();working.y_m+=step.y();working.yaw_rad=wrapAngle(working.yaw_rad+step.z());
     if(step.norm()<1e-5)break;
   }
   // 3. 残差 RMS 和位姿信任域共同检查匹配可信度，避免错误表面关联引起大幅跳变。
-  const Eigen::Vector3d shift(working.x_m-prior.x_m,working.y_m-prior.y_m,wrapAngle(working.yaw_rad-prior.yaw_rad));
+  Eigen::Vector3d shift(working.x_m-prior.x_m,working.y_m-prior.y_m,wrapAngle(working.yaw_rad-prior.yaw_rad));
   if (!std::isfinite(sum_squared) || count < 1 || std::sqrt(sum_squared/count) > (config_.terrain ? config_.terrain_plane_gate_m : 0.20)) {
     report.gated=true; report.degenerate=true; report.reason="tof_residual_gate"; return report;
   }
+  bool recovering=false;
   if(config_.terrain && (shift.head<2>().norm()>config_.terrain_max_translation_update_m || std::abs(shift.z())>config_.terrain_max_yaw_update_rad)) {
-    report.gated=true; report.degenerate=true; report.reason="terrain_update_trust_region"; return report;
+    report.gated=true;report.degenerate=true;report.reason="terrain_update_trust_region";
+    if(!bounded_recovery||rank<3||count<24||shift.head<2>().norm()>2*config_.terrain_max_translation_update_m||
+        std::abs(shift.z())>config_.terrain_max_yaw_update_rad)return report;
+    const Pose3 candidate=working;
+    const int candidate_count=count;
+    // 每次实际融合仍限制在原信任域内，并在截断位置重新建立对应面、残差和信息矩阵。
+    shift*=config_.terrain_max_translation_update_m/shift.head<2>().norm();
+    working.x_m=prior.x_m+shift.x();working.y_m=prior.y_m+shift.y();
+    working.yaw_rad=wrapAngle(prior.yaw_rad+shift.z());
+    Eigen::Vector3d step;
+    if(!linearize(step))return report;
+    if(rank<3||count<24||count*5<candidate_count*4||std::sqrt(sum_squared/count)>config_.tof_sigma_m)return report;
+    const bool consistent=terrain_recovery_since_us_&&frame.sim_time_us>terrain_recovery_last_us_&&
+        frame.sim_time_us-terrain_recovery_last_us_<=config_.tof_timeout_us&&
+        std::hypot(candidate.x_m-terrain_recovery_candidate_.x_m,candidate.y_m-terrain_recovery_candidate_.y_m)<.03&&
+        std::abs(wrapAngle(candidate.yaw_rad-terrain_recovery_candidate_.yaw_rad))<.03;
+    if(!consistent)terrain_recovery_since_us_=frame.sim_time_us;
+    terrain_recovery_candidate_=candidate;terrain_recovery_last_us_=frame.sim_time_us;
+    if(frame.sim_time_us-terrain_recovery_since_us_<50000){confirmation.keep=true;report.reason="terrain_recovery_pending";return report;}
+    recovering=true;report.gated=false;report.degenerate=false;
+    terrain_recovery_since_us_=terrain_recovery_last_us_=0;
   }
   if(structural_information_us_ && frame.sim_time_us>structural_information_us_) {
     const double dt=(frame.sim_time_us-structural_information_us_)*1e-6;
@@ -308,6 +341,14 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     h(row,0)=modes(0,axis);h(row,1)=modes(1,axis);h(row,3)=modes(2,axis);
     residual(row)=modes.col(axis).dot(shift);noise(row,row)=std::max(1.0/values(axis),1e-4);++row;
   }
+  if(recovering) {
+    const Eigen::VectorXd correction=state_.covariance*h.transpose()*
+        (h*state_.covariance*h.transpose()+noise).ldlt().solve(residual);
+    if(!correction.allFinite()||correction.head<2>().norm()>config_.terrain_max_translation_update_m||
+        std::abs(correction(3))>config_.terrain_max_yaw_update_rad) {
+      report.gated=true;report.reason="terrain_recovery_filter_step_gated";return report;
+    }
+  }
   update(h,residual,noise);state_.degenerate_geometry=rank<3;
   // 每帧深度只计权一次；若本次因几何退化未能单独定位，仍保留缓存等待互补方向。
   for(const auto& cached:tof_cache_)
@@ -327,7 +368,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
   }
   last_local_tof_us_=frame.sim_time_us;
   report.accepted=true;report.degenerate=rank<3;report.inliers=count;
-  report.innovation_norm=std::sqrt(sum_squared/count);report.reason=(config_.terrain?"terrain_point_to_plane_rank_":"point_to_line_rank_")+std::to_string(rank)+"_cumulative_"+std::to_string(cumulative_rank);
+  report.innovation_norm=std::sqrt(sum_squared/count);report.reason=(recovering?"terrain_bounded_recovery_rank_":config_.terrain?"terrain_point_to_plane_rank_":"point_to_line_rank_")+std::to_string(rank)+"_cumulative_"+std::to_string(cumulative_rank);
   return report;
 }
 

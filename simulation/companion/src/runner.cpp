@@ -1284,7 +1284,15 @@ int main(int argc,char**argv){try{
     if(navigation_due)if(auto frame=tof_queue.take())
       if(!team_enabled||!sensor_disturbance()||frame->sim_time_us>sensor_disturbance()+400000){
         auto tof_timing=runtime_profile.measure(RuntimeProfile::Tof,&sim_us);
-        fusion(estimator.fuseTof(*frame),"tof",frame->sim_time_us);
+        const auto e=estimator.estimate();
+        const bool low_landing_recovery=team_enabled&&flight.armed&&e.z_valid&&e.flow_valid&&
+            team_settings.value("bounded_landing_relocalization",false)&&
+            team_command.value("mission_phase",std::string{})=="LAND_ALL"&&
+            team_command.value("phase",std::string{})=="RETURN_ALL"&&
+            e.pose.z_m>team_settings.value("home_ground_z_m",.5)+.04&&
+            e.pose.z_m<team_settings.value("home_ground_z_m",.5)+.12&&
+            e.velocity_enu_mps.norm()<.12&&std::abs(e.pose.roll_rad)<.15&&std::abs(e.pose.pitch_rad)<.15;
+        fusion(estimator.fuseTof(*frame,low_landing_recovery),"tof",frame->sim_time_us);
       }
     // 每个导航周期发送控制后刷新日志；流缓冲区满时仍会自动写出。
     if(navigation_due){auto log_timing=runtime_profile.measure(RuntimeProfile::LogFlush,&sim_us);log.flush();}

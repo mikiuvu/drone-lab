@@ -57,11 +57,12 @@ class Estimator {
 /**
  * @brief 将深度匹配到地图，仅沿可观测的 x/y/yaw 方向融合。
  * @param frame 三个传感器之一的 8×8 轴向深度帧，单位 m。
+ * @param bounded_recovery 允许多帧一致的全秩解分步恢复，每次修正不超过原信任域。
  * @return 内点数、残差均方根及退化/拒绝原因；退化和接受可以同时成立。
  * @note 历史曝光需被姿态缓冲覆盖，插值仅使用间隔不超过 100 ms 的相邻姿态。
  *       最新姿态之后采用零阶保持；未输入过 IMU 姿态时采用固定姿态模型。
  */
-  FusionReport fuseTof(const TofFrame& frame);
+  FusionReport fuseTof(const TofFrame& frame, bool bounded_recovery = false);
 /**
  * @brief 用机体 FLU 前向、左向速度约束世界系速度。
  * @param sample 带正方差的测量，质量至少 0.5 才融合。
@@ -160,6 +161,8 @@ class Estimator {
   uint64_t last_local_tof_us_{0}, last_peer_xy_us_{0};
   uint64_t last_flow_us_{0}, next_reference_seq_{0};
   uint64_t last_landmark_us_{0};
+  Pose3 terrain_recovery_candidate_;
+  uint64_t terrain_recovery_since_us_{0}, terrain_recovery_last_us_{0};
   bool flow_valid_{false};
   // 依次为上一 IMU 航向 rad、基准气压 hPa、基准高度 m、上一辅助高度 m。
   double last_imu_yaw_{0}, baro_reference_hpa_{0}, baro_reference_z_{0}, previous_height_m_{0};
