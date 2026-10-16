@@ -37,10 +37,15 @@ def read_stl(path):
 # @param step XY 采样间距（米）。
 # @return x、y 轴和形状为 [y,x] 的高度数组，未覆盖处为 NaN。
 # @note 在三角形 XY 包围盒内用重心坐标插值 z，重叠处保留最高表面，跳过投影退化的面。
-def height_grid(triangles, step=0.1):
+def height_grid(triangles, step=0.1, bounds=None):
     """Offline top-down raster of known static prior; keeps highest surface."""
-    x = np.arange(-14.6, 14.61, step)
-    y = np.arange(-8.1, 8.11, step)
+    if not np.isfinite(step) or step <= 0:
+        raise ValueError("Grid spacing must be finite and positive")
+    xmin, xmax, ymin, ymax = (-14.6, 14.6, -8.1, 8.1) if bounds is None else bounds
+    if not np.isfinite([xmin, xmax, ymin, ymax]).all() or xmin >= xmax or ymin >= ymax:
+        raise ValueError("Invalid XY grid bounds")
+    x = np.arange(xmin, xmax + step * 0.1, step)
+    y = np.arange(ymin, ymax + step * 0.1, step)
     height = np.full((len(y), len(x)), np.nan)
     for tri in triangles:
         a, b, c = tri
