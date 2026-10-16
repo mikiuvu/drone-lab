@@ -5,6 +5,7 @@
 """
 
 import json
+import math
 import os
 import struct
 import subprocess
@@ -191,6 +192,24 @@ def test_explicit_scale_and_pose_override(tmp_path):
     pose = [float(v) for v in visual.find("pose").text.split()]
     # 中心 z = 40/2×0.002 = 0.04，加 0.03 抬升后为 -0.01。
     assert pose[2] == pytest.approx(-0.01)
+
+
+@pytest.mark.parametrize(('rotation', 'expected_translation'), [
+    ((0, 0, math.pi / 2), (.050, -.072, .010)),
+    ((math.pi / 2, math.pi / 2, math.pi / 2), (-.010, -.060, .082)),
+])
+def test_rotated_mesh_keeps_its_center_at_the_requested_body_offset(tmp_path, rotation, expected_translation):
+    mesh = tmp_path / 'drone.stl'
+    write_binary_stl(mesh, (104., 80., 40.))
+    output = tmp_path / 'generated'
+    result = run_generator(mesh, output, ('--visual-mesh-pose', '.01', '-.02', '.03',
+                                          *(str(value) for value in rotation)))
+    assert result.returncode == 0, result.stderr
+    pose = [float(value) for value in body_visual(output).findtext('pose').split()]
+    assert pose[:3] == pytest.approx(expected_translation)
+    assert pose[3:] == pytest.approx(rotation)
+    contract = json.loads((output / 'sensor_contract.json').read_text(encoding='utf-8'))
+    assert contract['visual_mesh']['installed_pose'] == pytest.approx(pose)
 
 
 def test_missing_mesh_keeps_placeholder_box(tmp_path):

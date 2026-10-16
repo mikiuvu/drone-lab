@@ -186,14 +186,17 @@ def install_visual_mesh(output, args):
         note = "scale 自动判定为 {}".format("毫米→米" if scale == 0.001 else "已是米")
     target = output / f"drone_visual{source.suffix.lower()}"
     shutil.copyfile(source, target)
-    # 网格中心平移到机体原点；--visual-mesh-pose 的平移在缩放后的机体坐标系里追加。
+    # SDF 先缩放、旋转网格，再平移；用旋转后的中心补偿，追加位移保持在机体系。
+    cx, cy, cz = (value * scale for value in bounds.center)
+    roll, pitch, yaw = args.visual_mesh_pose[3:]
+    cy, cz = math.cos(roll) * cy - math.sin(roll) * cz, math.sin(roll) * cy + math.cos(roll) * cz
+    cx, cz = math.cos(pitch) * cx + math.sin(pitch) * cz, -math.sin(pitch) * cx + math.cos(pitch) * cz
+    cx, cy = math.cos(yaw) * cx - math.sin(yaw) * cy, math.sin(yaw) * cx + math.cos(yaw) * cy
     pose = [
-        -bounds.center[0] * scale + args.visual_mesh_pose[0],
-        -bounds.center[1] * scale + args.visual_mesh_pose[1],
-        -bounds.center[2] * scale + args.visual_mesh_pose[2],
-        args.visual_mesh_pose[3],
-        args.visual_mesh_pose[4],
-        args.visual_mesh_pose[5],
+        args.visual_mesh_pose[0] - cx,
+        args.visual_mesh_pose[1] - cy,
+        args.visual_mesh_pose[2] - cz,
+        roll, pitch, yaw,
     ]
     print(f"机体网格 {source.name}: {bounds}")
     print(f"  {note}，安装到 {target.name}")
