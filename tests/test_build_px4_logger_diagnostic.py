@@ -13,6 +13,20 @@ SPEC.loader.exec_module(builder)
 
 
 class DiagnosticLinkTests(unittest.TestCase):
+    def test_control_response_profile_preserves_other_topics_and_uses_five_ms(self):
+        source = ('void LoggedTopics::add_default_topics()\n{\n\tadd_topic("trajectory_setpoint", 200);\n}\n'
+                  'void LoggedTopics::add_estimator_replay_topics()\n{\n\tadd_topic("sensor_combined");\n}\n')
+        changed = builder.configure_control_response_log(source)
+        self.assertTrue(changed.startswith(source.split('void LoggedTopics::add_estimator_replay_topics')[0]))
+        self.assertIn('add_topic("sensor_combined");', changed)
+        for name in builder.CONTROL_RESPONSE_TOPICS:
+            self.assertEqual(changed.count(f'add_topic("{name}", 5);'), 1)
+
+    def test_missing_or_ambiguous_control_profile_is_rejected(self):
+        for source in ('none', 'void LoggedTopics::add_estimator_replay_topics()\n{\n' * 2):
+            with self.assertRaisesRegex(ValueError, 'locate estimator'):
+                builder.configure_control_response_log(source)
+
     def test_imu_retention_requires_base_retention_before_any_output(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output'

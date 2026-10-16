@@ -11,6 +11,8 @@ import subprocess
 
 
 SOURCES = ('src/modules/logger/logged_topics.cpp', 'src/modules/logger/logger.cpp')
+CONTROL_RESPONSE_TOPICS = ('trajectory_setpoint', 'vehicle_local_position_setpoint',
+                           'vehicle_attitude_setpoint', 'vehicle_rates_setpoint')
 
 
 def sha256(path):
@@ -50,7 +52,17 @@ def link_command(raw, archive, binary):
     return command
 
 
-def build_diagnostic(sdk, build, output, patch, retention=False, imu_replay=False):
+def configure_control_response_log(source):
+    """在估计器回放配置中以 5 ms 间隔记录控制链，保留其他日志配置。"""
+    marker = 'void LoggedTopics::add_estimator_replay_topics()\n{\n'
+    if source.count(marker) != 1:
+        raise ValueError('cannot locate estimator replay logging profile')
+    topics = ''.join(f'\tadd_topic("{name}", 5);\n' for name in CONTROL_RESPONSE_TOPICS)
+    return source.replace(marker, marker + topics)
+
+
+def build_diagnostic(sdk, build, output, patch, retention=False, imu_replay=False,
+                     control_response=False):
     if imu_replay and not retention:
         raise ValueError('IMU replay retention requires visual odometry retention')
     sdk, build, patch = (p.resolve(strict=True) for p in (sdk, build, patch))
@@ -82,6 +94,10 @@ def build_diagnostic(sdk, build, output, patch, retention=False, imu_replay=Fals
     imu_patch = Path(__file__).resolve().parents[1] / 'simulation/px4/imu-replay-log-retention.patch'
     if imu_replay:
         apply_diagnostic_patch(source_root, imu_patch)
+    if control_response:
+        topic_source = source_root / 'src/modules/logger/logged_topics.cpp'
+        topic_source.write_text(configure_control_response_log(topic_source.read_text(encoding='utf-8')),
+                                encoding='utf-8')
     original_archive = build / 'src/modules/logger/libmodules__logger.a'
     archive = output / original_archive.name
     shutil.copy2(original_archive, archive)
@@ -132,6 +148,7 @@ def build_diagnostic(sdk, build, output, patch, retention=False, imu_replay=Fals
         'compile_argv': compile_commands, 'link_argv': link,
         'visual_odometry_retention': retention,
         'imu_replay_retention': imu_replay,
+        'control_response_log': control_response,
     }
     if imu_replay:
         manifest['imu_patch_sha256'] = sha256(imu_patch)
@@ -203,6 +220,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--retain-visual-odometry', action='store_true', help='保留 8 条里程计发布历史供 logger 读取')
     parser.add_argument('--retain-imu-replay', action='store_true', help='为 IMU 和 EKF2 时间索引各保留 16 条发布历史')
+    parser.add_argument('--control-response-log', action='store_true', help='以 5 ms 间隔记录轨迹、位置、姿态和角速度参考')
     parser.add_argument('--check-retention-contract', action='store_true', help='运行基线与候选的原生 uORB 读取测试')
     args = parser.parse_args()
     if args.check_retention_contract and not args.retain_visual_odometry:
@@ -213,7 +231,8 @@ def main():
     patch = Path(__file__).resolve().parents[1] / 'simulation/px4' / name
     manifest = build_diagnostic(args.sdk, args.build_dir or args.sdk / 'build/px4_sitl_default',
                                 args.output, patch, retention=args.retain_visual_odometry,
-                                imu_replay=args.retain_imu_replay)
+                                imu_replay=args.retain_imu_replay,
+                                control_response=args.control_response_log)
     if args.check_retention_contract:
         check_retention_contract(args.sdk.resolve(), Path(manifest['build']), args.output.resolve(), manifest)
         if args.retain_imu_replay:
