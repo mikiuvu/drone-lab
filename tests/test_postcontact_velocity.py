@@ -60,9 +60,16 @@ class PostContactVelocityTests(unittest.TestCase):
         native = {'timestamp':np.array([999999]),'vz':np.array([np.nan])}
         result = recovery.velocity_consistency(ev,native,1000000,1040000)
         self.assertEqual(result['invalid_or_unsupported_samples'],1)
-        self.assertEqual(result['missing_native_samples'],1)
+        self.assertEqual(result['invalid_native_samples'],1)
         self.assertEqual(result['paired_samples'],0)
         self.assertNotIn('absolute_difference_max_mps',result)
+
+    def test_native_validity_flag_excludes_finite_invalid_velocity(self):
+        ev = external([1000000],[[0,0,-2]])
+        native = {'timestamp':np.array([1000000]), 'vz':np.array([-2.]), 'v_z_valid':np.array([False])}
+        result = recovery.velocity_consistency(ev,native,1000000,1040000)
+        self.assertEqual(result['paired_samples'],0)
+        self.assertEqual(result['invalid_native_samples'],1)
 
     def test_missing_topics_are_unavailable_not_zero_error(self):
         result = recovery.velocity_consistency({}, {}, 0, 1000000)

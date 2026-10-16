@@ -45,7 +45,8 @@ def velocity_consistency(ev, local, begin_us, end_us, max_age_us=50000):
     """按外部量测采样时间匹配不晚于它的原生速度，不跨越陈旧数据。"""
     result = {'native_begin_s': begin_us / 1e6, 'native_end_s': end_us / 1e6,
               'max_native_age_ms': max_age_us / 1000, 'paired_samples': 0,
-              'invalid_or_unsupported_samples': 0, 'missing_native_samples': 0}
+              'invalid_or_unsupported_samples': 0, 'missing_native_samples': 0,
+              'invalid_native_samples': 0}
     if not ev or not local:
         result['available'] = False
         return result
@@ -60,8 +61,11 @@ def velocity_consistency(ev, local, begin_us, end_us, max_age_us=50000):
             continue
         stamp = int(ev['timestamp_sample'][index])
         previous = int(np.searchsorted(local['timestamp'], stamp, side='right')) - 1
-        if previous < 0 or stamp - int(local['timestamp'][previous]) > max_age_us or not np.isfinite(local['vz'][previous]):
+        if previous < 0 or stamp - int(local['timestamp'][previous]) > max_age_us:
             result['missing_native_samples'] += 1
+            continue
+        if not np.isfinite(local['vz'][previous]) or ('v_z_valid' in local and not local['v_z_valid'][previous]):
+            result['invalid_native_samples'] += 1
             continue
         differences.append(external + float(local['vz'][previous]))
     result['paired_samples'] = len(differences)
