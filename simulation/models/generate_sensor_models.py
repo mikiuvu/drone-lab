@@ -231,6 +231,9 @@ def generate(args):
         raise ValueError("--dynamics micro cannot use --base-model")
     if mode == "x500" and not args.base_model:
         raise ValueError("--dynamics x500 requires --base-model")
+    imu_rate_hz = getattr(args, "imu_rate_hz", None)
+    if imu_rate_hz is not None and (mode != "micro" or imu_rate_hz not in (250, 1000)):
+        raise ValueError("--imu-rate-hz requires micro dynamics and a rate of 250 or 1000 Hz")
     output = Path(args.output or Path(__file__).parent /
                   ("generated_micro" if mode == "micro" else "generated")).resolve()
     if mode == "micro" and output == (Path(__file__).parent / "generated").resolve():
@@ -320,6 +323,10 @@ def generate(args):
         parameters = {"CA_AIRFRAME": 0, "CA_ROTOR_COUNT": 4,
                       "THR_MDL_FAC": 0.0,
                       "MPC_THR_HOVER": (hover_speed-idle_speed)/(args.max_motor_speed_rad_s-idle_speed)}
+        if imu_rate_hz is not None:
+            # PX4 lockstep requires one integrated publication per raw IMU sample.
+            parameters["IMU_INTEG_RATE"] = imu_rate_hz
+            contract["native_imu_rate_hz"] = imu_rate_hz
         parameters.update({'MC_ROLLRATE_P': 0.025, 'MC_PITCHRATE_P': 0.035, 'MC_YAWRATE_P': 0.1, 'MC_ROLLRATE_I': 0.03, 'MC_PITCHRATE_I': 0.04, 'MC_YAWRATE_I': 0.03, 'MC_ROLLRATE_D': 0.0003, 'MC_PITCHRATE_D': 0.0004, 'MC_YAWRATE_D': 0.0, 'MC_ROLL_P': 4.0, 'MC_PITCH_P': 4.0, 'MC_YAW_P': 2.0})
         parameters["LNDMC_Z_VEL_MAX"] = 0.08
         for rotor_id, (x, y, _, km) in enumerate(micro_rotors):
@@ -434,7 +441,7 @@ def generate(args):
             material = child(visual, "material")
             child(material, "ambient", "0.12 0.14 0.16 1")
             child(material, "diffuse", "0.12 0.14 0.16 1")
-            for sensor_name, sensor_type, hz in (("imu_sensor", "imu", 250),
+            for sensor_name, sensor_type, hz in (("imu_sensor", "imu", imu_rate_hz or 250),
                                                  ("air_pressure_sensor", "air_pressure", 50),
                                                  ("navsat_sensor", "navsat", 30)):
                 sensor = child(base, "sensor", name=sensor_name, type=sensor_type)
@@ -517,6 +524,8 @@ if __name__ == "__main__":
     parser.add_argument("--base-link", default="base_link")
     parser.add_argument("--expected-gz-commit")
     parser.add_argument("--dynamics", choices=("fixture", "x500", "micro"), default="fixture")
+    parser.add_argument("--imu-rate-hz", type=int, choices=(250, 1000),
+                        help="micro native IMU rate; also sets matching PX4 IMU_INTEG_RATE")
     parser.add_argument("--mass-kg", type=float, default=0.18)
     parser.add_argument("--rotor-arm-m", type=float, default=0.025)
     parser.add_argument("--rotor-radius-m", type=float, default=0.016)

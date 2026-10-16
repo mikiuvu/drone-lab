@@ -61,3 +61,32 @@ def test_imported_model_keeps_its_native_noise(tmp_path):
     output = generate(tmp_path, '--base-model', str(source))
     model = ET.parse(output / 'micro_0/model.sdf')
     assert float(model.findtext('.//sensor[@name="imu_sensor"]/imu/linear_acceleration/x/noise/stddev')) == .02
+
+
+@pytest.mark.parametrize('rate', [250, 1000])
+def test_explicit_micro_imu_rate_matches_native_integrator_without_changing_physics(tmp_path, rate):
+    baseline = generate(tmp_path / 'baseline', '--dynamics', 'micro')
+    candidate = generate(tmp_path / 'candidate', '--dynamics', 'micro', '--imu-rate-hz', str(rate))
+    for vehicle in range(2):
+        original = ET.parse(baseline / f'micro_{vehicle}/model.sdf')
+        changed = ET.parse(candidate / f'micro_{vehicle}/model.sdf')
+        sensor = changed.find('.//sensor[@name="imu_sensor"]')
+        assert sensor.findtext('update_rate') == str(rate)
+        sensor.find('update_rate').text = '250'
+        assert ET.tostring(original.getroot()) == ET.tostring(changed.getroot())
+    before = json.loads((baseline / 'sensor_contract.json').read_text(encoding='utf-8'))
+    after = json.loads((candidate / 'sensor_contract.json').read_text(encoding='utf-8'))
+    assert after.pop('native_imu_rate_hz') == rate
+    assert after['px4_parameters'].pop('IMU_INTEG_RATE') == rate
+    assert before == after
+    commands = (candidate / 'px4_micro_reference.params').read_text(encoding='utf-8')
+    assert f'param set IMU_INTEG_RATE {rate}\n' in commands
+
+
+@pytest.mark.parametrize('arguments', [('--dynamics', 'fixture', '--imu-rate-hz', '1000'),
+                                       ('--dynamics', 'micro', '--imu-rate-hz', '0'),
+                                       ('--dynamics', 'micro', '--imu-rate-hz', '500')])
+def test_invalid_or_unapplicable_imu_rate_is_rejected_before_output(tmp_path, arguments):
+    with pytest.raises(subprocess.CalledProcessError):
+        generate(tmp_path, *arguments)
+    assert not (tmp_path / 'generated').exists()
