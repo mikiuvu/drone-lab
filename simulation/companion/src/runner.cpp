@@ -264,6 +264,18 @@ int main(int argc,char**argv){try{
   if(armor_enabled&&std::find(vehicle_ids.begin(),vehicle_ids.end(),o.mission_vehicle)==vehicle_ids.end())throw std::runtime_error("mission explorer is not in fleet");
   const auto team_settings=map_settings.value("team_mission",json::object());
   const bool visual_contact=team_enabled&&team_settings.value("visual_contact",false);
+  const bool static_armor_localization=visual_contact&&team_settings.value("static_armor_localization",false);
+  Eigen::Vector3d static_armor_anchor=Eigen::Vector3d::Zero();
+  if(static_armor_localization) {
+    if(map_settings.value("moving_armor",json::object()).value("motion_profile",std::string{})!="fixed")
+      throw std::runtime_error("static armor localization requires a fixed target");
+    const auto& point=team_settings.at("target");
+    int axis=0;for(const char* name:{"x","y","z"}) {
+      if(!point.at(name).is_number()||!std::isfinite(point.at(name).get<double>()))
+        throw std::runtime_error("static armor localization requires a finite map point");
+      static_armor_anchor(axis++)=point.at(name).get<double>();
+    }
+  }
 #ifndef COMPANION_WITH_OPENCV
   if(visual_contact)throw std::runtime_error("移动装甲视觉任务需要启用 COMPANION_WITH_OPENCV 构建");
 #endif
@@ -368,7 +380,7 @@ int main(int argc,char**argv){try{
   if(dive_enabled){periodic_motion.setHorizonCap(dive_predict_horizon);periodic_motion.setHorizonFraction(dive_predict_fraction);periodic_motion.setMinSpan(dive_learn_span);}
   std::deque<companion::Estimate> pose_history;
   uint64_t visual_pose_stamp=0;
-  struct DelayedPose {uint64_t stamp;Eigen::Vector3d world;bool valid;double error;bool green{false};Eigen::Matrix3d covariance{Eigen::Matrix3d::Zero()};};
+  struct DelayedPose {uint64_t stamp;Eigen::Vector3d world;bool valid;double error;bool green{false};Eigen::Matrix3d covariance{Eigen::Matrix3d::Zero()};Eigen::Vector3d relative_body{Eigen::Vector3d::Zero()};};
   const double vision_delay_ms=team_settings.value("vision_delay_ms",0.0);
   if(!std::isfinite(vision_delay_ms)||vision_delay_ms<0||vision_delay_ms>2000)throw std::runtime_error("vision_delay_ms must be 0..2000");
   companion::VisionDelay<DelayedPose> vision_queue(static_cast<uint64_t>(vision_delay_ms*1000));
@@ -771,11 +783,16 @@ int main(int argc,char**argv){try{
         if(vision_done&&vision_done->stamp!=visual_pose_stamp){
           visual_pose_stamp=vision_done->stamp;
           DelayedPose task{vision_done->stamp,vision_done->world,vision_done->world_valid,
-            vision_done->green?0.0:vision_done->pnp.reprojection_error_px,vision_done->green,vision_done->world_covariance};
+            vision_done->green?0.0:vision_done->pnp.reprojection_error_px,vision_done->green,vision_done->world_covariance,
+            {vision_done->pnp.position_camera_m.z()+.052,-vision_done->pnp.position_camera_m.x(),-vision_done->pnp.position_camera_m.y()}};
           if(vision_done->green_ran)emit({{"kind","green_guide"},{"sim_time_us",task.stamp},{"detected",vision_done->guide.valid},{"accepted",task.green},{"candidates",vision_done->guide.candidates},{"area_px",vision_done->guide.area}});
           vision_queue.submit(task,sim_us);
         }
         if(auto done=vision_queue.poll(sim_us)){
+          if(static_armor_localization&&done->valid&&!done->green) {
+            fusion(estimator.fuseStaticLandmark(done->stamp,static_armor_anchor,
+                done->relative_body,visual_pose_variance),"static_armor",done->stamp);
+          }
           emit({{"kind","vision_service"},{"sim_time_us",done->stamp},{"completed_sim_us",sim_us},{"frame_age_ms",(sim_us-done->stamp)*.001},{"valid",done->valid},{"received",vision_queue.received},{"completed",vision_queue.completed},{"dropped",vision_queue.dropped}});
           const bool accepted=done->valid&&armor_track.observe(done->stamp,done->world,done->covariance);
           if(dive_robust_linear&&accepted&&std::abs(done->world.y()-team_settings.at("target").value("y",0.0))<=dive_aim_lateral_limit+.08)
@@ -1051,7 +1068,8 @@ int main(int argc,char**argv){try{
                 double target_velocity=0;
                 bool linear_valid=false;
                 const bool periodic_valid=predicted.valid&&predicted.confidence>=dive_predict_confidence;
-                if(periodic_valid){lateral=predicted.position.y();target_velocity=predicted.velocity.y();source="periodic";}
+                if(static_armor_localization&&dive_track.measured){linear_valid=true;source="fixed";}
+                else if(periodic_valid){lateral=predicted.position.y();target_velocity=predicted.velocity.y();source="periodic";}
                 else if((dive_robust_linear&&robust)||(!dive_robust_linear&&dive_track.valid)){
                   const double observed_position=robust&&dive_robust_linear?robust->position_m:dive_track.position.y();
                   const double observed_velocity=robust&&dive_robust_linear?robust->velocity_mps:dive_track.velocity.y();

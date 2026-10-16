@@ -71,6 +71,15 @@ class Estimator {
  *       无 IMU 历史时使用状态姿态；速度更新当前状态，不回滚或重放过去的速度。
  */
   FusionReport fuseOpticalFlow(const FlowSample& sample);
+  /** @brief 用已知静态特征的机体系相对位置约束本机位置与航向。
+   * @param stamp_us 独立图像曝光时间，us；允许最多 150 ms 延迟，重复曝光不重复计权。
+   * @param landmark_world_m 特征的地图坐标，m。
+   * @param relative_body_m 特征相对机体中心的 FLU 向量，m，包含相机安装平移。
+   * @param variance_m2 相对位置观测各轴方差，m²；不包含本机位置协方差。
+   * @note 使用曝光姿态和速度回退建立观测模型；不读取飞行位置真值。
+   */
+  FusionReport fuseStaticLandmark(uint64_t stamp_us, const Eigen::Vector3d& landmark_world_m,
+      const Eigen::Vector3d& relative_body_m, double variance_m2);
 /**
  * @brief 结合队友参考与相对距离/方位角更新自身状态。
  * @param sample 指向队友的三维距离和机体系水平角。
@@ -150,6 +159,7 @@ class Estimator {
   uint64_t startup_sim_us_{0};
   uint64_t last_local_tof_us_{0}, last_peer_xy_us_{0};
   uint64_t last_flow_us_{0}, next_reference_seq_{0};
+  uint64_t last_landmark_us_{0};
   int local_tof_rank_{0};
   bool flow_valid_{false};
   // 依次为上一 IMU 航向 rad、基准气压 hPa、基准高度 m、上一辅助高度 m。

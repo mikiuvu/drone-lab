@@ -425,7 +425,8 @@
     "stranded_ground_clearance_m": 0.08,
     "sequential_landing": true,
     "landing_alignment_tolerance_m": 0.025,
-    "vertical_takeoff": true
+    "vertical_takeoff": true,
+    "static_armor_localization": true
   },
   "optical_flow": {
     "enabled": true,

@@ -37,6 +37,7 @@ void Estimator::reset(uint64_t now) {
   // 初始位姿只是滤波器状态初值；在收到有效 XY 来源前不能把它当作定位量测。
   state_.covariance(2,2)=std::max(state_.covariance(2,2),config_.initial_z_sigma_m*config_.initial_z_sigma_m); state_.initialized=true; state_.xy_valid=false; state_.localization_mode="INITIALIZING"; state_.sim_time_us=now;
   assimilated_tof_us_.fill(0);
+  last_landmark_us_=0;
   attitude_begin_=attitude_count_=0;
   last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; local_tof_rank_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
 }
@@ -359,6 +360,42 @@ FusionReport Estimator::fuseOpticalFlow(const FlowSample& sample) {
   update(h,residual,noise);
   last_flow_us_=sample.sim_time_us; flow_valid_=true; state_.flow_valid=true;
   report.accepted=true; report.innovation_norm=residual.norm(); report.reason="optical_flow_velocity";
+  return report;
+}
+
+FusionReport Estimator::fuseStaticLandmark(uint64_t stamp, const Eigen::Vector3d& landmark,
+    const Eigen::Vector3d& relative, double variance) {
+  FusionReport report;
+  if(!stamp||stamp<=last_landmark_us_||!landmark.allFinite()||!relative.allFinite()||
+      !std::isfinite(variance)||variance<=0||relative.norm()<.1||relative.norm()>8) {
+    report.stale=true;report.reason="landmark_invalid_or_duplicate";return report;
+  }
+  advanceTo(stamp);
+  if(!fresh(stamp,150000)){report.stale=true;report.reason="landmark_stale";return report;}
+  const auto delta=attitudeDelta(stamp);
+  if(!delta){report.stale=true;report.reason="landmark_attitude_history_missing";return report;}
+  last_landmark_us_=stamp;
+  const double age=(state_.sim_time_us-stamp)*1e-6;
+  const Eigen::Matrix3d r=rotation(state_.pose.roll_rad,state_.pose.pitch_rad,state_.pose.yaw_rad)*(*delta);
+  const Eigen::Vector3d displacement=landmark-Eigen::Vector3d(state_.pose.x_m,state_.pose.y_m,state_.pose.z_m)
+      +state_.velocity_enu_mps*age;
+  const Eigen::Vector3d residual=relative-r.transpose()*displacement;
+  Eigen::Matrix<double,3,7> h=Eigen::Matrix<double,3,7>::Zero();
+  h.block<3,3>(0,0)=-r.transpose();
+  h.block<3,3>(0,4)=age*r.transpose();
+  h.col(3)=r.transpose()*Eigen::Vector3d(displacement.y(),-displacement.x(),0);
+  // 速度回退期间的额外位置噪声取 σ=1.5*age² m，计入未建模加速度的影响。
+  const Eigen::Matrix3d noise=Eigen::Matrix3d::Identity()*(variance+2.25*std::pow(age,4));
+  const Eigen::Matrix3d innovation=h*state_.covariance*h.transpose()+noise;
+  const double mahalanobis=residual.dot(innovation.ldlt().solve(residual));
+  if(!std::isfinite(mahalanobis)||mahalanobis>11.35||residual.norm()>1) {
+    report.gated=true;report.reason="landmark_innovation_gated";return report;
+  }
+  update(h,residual,noise);
+  last_absolute_us_=stamp;
+  state_.reference_origin=config_.vehicle_id;state_.reference_seq=++next_reference_seq_;
+  state_.reference_time_us=stamp;state_.reference_hops=0;state_.reference_path={config_.vehicle_id};
+  report.accepted=true;report.innovation_norm=residual.norm();report.reason="static_visual_landmark";
   return report;
 }
 
