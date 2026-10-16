@@ -16,12 +16,14 @@
   "original_cad_clearance": {
     "passed": true,
     "scope": "static_mesh_clearance",
-    "checked_transit_segments": 24
+    "checked_transit_segments": 24,
+    "departure_order_rechecked": true
   },
   "simulation_mesh_clearance": {
     "passed": true,
     "scope": "static_mesh_clearance",
-    "checked_transit_segments": 24
+    "checked_transit_segments": 24,
+    "departure_order_rechecked": true
   },
   "pressure_surface": {
     "original_cad_faces_identical": true
@@ -202,5 +204,444 @@
       "manager_stopped": true,
       "alive": []
     }
+  },
+  "ordered_departure_trial": {
+    "run": "run_20261016_174047",
+    "complete": false,
+    "aborted": true,
+    "completed": [
+      0,
+      1,
+      2
+    ],
+    "skipped": [
+      3
+    ],
+    "reason": "降落阶段超时，等待着地停机反馈",
+    "qualified_pressure_vehicles": [
+      0,
+      1,
+      2
+    ],
+    "pressure_events": [
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 0,
+        "sim_time_us": 19853000,
+        "sequence": 1,
+        "pressed": true,
+        "qualified": false,
+        "force_n": 36.174,
+        "contact_s": 0.194,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 0,
+        "sim_time_us": 20117000,
+        "sequence": 2,
+        "pressed": true,
+        "qualified": false,
+        "force_n": 21.1036,
+        "contact_s": 0.241,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 0,
+        "sim_time_us": 24391000,
+        "sequence": 3,
+        "pressed": true,
+        "qualified": true,
+        "force_n": 403.5862,
+        "contact_s": 0.0,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 1,
+        "sim_time_us": 42804000,
+        "sequence": 1,
+        "pressed": true,
+        "qualified": true,
+        "force_n": 409.8989,
+        "contact_s": 0.0,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 2,
+        "sim_time_us": 52722000,
+        "sequence": 1,
+        "pressed": true,
+        "qualified": false,
+        "force_n": 18.9517,
+        "contact_s": 0.338,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 2,
+        "sim_time_us": 59757000,
+        "sequence": 2,
+        "pressed": true,
+        "qualified": true,
+        "force_n": 471.6509,
+        "contact_s": 0.0,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      }
+    ],
+    "phases": [
+      {
+        "time_s": 0.0,
+        "phase": "WAIT_READY",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 3.641,
+        "phase": "TAKEOFF",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 7.581,
+        "phase": "TRANSIT",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 13.581,
+        "phase": "ASSEMBLE",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 15.301,
+        "phase": "APPROACH",
+        "active_vehicle": 0
+      },
+      {
+        "time_s": 18.801,
+        "phase": "CONTACT",
+        "active_vehicle": 0
+      },
+      {
+        "time_s": 24.421,
+        "phase": "RETREAT",
+        "active_vehicle": 0
+      },
+      {
+        "time_s": 28.381,
+        "phase": "APPROACH",
+        "active_vehicle": 1
+      },
+      {
+        "time_s": 32.581,
+        "phase": "CONTACT",
+        "active_vehicle": 1
+      },
+      {
+        "time_s": 42.801,
+        "phase": "RETREAT",
+        "active_vehicle": 1
+      },
+      {
+        "time_s": 46.861,
+        "phase": "APPROACH",
+        "active_vehicle": 2
+      },
+      {
+        "time_s": 51.241,
+        "phase": "CONTACT",
+        "active_vehicle": 2
+      },
+      {
+        "time_s": 59.781,
+        "phase": "RETREAT",
+        "active_vehicle": 2
+      },
+      {
+        "time_s": 64.001,
+        "phase": "APPROACH",
+        "active_vehicle": 3
+      },
+      {
+        "time_s": 68.441,
+        "phase": "CONTACT",
+        "active_vehicle": 3
+      },
+      {
+        "time_s": 80.461,
+        "phase": "RETURN_ALL",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 93.801,
+        "phase": "LAND_ALL",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 133.901,
+        "phase": "ABORTED",
+        "active_vehicle": -1
+      }
+    ],
+    "drone_contact_samples_before_landing": 6,
+    "drone_contact_samples_before_assembly": 0,
+    "drone_contact_samples_total": 51,
+    "all_native_disarmed": true,
+    "final_truth_positions_m": {
+      "0": [
+        -1.0436465358238225,
+        -1.181709481804806,
+        1.6169964661045464
+      ],
+      "1": [
+        -0.8468274104283225,
+        -1.705680840009085,
+        0.2713406813648565
+      ],
+      "2": [
+        -0.9436891967047636,
+        -1.1526340333610934,
+        1.616810354897668
+      ],
+      "3": [
+        -0.684046265628607,
+        -1.8890433502406119,
+        0.26653902377405086
+      ]
+    },
+    "unrecoverable_events": [],
+    "sequential_landing": false,
+    "vertical_takeoff": false
+  },
+  "staged_landing_trial": {
+    "run": "run_20261016_175753",
+    "complete": false,
+    "aborted": true,
+    "completed": [
+      0,
+      2
+    ],
+    "skipped": [
+      1,
+      2,
+      3
+    ],
+    "reason": "降落阶段超时，等待着地停机反馈",
+    "qualified_pressure_vehicles": [
+      0,
+      2
+    ],
+    "pressure_events": [
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 0,
+        "sim_time_us": 19919000,
+        "sequence": 1,
+        "pressed": true,
+        "qualified": false,
+        "force_n": 47.6126,
+        "contact_s": 0.202,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 0,
+        "sim_time_us": 24813000,
+        "sequence": 2,
+        "pressed": true,
+        "qualified": true,
+        "force_n": 406.5085,
+        "contact_s": 0.0,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 2,
+        "sim_time_us": 51599000,
+        "sequence": 1,
+        "pressed": true,
+        "qualified": false,
+        "force_n": 13.3829,
+        "contact_s": 0.42,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      },
+      {
+        "schema": 1,
+        "kind": "armor_pressure",
+        "vehicle": 2,
+        "sim_time_us": 54954000,
+        "sequence": 2,
+        "pressed": true,
+        "qualified": true,
+        "force_n": 373.49,
+        "contact_s": 0.0,
+        "source": "SIM_ARMOR_PRESSURE_SENSOR"
+      }
+    ],
+    "phases": [
+      {
+        "time_s": 0.0,
+        "phase": "WAIT_READY",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 3.761,
+        "phase": "TAKEOFF",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 7.721,
+        "phase": "TRANSIT",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 13.741,
+        "phase": "ASSEMBLE",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 15.321,
+        "phase": "APPROACH",
+        "active_vehicle": 0
+      },
+      {
+        "time_s": 18.861,
+        "phase": "CONTACT",
+        "active_vehicle": 0
+      },
+      {
+        "time_s": 24.801,
+        "phase": "RETREAT",
+        "active_vehicle": 0
+      },
+      {
+        "time_s": 29.341,
+        "phase": "APPROACH",
+        "active_vehicle": 1
+      },
+      {
+        "time_s": 33.981,
+        "phase": "CONTACT",
+        "active_vehicle": 1
+      },
+      {
+        "time_s": 46.001,
+        "phase": "APPROACH",
+        "active_vehicle": 2
+      },
+      {
+        "time_s": 50.201,
+        "phase": "CONTACT",
+        "active_vehicle": 2
+      },
+      {
+        "time_s": 54.981,
+        "phase": "RETREAT",
+        "active_vehicle": 2
+      },
+      {
+        "time_s": 55.721,
+        "phase": "APPROACH",
+        "active_vehicle": 3
+      },
+      {
+        "time_s": 60.121,
+        "phase": "CONTACT",
+        "active_vehicle": 3
+      },
+      {
+        "time_s": 61.621,
+        "phase": "RETURN_ALL",
+        "active_vehicle": -1
+      },
+      {
+        "time_s": 70.601,
+        "phase": "LAND_ALL",
+        "active_vehicle": -1
+      }
+    ],
+    "drone_contact_samples_before_landing": 10,
+    "drone_contact_samples_before_assembly": 0,
+    "drone_contact_samples_total": 10,
+    "all_native_disarmed": true,
+    "final_truth_positions_m": {
+      "0": [
+        -1.787312988624592,
+        0.07099543016706714,
+        0.41699948310213325
+      ],
+      "1": [
+        -2.811730512106835,
+        -2.32696110081963,
+        0.2550688651502473
+      ],
+      "2": [
+        11.198210667337667,
+        -0.08266912699340423,
+        0.33937646795592236
+      ],
+      "3": [
+        11.24236684427803,
+        -0.254099196509025,
+        0.5323152494307156
+      ]
+    },
+    "unrecoverable_events": [
+      {
+        "attitude_boot_time_us": 55684000,
+        "attitude_inverted_latched": true,
+        "heartbeat_gap_latched": false,
+        "kind": "unrecoverable",
+        "native_failsafe_latched": false,
+        "phase": "HOLD",
+        "reason": "ATTITUDE_INVERTED",
+        "setpoint_gap_latched": false,
+        "sim_time_us": 55681000,
+        "source": "ESTIMATE",
+        "vehicle": 2
+      },
+      {
+        "attitude_boot_time_us": 61588000,
+        "attitude_inverted_latched": true,
+        "heartbeat_gap_latched": false,
+        "kind": "unrecoverable",
+        "native_failsafe_latched": false,
+        "phase": "HOLD",
+        "reason": "ATTITUDE_INVERTED",
+        "setpoint_gap_latched": false,
+        "sim_time_us": 61581000,
+        "source": "ESTIMATE",
+        "vehicle": 3
+      }
+    ],
+    "sequential_landing": true,
+    "vertical_takeoff": true,
+    "shutdown": {
+      "run": "run_20261016_175753",
+      "manager_stopped": true,
+      "alive": []
+    }
+  },
+  "formation_separation": {
+    "scope": "synchronous_linear_transit",
+    "height_m": 2.3,
+    "body_diameter_m": 0.104,
+    "minimum_distance_m": 0.14000007160712447,
+    "passed": true,
+    "checked_pair_segments": 36
+  },
+  "native_regressions": {
+    "passed": 20,
+    "flight_feedback_io_cases": 20,
+    "team_mission_includes_sequential_landing": true
   }
 }
