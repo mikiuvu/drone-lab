@@ -201,6 +201,7 @@ std::optional<Eigen::Matrix3d> Estimator::attitudeDelta(uint64_t stamp) const {
 
 FusionReport Estimator::fuseTof(const TofFrame& frame,bool bounded_recovery) {
   FusionReport report;
+  report.bounded_recovery_requested=bounded_recovery;
   if(!bounded_recovery)terrain_recovery_since_us_=terrain_recovery_last_us_=0;
   if(frame.sensor_index<0 || frame.sensor_index>=3 || !frame.sim_time_us ||
      frame.sim_time_us<=last_tof_us_[frame.sensor_index]) {
@@ -292,14 +293,17 @@ FusionReport Estimator::fuseTof(const TofFrame& frame,bool bounded_recovery) {
   }
   // 3. 残差 RMS 和位姿信任域共同检查匹配可信度，避免错误表面关联引起大幅跳变。
   Eigen::Vector3d shift(working.x_m-prior.x_m,working.y_m-prior.y_m,wrapAngle(working.yaw_rad-prior.yaw_rad));
+  report.fit_rank=rank;report.fit_translation_m=shift.head<2>().norm();report.fit_yaw_rad=shift.z();
   if (!std::isfinite(sum_squared) || count < 1 || std::sqrt(sum_squared/count) > (config_.terrain ? config_.terrain_plane_gate_m : 0.20)) {
     report.gated=true; report.degenerate=true; report.reason="tof_residual_gate"; return report;
   }
   bool recovering=false;
   if(config_.terrain && (shift.head<2>().norm()>config_.terrain_max_translation_update_m || std::abs(shift.z())>config_.terrain_max_yaw_update_rad)) {
     report.gated=true;report.degenerate=true;report.reason="terrain_update_trust_region";
-    if(!bounded_recovery||rank<3||count<24||shift.head<2>().norm()>2*config_.terrain_max_translation_update_m||
-        std::abs(shift.z())>config_.terrain_max_yaw_update_rad)return report;
+    if(!bounded_recovery){report.recovery_gate="disabled";return report;}
+    if(rank<3||count<24){report.recovery_gate="candidate_geometry";return report;}
+    if(shift.head<2>().norm()>2*config_.terrain_max_translation_update_m){report.recovery_gate="candidate_translation";return report;}
+    if(std::abs(shift.z())>config_.terrain_max_yaw_update_rad){report.recovery_gate="candidate_yaw";return report;}
     const Pose3 candidate=working;
     const int candidate_count=count;
     // 每次实际融合仍限制在原信任域内，并在截断位置重新建立对应面、残差和信息矩阵。
@@ -307,15 +311,16 @@ FusionReport Estimator::fuseTof(const TofFrame& frame,bool bounded_recovery) {
     working.x_m=prior.x_m+shift.x();working.y_m=prior.y_m+shift.y();
     working.yaw_rad=wrapAngle(prior.yaw_rad+shift.z());
     Eigen::Vector3d step;
-    if(!linearize(step))return report;
-    if(rank<3||count<24||count*5<candidate_count*4||std::sqrt(sum_squared/count)>config_.tof_sigma_m)return report;
+    if(!linearize(step)){report.recovery_gate="clipped_linearization";return report;}
+    if(rank<3||count<24||count*5<candidate_count*4){report.recovery_gate="clipped_geometry";return report;}
+    if(std::sqrt(sum_squared/count)>config_.tof_sigma_m){report.recovery_gate="clipped_residual";return report;}
     const bool consistent=terrain_recovery_since_us_&&frame.sim_time_us>terrain_recovery_last_us_&&
         frame.sim_time_us-terrain_recovery_last_us_<=config_.tof_timeout_us&&
         std::hypot(candidate.x_m-terrain_recovery_candidate_.x_m,candidate.y_m-terrain_recovery_candidate_.y_m)<.03&&
         std::abs(wrapAngle(candidate.yaw_rad-terrain_recovery_candidate_.yaw_rad))<.03;
     if(!consistent)terrain_recovery_since_us_=frame.sim_time_us;
     terrain_recovery_candidate_=candidate;terrain_recovery_last_us_=frame.sim_time_us;
-    if(frame.sim_time_us-terrain_recovery_since_us_<50000){confirmation.keep=true;report.reason="terrain_recovery_pending";return report;}
+    if(frame.sim_time_us-terrain_recovery_since_us_<50000){confirmation.keep=true;report.recovery_gate="confirmation";report.reason="terrain_recovery_pending";return report;}
     recovering=true;report.gated=false;report.degenerate=false;
     terrain_recovery_since_us_=terrain_recovery_last_us_=0;
   }
@@ -346,7 +351,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame,bool bounded_recovery) {
         (h*state_.covariance*h.transpose()+noise).ldlt().solve(residual);
     if(!correction.allFinite()||correction.head<2>().norm()>config_.terrain_max_translation_update_m||
         std::abs(correction(3))>config_.terrain_max_yaw_update_rad) {
-      report.gated=true;report.reason="terrain_recovery_filter_step_gated";return report;
+      report.gated=true;report.recovery_gate="filter_step";report.reason="terrain_recovery_filter_step_gated";return report;
     }
   }
   update(h,residual,noise);state_.degenerate_geometry=rank<3;

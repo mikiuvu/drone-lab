@@ -240,6 +240,11 @@ struct FusionReport {
   bool degenerate{false};
   int inliers{0};
   double innovation_norm{0.0}; // ToF 为残差 RMS m；其他来源按实现报告，UWB 混合距离与角度
+  int fit_rank{0}; // ToF 最后一次匹配的 [x,y,yaw] 信息秩
+  double fit_translation_m{0.0}; // 截断前的 XY 匹配修正量
+  double fit_yaw_rad{0.0}; // 截断前的有符号航向匹配修正量
+  bool bounded_recovery_requested{false};
+  std::string recovery_gate;
   std::string reason;
 };
 

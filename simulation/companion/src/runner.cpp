@@ -471,7 +471,16 @@ int main(int argc,char**argv){try{
   auto start=Clock::now(),last_publish=start,last_heartbeat=start,last_command=start;bool intervals_requested=false;std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
   auto next_camera_request=start+std::chrono::milliseconds(14);
   uint64_t camera_request_attempt_wall_us=0;
-  auto fusion=[&](const companion::FusionReport&r,const char*kind,uint64_t stamp){emit({{"kind","fusion"},{"sensor_kind",kind},{"sim_time_us",stamp},{"accepted",r.accepted},{"gated",r.gated},{"stale",r.stale},{"degenerate",r.degenerate},{"inliers",r.inliers},{"reason",r.reason}});};
+  auto fusion=[&](const companion::FusionReport&r,const char*kind,uint64_t stamp){
+    json entry={{"kind","fusion"},{"sensor_kind",kind},{"sim_time_us",stamp},{"accepted",r.accepted},
+        {"gated",r.gated},{"stale",r.stale},{"degenerate",r.degenerate},{"inliers",r.inliers},{"reason",r.reason}};
+    if(std::string(kind)=="tof"){
+      entry["residual_rms_m"]=r.innovation_norm;entry["fit_rank"]=r.fit_rank;
+      entry["fit_translation_m"]=r.fit_translation_m;entry["fit_yaw_rad"]=r.fit_yaw_rad;
+      entry["bounded_recovery_requested"]=r.bounded_recovery_requested;entry["recovery_gate"]=r.recovery_gate;
+    }
+    emit(entry);
+  };
   // 单线程轮询：各通道每轮限制包数，避免繁忙通道使其他输入长期得不到处理。
   while(running && (o.duration==0||age(start)<o.duration)){
     auto flight=native_feedback.state(Clock::now());

@@ -32,9 +32,13 @@ void requiresIndependentConsistentExposuresAndKeepsStepBound() {
   const auto frame=frameAt(c,actual,1000000);
   Estimator strict(c);const auto rejected=strict.fuseTof(frame);
   assert(!rejected.accepted&&rejected.reason=="terrain_update_trust_region");
+  assert(!rejected.bounded_recovery_requested&&rejected.recovery_gate=="disabled");
+  assert(rejected.fit_rank==3&&std::abs(rejected.fit_translation_m-.16)<1e-4);
+  assert(std::abs(rejected.fit_yaw_rad)<1e-4);
   Estimator estimator(c);
   const auto pending=estimator.fuseTof(frame,true);
   assert(!pending.accepted&&pending.reason=="terrain_recovery_pending");
+  assert(pending.bounded_recovery_requested&&pending.recovery_gate=="confirmation");
   const auto before=estimator.estimate();
   assert(before.pose.x_m==c.initial_pose.x_m&&before.pose.y_m==c.initial_pose.y_m);
   assert(!estimator.fuseTof(frame,true).accepted);
