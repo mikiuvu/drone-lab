@@ -1,0 +1,4 @@
+cadquery-ocp==8.0.1.1.0
+fast-simplification==0.2.0
+scipy==1.18.1
+rtree==1.4.1

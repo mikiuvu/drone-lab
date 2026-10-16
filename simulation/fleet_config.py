@@ -18,6 +18,12 @@ def configure_fleet(config, vehicle_count=None, enable_anchors=None):
     count = len(spawns) if vehicle_count is None else vehicle_count
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError("vehicle_count must be a positive integer")
+    capacity = result.get("max_vehicle_count")
+    if capacity is not None:
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+            raise ValueError("max_vehicle_count must be a positive integer")
+        if count > capacity:
+            raise ValueError(f"Map supports at most {capacity} vehicles")
     if count != len(spawns):
         original = list(spawns)
         if count <= len(spawns):

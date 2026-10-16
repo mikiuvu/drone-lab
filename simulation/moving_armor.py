@@ -28,9 +28,11 @@ def add_moving_armor(world, config, output=None, source=None):
     if prepared:
         output = Path(source).resolve().parent / "moving"
         report = json.loads((output / "partition.json").read_text(encoding="utf-8"))
+        digest = hashlib.sha256()
         with Path(source).open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        if digest != report["static_sha256"]:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != report["static_sha256"]:
             raise ValueError("CAD 装甲分组与静态地图版本不一致")
     else:
         report = partition(source, output)

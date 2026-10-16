@@ -26,16 +26,16 @@ def test_invalid_frame_rejected(matrix):
 @pytest.mark.parametrize('healing', [True, False])
 def test_step_nested_instances_match_kernel_bounds(tmp_path, healing):
     pytest.importorskip('OCP')
-    from OCP.TDocStd import TDocStd_Document
-    from OCP.TCollection import TCollection_ExtendedString
-    from OCP.XCAFDoc import XCAFDoc_DocumentTool, XCAFDoc_ColorSurf
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-    from OCP.TopLoc import TopLoc_Location
-    from OCP.gp import gp_Trsf, gp_Vec, gp_Ax1, gp_Pnt, gp_Dir
-    from OCP.STEPCAFControl import STEPCAFControl_Writer
-    from OCP.STEPControl import STEPControl_AsIs
+    from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
+    from OCP.STEPCAFControl import STEPCAFControl_Writer
+    from OCP.STEPControl import STEPControl_AsIs
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.XCAFDoc import XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
     doc = TDocStd_Document(TCollection_ExtendedString('BinXCAF'))
     tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
     part = tool.AddShape(BRepPrimAPI_MakeBox(20, 30, 40).Shape(), False)

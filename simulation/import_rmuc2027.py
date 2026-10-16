@@ -1,6 +1,7 @@
 """从 RMUC 2027 STEP 装配体生成 Gazebo 场地与定位三角网格。"""
 
 import argparse
+import hashlib
 import json
 import struct
 import xml.etree.ElementTree as ET
@@ -100,12 +101,12 @@ def export_scene(triangles, part_ids, parts, config, output):
     bounds = config['bounds']
     x, y, z = height_grid(triangles[prior], step=.1, bounds=[bounds[k] for k in ('x_min', 'x_max', 'y_min', 'y_max')])
     np.savez_compressed(output / 'terrain_height_grid.npz', x=x, y=y, z=z)
-    return dict(original_triangle_count=len(triangles), retained_triangle_count=int(kept.sum()),
-                static_triangle_count=int(prior.sum()), terrain_mesh_triangle_count=int(fixed.sum()),
-                target_triangle_count=int(moving.sum()), moving_triangle_count=0 if stationary else int(moving.sum()),
-                excluded_triangle_count=int((~kept).sum()), visual_material_count=visual_count,
-                world_bounds_m=[triangles[kept].min(axis=(0, 1)).tolist(), triangles[kept].max(axis=(0, 1)).tolist()],
-                derived_sha256=sha256(output / 'terrain.stl'), static_sha256=sha256(output / 'terrain_triangles.f32'))
+    return {'mesh_triangle_count': len(triangles), 'retained_triangle_count': int(kept.sum()),
+                'static_triangle_count': int(prior.sum()), 'terrain_mesh_triangle_count': int(fixed.sum()),
+                'target_triangle_count': int(moving.sum()), 'moving_triangle_count': 0 if stationary else int(moving.sum()),
+                'excluded_triangle_count': int((~kept).sum()), 'visual_material_count': visual_count,
+                'world_bounds_m': [triangles[kept].min(axis=(0, 1)).tolist(), triangles[kept].max(axis=(0, 1)).tolist()],
+                'derived_sha256': sha256(output / 'terrain.stl'), 'static_sha256': sha256(output / 'terrain_triangles.f32')}
 
 
 def export_armor(triangles, part_ids, moving, config, output):
@@ -138,12 +139,12 @@ def export_armor(triangles, part_ids, moving, config, output):
                         ('armor_hit_surface', triangles[panel]), ('carriage_housing', triangles[moving & ~panel])]:
         if len(faces):
             write_stl(folder / f'{name}.stl', faces)
-    report = dict(source_faces=len(triangles), fixed_faces=int((~moving).sum()), moving_faces=int(moving.sum()),
-                  target_center_m=spec['center_m'], moving_bounds_m=[triangles[moving].min(axis=(0, 1)).tolist(), triangles[moving].max(axis=(0, 1)).tolist()],
-                  target_type=config['moving_armor']['target_type'], max_half_travel_m=spec.get('max_half_travel_m', 0),
-                  static_sha256=sha256(output / 'terrain_triangles.f32'),
-                  zero_pose_geometry_identical=True,
-                  material_faces=dict(body=len(body), blue=len(blue), green=len(green)))
+    report = {'source_faces': len(triangles), 'fixed_faces': int((~moving).sum()), 'moving_faces': int(moving.sum()),
+                  'target_center_m': spec['center_m'], 'moving_bounds_m': [triangles[moving].min(axis=(0, 1)).tolist(), triangles[moving].max(axis=(0, 1)).tolist()],
+                  'target_type': config['moving_armor']['target_type'], 'max_half_travel_m': spec.get('max_half_travel_m', 0),
+                  'static_sha256': sha256(output / 'terrain_triangles.f32'),
+                  'zero_pose_geometry_identical': True,
+                  'material_faces': {'body': len(body), 'blue': len(blue), 'green': len(green)}}
     (folder / 'partition.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
@@ -181,9 +182,28 @@ def main():
     with np.load(args.cache / 'cad_mesh.npz', allow_pickle=False) as data:
         triangles = transform_triangles(data['triangles_mm'], spec['world_from_cad_m'])
         part_ids = data['part_ids']
+    simplification = None
+    if 'simplification' in spec:
+        try:
+            from simulation.mesh_simplify import simplify_field
+        except ModuleNotFoundError:
+            from mesh_simplify import simplify_field
+        key = hashlib.sha256(json.dumps({k: spec[k] for k in
+            ('source_sha256', 'deflection_m', 'world_from_cad_m', 'target_bounds_m', 'moving_part_ids', 'simplification')}, sort_keys=True).encode('utf-8')).hexdigest()
+        manifest_path = args.cache / 'world_mesh_manifest.json'
+        cached = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else {}
+        if cached.get('signature') == key and (args.cache / 'world_mesh.npz').exists():
+            with np.load(args.cache / 'world_mesh.npz', allow_pickle=False) as data:
+                triangles, part_ids = data['triangles'], data['part_ids']
+            simplification = cached['simplification']
+        else:
+            triangles, part_ids, simplification = simplify_field(triangles, part_ids, spec)
+            np.savez_compressed(args.cache / 'world_mesh.npz', triangles=triangles, part_ids=part_ids)
+            manifest_path.write_text(json.dumps({'signature': key, 'simplification': simplification}, indent=2), encoding='utf-8')
     output = (args.map.parent / config['terrain_triangles_file']).resolve().parent
     metadata = export_scene(triangles, part_ids, parts, config, output)
-    metadata.update(season=2027, version=config['version'], source_asset=spec['source_file'],
+    metadata.update(season=2027, version=config['version'], source_triangle_count=cache_manifest['triangle_count'],
+                    simplification=simplification, source_asset=spec['source_file'],
                     source_sha256=spec['source_sha256'], occt_transfer_unit='mm',
                     world_from_cad_m=spec['world_from_cad_m'], deflection_m=spec['deflection_m'], healing=spec.get('healing', True),
                     excluded_part_ids=spec.get('excluded_part_ids', []), moving_part_ids=spec.get('moving_part_ids', []),

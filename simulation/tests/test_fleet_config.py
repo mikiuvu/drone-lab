@@ -53,3 +53,10 @@ def test_explicit_anchor_positions_preserved():
 def test_invalid_cardinality_rejected(count):
     with pytest.raises(ValueError):
         configure_fleet({"spawns": [{"id": 0, "x": 0, "y": 0, "z": 0.5}]}, count)
+
+
+def test_map_hangar_capacity_rejects_extra_vehicles():
+    config = {"max_vehicle_count": 1, "spawns": [{"id": 0, "x": 0, "y": 0, "z": 1.6}]}
+    with pytest.raises(ValueError, match="at most 1"):
+        configure_fleet(config, 2)
+    assert len(configure_fleet(config)["spawns"]) == 1

@@ -8,32 +8,35 @@ import numpy as np
 
 
 def sha256(path):
+    digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def extract_step(source, output, deflection_m=0.003, healing=True):
     """输出毫米制 CAD 网格及部件目录；实例位置由装配树逐层相乘。"""
-    from OCP.STEPCAFControl import STEPCAFControl_Reader
     from OCP.IFSelect import IFSelect_RetDone
-    from OCP.TDocStd import TDocStd_Document
+    from OCP.STEPCAFControl import STEPCAFControl_Reader
     from OCP.TCollection import TCollection_ExtendedString
-    from OCP.XCAFDoc import (XCAFDoc_DocumentTool, XCAFDoc_ColorSurf, XCAFDoc_ColorGen)
     from OCP.TDF import TDF_Label
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.XCAFDoc import XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
     try:
         from OCP.TDF import TDF_LabelSequence
     except ImportError:
         from OCP.collections import Sequence_TDF_Label as TDF_LabelSequence
-    from OCP.TDataStd import TDataStd_Name
-    from OCP.TopLoc import TopLoc_Location
-    from OCP.TopExp import TopExp_Explorer
-    from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
-    from OCP.TopoDS import TopoDS
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.Bnd import Bnd_Box
+    from OCP.BRep import BRep_Tool
     from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.Quantity import Quantity_Color
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
 
     if not np.isfinite(deflection_m) or deflection_m <= 0:
         raise ValueError('CAD deflection must be finite and positive')
@@ -46,7 +49,9 @@ def extract_step(source, output, deflection_m=0.003, healing=True):
     # OCCT 的转移单位显式设为 mm，与 STEP 文件自己的单位声明分别处理。
     reader.Reader().SetSystemLengthUnit(1.0)
     if not healing:
-        from OCP.collections import DataMap_TCollection_AsciiString_TCollection_AsciiString
+        from OCP.collections import (
+            DataMap_TCollection_AsciiString_TCollection_AsciiString,
+        )
         from OCP.TCollection import TCollection_AsciiString
         parameters = DataMap_TCollection_AsciiString_TCollection_AsciiString()
         for mode in ('FixFreeShellMode', 'FixFreeFaceMode', 'FixFreeWireMode', 'FixSolidMode', 'FixSameParameterMode'):
@@ -92,7 +97,7 @@ def extract_step(source, output, deflection_m=0.003, healing=True):
             color = Quantity_Color()
             found = any(colors.GetColor_s(label, kind, color) for kind in (XCAFDoc_ColorSurf, XCAFDoc_ColorGen))
             rgb = [color.Red(), color.Green(), color.Blue()] if found else [.55, .60, .62]
-            parts.append(dict(id=len(parts), path=path, bounds_mm=bounds(shape), rgb=rgb))
+            parts.append({'id': len(parts), 'path': path, 'bounds_mm': bounds(shape), 'rgb': rgb})
             shapes.append(shape)
 
     for i in range(1, roots.Length() + 1):
@@ -133,8 +138,8 @@ def extract_step(source, output, deflection_m=0.003, healing=True):
     output.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output / 'cad_mesh.npz', triangles_mm=np.concatenate(chunks), part_ids=np.concatenate(ids))
     (output / 'parts.json').write_text(json.dumps(parts, ensure_ascii=False, indent=2), encoding='utf-8')
-    manifest = dict(source_sha256=sha256(source), deflection_m=deflection_m, healing=healing,
-                    occt_transfer_unit='mm', part_count=len(parts), triangle_count=sum(map(len, chunks)))
+    manifest = {'source_sha256': sha256(source), 'deflection_m': deflection_m, 'healing': healing,
+                    'occt_transfer_unit': 'mm', 'part_count': len(parts), 'triangle_count': sum(map(len, chunks))}
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     return manifest
 

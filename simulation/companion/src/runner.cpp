@@ -395,6 +395,11 @@ int main(int argc,char**argv){try{
   // 持续时间过滤碰撞时短暂的着地标志，避免把接触后的反弹判为无法继续任务。
   const double stranded_s=team_settings.value("stranded_s",1.0);
   if(!std::isfinite(stranded_s)||stranded_s<.2||stranded_s>10.0)throw std::runtime_error("invalid team_mission.stranded_s");
+  const std::string stranded_ground_source=team_settings.value("stranded_ground_source",std::string("home"));
+  if(stranded_ground_source!="home"&&stranded_ground_source!="terrain")throw std::runtime_error("invalid team_mission.stranded_ground_source");
+  if(stranded_ground_source=="terrain"&&!config.terrain)throw std::runtime_error("terrain ground detection requires a terrain map");
+  const double stranded_ground_clearance=team_settings.value("stranded_ground_clearance_m",.15);
+  if(!std::isfinite(stranded_ground_clearance)||stranded_ground_clearance<0||stranded_ground_clearance>.5)throw std::runtime_error("invalid team_mission.stranded_ground_clearance_m");
   // 「该走却不动」的门限：目标点距离超过 pinned_range_m、水平速度低于 pinned_speed_mps
   // 并持续 stranded_s，就认定这架机推不动了。距离门限取在返航路线容差（0.5 m）之上，
   // 免得机体在航点附近正常收敛时被误判。
@@ -875,7 +880,13 @@ int main(int argc,char**argv){try{
         if(command_fresh){
           const std::string phase_now=team_command.value("phase","");
           const bool airborne_phase=phase_now=="TRANSIT"||phase_now=="ASSEMBLE"||phase_now=="APPROACH"||phase_now=="CONTACT"||phase_now=="RETREAT"||phase_now=="RETURN_ALL"||phase_now=="ABORT_RETURN";
-          const double ground_ceiling=team_settings.value("home_ground_z_m",.5)+team_settings.value("body_clearance_m",.016)+.15;
+          double support_z=team_settings.value("home_ground_z_m",.5);
+          if(stranded_ground_source=="terrain"){
+            support_z=config.floor_z_m;
+            companion::TerrainMap::Hit ground;
+            if(e.xy_valid&&e.z_valid&&config.terrain->raycast({e.pose.x_m,e.pose.y_m,e.pose.z_m},{0,0,-1},20,ground))support_z=ground.point.z();
+          }
+          const double ground_ceiling=support_z+team_settings.value("body_clearance_m",.016)+stranded_ground_clearance;
           // 估计高度补充飞控着地标志，以覆盖机体压在结构件上的情况。
           const bool down=flight.landed||(e.z_valid&&e.pose.z_m<ground_ceiling);
           // 目标仍远而水平速度持续接近零，覆盖高于地面门限的结构卡住情况。

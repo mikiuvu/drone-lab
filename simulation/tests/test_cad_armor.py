@@ -14,13 +14,13 @@ def scene(tmp_path, digest=None):
     source.write_bytes(b'geometry')
     folder = tmp_path / 'moving'
     folder.mkdir()
-    report = dict(static_sha256=digest or hashlib.sha256(source.read_bytes()).hexdigest(),
-                  target_center_m=[7, 2, .35], max_half_travel_m=0,
-                  material_faces=dict(green=0))
+    report = {'static_sha256': digest or hashlib.sha256(source.read_bytes()).hexdigest(),
+                  'target_center_m': [7, 2, .35], 'max_half_travel_m': 0,
+                  'material_faces': {'green': 0}}
     (folder / 'partition.json').write_text(json.dumps(report), encoding='utf-8')
     world = ET.Element('world')
     ET.SubElement(ET.SubElement(world, 'include'), 'uri').text = 'model://rmuc_2027'
-    config = dict(moving_armor=dict(enabled=True, source='cad_mesh_partition', motion_profile='fixed'))
+    config = {'moving_armor': {'enabled': True, 'source': 'cad_mesh_partition', 'motion_profile': 'fixed'}}
     return world, config, source
 
 
