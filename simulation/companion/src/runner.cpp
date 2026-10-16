@@ -478,7 +478,7 @@ int main(int argc,char**argv){try{
   Udp pressure(19000+o.vehicle);uint64_t pressure_sequence=0;
   Udp observation(16000+o.vehicle),peers(17000+o.vehicle),mav(o.local);std::map<int,companion::PeerEstimate>peer_cache;
   Eigen::Vector2d reliable_odometry_xy(config.initial_pose.x_m,config.initial_pose.y_m);
-  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double yaw=0;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;
+  uint64_t sim_us=0,frame_seq=0,camera_us=0;int target_sys=0,target_comp=0;int waypoint_index=0;companion::FlightFeedback native_feedback;companion::ArmorObservation target;double yaw=0;Clock::time_point imu_rx{},attitude_rx{},obs_rx{},bias_start{};uint64_t first_imu=0,bias_samples=0;Eigen::Vector3d imu_linear_bias=Eigen::Vector3d::Zero();Eigen::Vector3d bias_sum=Eigen::Vector3d::Zero();bool bias_ready=false,yaw_aligned=false;double yaw_offset=0;bool attitude_raw_initialized=false;double last_attitude_raw_yaw=0;
   companion::ImuClockMapper imu_clock(o.imu_clock=="gazebo"?
       companion::ImuClockDomain::Gazebo:companion::ImuClockDomain::FirstArrival);
   companion::ImuAttitudeHistory attitude_history;
@@ -593,6 +593,14 @@ int main(int argc,char**argv){try{
             {"body_rate_frd_radps",{a.rollspeed,a.pitchspeed,a.yawspeed}}});
         const auto stamp=companion::attitudeBootTimeUs(a.time_boot_ms,
             latest_imu_boot_us?latest_imu_boot_us:attitude_history.latestTimeUs());
+        const double raw_yaw_jump=attitude_raw_initialized?
+            companion::wrapAngle(a.yaw-last_attitude_raw_yaw):0.0;
+        if(attitude_raw_initialized&&std::abs(raw_yaw_jump)>.35){
+          yaw_offset=companion::wrapAngle(yaw_offset-raw_yaw_jump);
+          if(landing_recording())emit({{"kind","attitude_reset_compensated"},{"sim_time_us",sim_us},
+              {"time_boot_ms",a.time_boot_ms},{"raw_yaw_jump_rad",raw_yaw_jump},{"yaw_offset_rad",yaw_offset}});
+        }
+        attitude_raw_initialized=true;last_attitude_raw_yaw=a.yaw;
         if(stamp&&std::isfinite(a.roll)&&std::isfinite(a.pitch)&&std::isfinite(a.yaw)&&
             attitude_history.observe(*stamp,Eigen::Quaterniond(rotation(a.roll,-a.pitch,companion::kPi/2-a.yaw)))){
           yaw=a.yaw;attitude_rx=Clock::now();
