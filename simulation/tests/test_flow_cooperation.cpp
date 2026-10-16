@@ -67,6 +67,45 @@ void structuralReferencePropagation() {
   assert(!leader.fuseTof(frame).accepted);
 }
 
+void partialTerrainFrameKeepsFreshIndependentMapPriority() {
+  using namespace companion;
+  using T=TerrainMap::Triangle;
+  auto c=config(0);c.initial_pose.x_m=.03;c.initial_covariance*=.02;
+  c.tof_mounts[0].pitch_down_rad=kPi/9;
+  c.tof_mounts[0].horizontal_fov_rad=c.tof_mounts[0].vertical_fov_rad=kPi/4;
+  c.terrain=std::make_shared<TerrainMap>(std::vector<T>{
+      T{Eigen::Vector3f(2,-3,-2),Eigen::Vector3f(2,3,-2),Eigen::Vector3f(2,3,2)},
+      T{Eigen::Vector3f(2,-3,-2),Eigen::Vector3f(2,3,2),Eigen::Vector3f(2,-3,2)},
+      T{Eigen::Vector3f(0,.3,-2),Eigen::Vector3f(3,.3,-2),Eigen::Vector3f(3,.3,2)},
+      T{Eigen::Vector3f(0,.3,-2),Eigen::Vector3f(3,.3,2),Eigen::Vector3f(0,.3,2)},
+      T{Eigen::Vector3f(-3,-3,0),Eigen::Vector3f(3,-3,0),Eigen::Vector3f(3,3,0)},
+      T{Eigen::Vector3f(-3,-3,0),Eigen::Vector3f(3,3,0),Eigen::Vector3f(-3,3,0)}});
+  TofFrame full,partial;full.sensor_index=partial.sensor_index=0;
+  for(int cell=0;cell<64;++cell){
+    TerrainMap::Hit hit;
+    if(c.terrain->raycast({0,0,1},Estimator::tofRayBody(c.tof_mounts[0],cell/8,cell%8),4,hit)){
+      full.valid[cell]=1;full.distance_m[cell]=hit.depth_m;
+      if(std::abs(hit.normal.y())<.5){partial.valid[cell]=1;partial.distance_m[cell]=hit.depth_m;}
+    }
+  }
+  Estimator estimator(c);
+  for(int step=0;step<10;++step){full.sim_time_us=1000000+step*20000;assert(estimator.fuseTof(full).accepted);}
+  assert(estimator.estimate().xy_structural_valid);
+  partial.sim_time_us=full.sim_time_us+20000;
+  const auto part=estimator.fuseTof(partial);
+  assert(part.accepted&&part.degenerate&&estimator.estimate().xy_structural_valid);
+  const auto before=estimator.estimate();
+  PeerEstimate peer;peer.vehicle_id=1;peer.source="ESTIMATE";peer.sim_time_us=partial.sim_time_us;
+  peer.pose.x_m=1;peer.pose.y_m=.12;peer.pose.z_m=1;peer.pose_covariance=Eigen::Matrix3d::Identity()*.0001;
+  peer.xy_structural_valid=true;peer.reference_origin=1;peer.reference_seq=1;
+  peer.reference_time_us=partial.sim_time_us;peer.reference_path={1};
+  const auto report=estimator.fuseUwb({partial.sim_time_us,1,1,0,true,.95,false},peer);
+  assert(report.gated&&report.reason=="independent_map_preferred");
+  const auto after=estimator.estimate();
+  assert((after.covariance-before.covariance).norm()==0);
+  assert(after.pose.x_m==before.pose.x_m&&after.pose.y_m==before.pose.y_m);
+}
+
 void flowYawLinearization() {
   using namespace companion;
   for (const double yaw : {-2.8, -.4, .4, 2.8}) {
@@ -319,6 +358,7 @@ int main() {
     assert(estimate.reference_origin==0&&estimate.xy_peer_valid);
   }
   structuralReferencePropagation();
+  partialTerrainFrameKeepsFreshIndependentMapPriority();
   flowYawLinearization();
   delayedFlowUsesExposureAttitude();
   delayedFlowArbitraryRotation();

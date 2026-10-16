@@ -39,7 +39,7 @@ void Estimator::reset(uint64_t now) {
   assimilated_tof_us_.fill(0);
   last_landmark_us_=0;
   attitude_begin_=attitude_count_=0;
-  last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; local_tof_rank_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
+  last_imu_us_=last_height_us_=last_baro_us_=last_absolute_us_=0; startup_sim_us_=now; last_local_tof_us_=last_peer_xy_us_=last_flow_us_=0; flow_valid_=false; next_reference_seq_=0; previous_height_us_=0; baro_reference_hpa_=0; last_imu_yaw_=0; last_tof_us_.fill(0); last_uwb_us_.clear(); last_anchor_us_.clear(); seen_reference_seq_.clear(); accepted_anchors_.clear(); tof_cache_={}; structural_information_.setZero(); structural_information_us_=0; held_acceleration_.setZero(); state_.reference_path.clear();
 }
 bool Estimator::fresh(uint64_t t,uint64_t timeout) const { return t&&t<=state_.sim_time_us&&state_.sim_time_us-t<=timeout; }
 Estimate Estimator::estimate() const {
@@ -325,7 +325,7 @@ FusionReport Estimator::fuseTof(const TofFrame& frame) {
     state_.reference_origin=config_.vehicle_id; state_.reference_seq=++next_reference_seq_;
     state_.reference_time_us=frame.sim_time_us; state_.reference_hops=0; state_.reference_path={config_.vehicle_id};
   }
-  local_tof_rank_=rank; last_local_tof_us_=frame.sim_time_us;
+  last_local_tof_us_=frame.sim_time_us;
   report.accepted=true;report.degenerate=rank<3;report.inliers=count;
   report.innovation_norm=std::sqrt(sum_squared/count);report.reason=(config_.terrain?"terrain_point_to_plane_rank_":"point_to_line_rank_")+std::to_string(rank)+"_cumulative_"+std::to_string(cumulative_rank);
   return report;
@@ -443,7 +443,8 @@ FusionReport Estimator::fuseUwb(const UwbPeerSample& sample,const PeerEstimate& 
   if (has_reference && (peer.reference_time_us>peer.sim_time_us || peer.sim_time_us-peer.reference_time_us>config_.peer_timeout_us)) { report.stale=true; report.reason="reference_stale"; return report; }
   if (loop || duplicate_path || (has_reference && seen_reference_seq_[peer.reference_origin]>=peer.reference_seq)) { report.gated=true; report.reason=loop?"reference_path_loop":(duplicate_path?"reference_path_duplicate":"reference_already_seen"); return report; }
   // 当前地图解已完整约束时优先保留独立定位，队友参考主要用于补缺，避免共同误差扩散。
-  if(config_.terrain && estimate().xy_structural_valid && local_tof_rank_>=3) {
+  // 后续单方向深度帧退化，不撤销仍在有效期内的完整 XY 地图参考。
+  if(config_.terrain && estimate().xy_structural_valid) {
     report.gated=true;report.reason="independent_map_preferred";return report;
   }
   if(!peer.xy_structural_valid && !has_reference){report.gated=true;report.reason="peer_without_reference";return report;}

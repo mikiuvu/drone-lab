@@ -160,7 +160,6 @@ class Estimator {
   uint64_t last_local_tof_us_{0}, last_peer_xy_us_{0};
   uint64_t last_flow_us_{0}, next_reference_seq_{0};
   uint64_t last_landmark_us_{0};
-  int local_tof_rank_{0};
   bool flow_valid_{false};
   // 依次为上一 IMU 航向 rad、基准气压 hPa、基准高度 m、上一辅助高度 m。
   double last_imu_yaw_{0}, baro_reference_hpa_{0}, baro_reference_z_{0}, previous_height_m_{0};
