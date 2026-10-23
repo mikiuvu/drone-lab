@@ -52,7 +52,6 @@ struct Options {
   std::string image, guide_image, terrain, poses, output, mode = "paced";
   double seconds = 60;
   int camera_hz = 15, tof_hz = 15;
-  bool uwb_fallback = false;
   bool periodic_async = true;
   bool vision_async = true, tof_bounded = true;
   bool tof_navigation_slot = true;
@@ -74,10 +73,6 @@ Options options(int argc, char** argv) {
     else if (key == "--seconds") o.seconds = std::stod(value);
     else if (key == "--camera-hz") o.camera_hz = std::stoi(value);
     else if (key == "--tof-hz") o.tof_hz = std::stoi(value);
-    else if (key == "--uwb-fallback") {
-      if (value != "0" && value != "1") throw std::runtime_error("Invalid UWB fallback value");
-      o.uwb_fallback = value == "1";
-    }
     else if (key == "--periodic-async") {
       if (value != "0" && value != "1") throw std::runtime_error("Invalid periodic async value");
       o.periodic_async = value == "1";
@@ -150,10 +145,6 @@ class Workload {
     guide_image_ = std::make_shared<const PpmImage>(std::move(*guide_image));
     periodic_.setHorizonCap(.6);
     periodic_.setHorizonFraction(.25);
-    if (o_.uwb_fallback) {
-      auto config = config_; config.terrain.reset(); config.map_lines.clear();
-      fallback_estimator_ = std::make_unique<Estimator>(config);
-    }
     camera_.width = image_->width; camera_.height = image_->height;
     camera_.fx_px = camera_.fy_px = image_->width * .5;
     camera_.cx_px = (image_->width - 1) * .5; camera_.cy_px = (image_->height - 1) * .5;
@@ -174,13 +165,6 @@ class Workload {
           frames_[sensor].valid[cell] = 1; frames_[sensor].distance_m[cell] = hit.depth_m;
         }
       }
-    }
-    for (int id = 1; id < 4; ++id) {
-      PeerEstimate peer; peer.vehicle_id = id; peer.pose = config_.initial_pose;
-      peer.pose.y_m = id * .7; peer.xy_structural_valid = true;
-      peer.pose_covariance = Eigen::Matrix3d::Identity() * .01;
-      peer.reference_origin = id; peer.reference_path = {id}; peer.reference_seq = 1;
-      peer.source = "ESTIMATE"; peers_.push_back(peer);
     }
   }
 
@@ -211,20 +195,6 @@ class Workload {
         auto r = estimator_.fuseTof(frames_[sensor]); count("tof_frame", r.accepted); sink = r.inliers;
       });
     }
-    if (due(20)) measure("uwb_peers", [&] {
-      for (auto& peer : peers_) {
-        peer.sim_time_us = peer.reference_time_us = now; ++peer.reference_seq;
-        auto r = estimator_.fuseUwb({now, peer.vehicle_id, peer.pose.y_m, kPi / 2, true, 1, false}, peer);
-        count("uwb_peers", r.accepted); ++reasons_["uwb_peers"][r.reason];
-      }
-    });
-    if (fallback_estimator_ && due(20)) measure("uwb_fallback", [&] {
-      fallback_estimator_->fuseHeightAssist({now, 1.44, "SIM_HEIGHT_ASSIST"});
-      for (const auto& peer : peers_) {
-        auto r = fallback_estimator_->fuseUwb({now, peer.vehicle_id, peer.pose.y_m, kPi / 2, true, 1, false}, peer);
-        count("uwb_fallback", r.accepted); ++reasons_["uwb_fallback"][r.reason];
-      }
-    });
     if (due(o_.camera_hz)) {
       measure("vision_submit", [&] {
         VisionRequest request; request.stamp = now; request.sequence = tick + 1;
@@ -265,7 +235,8 @@ class Workload {
         }
       });
       measure("navigation", [&] {
-        auto intention = makeControlIntention(now, estimator_.estimate(), {}, camera_, peers_, {{11.0, 0, 0}}, &waypoint_, .45, false);
+        const std::vector<PeerEstimate> no_peers;
+        auto intention = makeControlIntention(now, estimator_.estimate(), {}, camera_, no_peers, {{11.0, 0, 0}}, &waypoint_, .45, false);
         sink = intention.velocity_flu_mps.norm();
       });
       const auto navigation_time=Clock::now();
@@ -389,12 +360,10 @@ class Workload {
   std::shared_ptr<const TerrainMap> terrain_;
   EstimatorConfig config_;
   Estimator estimator_;
-  std::unique_ptr<Estimator> fallback_estimator_;
   TeamMission mission_;
   CameraConfig camera_;
   std::shared_ptr<const PpmImage> image_, guide_image_;
   std::array<TofFrame, 3> frames_;
-  std::vector<PeerEstimate> peers_;
   std::vector<PoseInput> poses_;
   size_t replay_index_ = 0;
   uint64_t replay_cycle_ = 0;
@@ -479,13 +448,12 @@ int main(int argc, char** argv) {
     output["elapsed_s"] = elapsed; output["process_cpu_seconds"] = cpuSeconds() - cpu_start;
     output["process_cpu_percent"] = 100 * output["process_cpu_seconds"].get<double>() / elapsed;
     output["mode"] = o.mode; output["camera_hz"] = o.camera_hz; output["tof_hz_each"] = o.tof_hz;
-    output["uwb_fallback"] = o.uwb_fallback;
     output["requested_duration_s"] = o.seconds; output["completed_ticks"] = completed;
     output["skipped_ticks"] = skipped; output["deadline_misses"] = misses;
     output["tick_work"] = work_times.json(); output["tick_completion_lag"] = completion.json();
     output["resources"] = trace; output["stopped_early"] = !running;
     output["inputs"] = {{"image", o.image}, {"guide_image", o.guide_image}, {"terrain", o.terrain}, {"poses", o.poses}};
-    output["workload"] = "Single-vehicle algorithm kernels, three ToF streams, three UWB peers, four-vehicle mission schedule, recorded visual pose replay";
+    output["workload"] = "Single-vehicle algorithm kernels, three ToF streams, camera vision pipeline, four-vehicle mission schedule, recorded visual pose replay";
     output["timing_scope"] = "Algorithm calls; camera capture, ToF hardware I/O, MAVLink transport and actuator execution are excluded";
     std::ofstream file(o.output); file << output.dump(2) << '\n';
     if (!file) throw std::runtime_error("Cannot write result");
