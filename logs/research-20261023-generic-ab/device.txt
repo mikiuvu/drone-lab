@@ -1,0 +1,66 @@
+Linux licheervnano-8455 5.10.4-tag- #14 PREEMPT Thu Jan 22 14:08:28 CST 2026 riscv64 GNU/Linux
+riscv64
+1
+processor	: 0
+hart		: 0
+isa		: rv64imafdvcsu
+mmu		: sv39
+
+MemTotal:         130868 kB
+MemFree:           78040 kB
+MemAvailable:      84600 kB
+Buffers:            1108 kB
+Cached:             8152 kB
+SwapCached:            0 kB
+Active:             5460 kB
+Inactive:          10816 kB
+Active(anon):        352 kB
+Inactive(anon):     7108 kB
+Active(file):       5108 kB
+Inactive(file):     3708 kB
+Unevictable:           0 kB
+Mlocked:               0 kB
+SwapTotal:             0 kB
+SwapFree:              0 kB
+Dirty:                 0 kB
+Writeback:             0 kB
+AnonPages:          7036 kB
+Mapped:             6032 kB
+Shmem:               444 kB
+KReclaimable:       3348 kB
+Slab:              18936 kB
+SReclaimable:       3348 kB
+SUnreclaim:        15588 kB
+KernelStack:        1312 kB
+PageTables:          568 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:       65432 kB
+Committed_AS:      10832 kB
+VmallocTotal:   67108863 kB
+VmallocUsed:        8260 kB
+VmallocChunk:          0 kB
+Percpu:               64 kB
+CmaTotal:              0 kB
+CmaFree:               0 kB
+5af58a43-5084-457e-8468-82482594278f
+licheervnano-8455
+125514.11 124574.70
+cpu  37097 40228 14339 12426798 890 0 1398 0 0 0
+cpu0 37097 40228 14339 12426798 890 0 1398 0 0 0
+intr 13104264 0 0 0 0 0 4434884 0 0 0 0 0 0 0 0 0 0 0 1223 0 0 0 0 0 0 2 0 11856 628503 0 0 0 0 0 7530677 3 0 0 0 0 0 0 497116 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+ctxt 7279394
+btime 0
+processes 27009
+procs_running 1
+procs_blocked 0
+softirq 3976716 0 2842539 80232 42280 4876 0 125 0 10805 995859
+3.11 3.46 3.30 1/82 665
+              total        used        free      shared  buff/cache   available
+Mem:         130868       40252       78008         444       12608       84568
+Swap:             0           0           0
+Filesystem                Size      Used Available Use% Mounted on
+/dev/mmcblk0p2           14.5G      1.2G     12.7G   9% /
+/sys/class/thermal/thermal_zone0 soc_thermal_0 60876
+cpufreq-absent

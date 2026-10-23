@@ -1,0 +1,191 @@
+{
+  "stamp": "20261023-174638",
+  "host": "10.132.85.1",
+  "remote": "/root/research-nano/20261023-174638",
+  "local_binary": "build\\nano-research-20261023-uwb-free-generic\\algorithm_load_test",
+  "profiles": [
+    "camera15",
+    "camera30"
+  ],
+  "coverage_excluded": [
+    "camera capture",
+    "ToF hardware I/O",
+    "MAVLink transport",
+    "actuator execution"
+  ],
+  "notes": "Algorithm-kernel replay only; ToF frames are terrain raycasts, not sensor input.",
+  "date": "2026-10-23T17:46:39.607167+08:00",
+  "seconds": 60,
+  "sustained_seconds": 180,
+  "pose_count": 2093,
+  "pose_sources": [
+    {
+      "path": "simulation\\runtime\\run_20261010_201647\\companion_0.jsonl",
+      "sha256": "c8d9716beebee4fa443e18e071e258c07f563560ea35322fd8bb674f9b077c85",
+      "accepted": 502
+    },
+    {
+      "path": "simulation\\runtime\\run_20261010_201647\\companion_1.jsonl",
+      "sha256": "c57e50f38dbd18d6249b54703c3ae631c7f61982e7e08e3a40fd201fe76e7053",
+      "accepted": 535
+    },
+    {
+      "path": "simulation\\runtime\\run_20261010_201647\\companion_2.jsonl",
+      "sha256": "2205dfc490a449ad5983f10a08eec3c60d31a9a34388c170644240c4f43d1bbf",
+      "accepted": 440
+    },
+    {
+      "path": "simulation\\runtime\\run_20261010_201647\\companion_3.jsonl",
+      "sha256": "aed985e8417fb6511e074288b5d56e85dda22a9f6edc5849f59e4bb2d6ed17d3",
+      "accepted": 616
+    }
+  ],
+  "inputs": [
+    {
+      "name": "algorithm_load_test",
+      "path": "D:\\Robomaster code\\drone\\build\\nano-research-20261023-uwb-free-generic\\algorithm_load_test",
+      "bytes": 545992,
+      "sha256": "ef44d695b6ebd742d944725a46c9ecc68b8fec82163d0de8fdedd00e0b0890db"
+    },
+    {
+      "name": "armor.ppm",
+      "path": "D:\\Robomaster code\\drone\\simulation\\runtime\\benchmark-armor.ppm",
+      "bytes": 691215,
+      "sha256": "9e43dd96682fe51c502447b32440cfcd3bb22620c23e137d3e93516cb7a14072"
+    },
+    {
+      "name": "guide.ppm",
+      "path": "D:\\Robomaster code\\drone\\simulation\\runtime\\run_20261010_201647\\camera\\camera_0.ppm",
+      "bytes": 691253,
+      "sha256": "2c435779df3e94ceebf779770c219ca26bb81023b059694336c357aeaef9dcc3"
+    },
+    {
+      "name": "terrain_historical.f32",
+      "path": "D:\\Robomaster code\\drone\\simulation\\runtime\\run_20261010_201647\\original_base\\terrain_fixed.f32",
+      "bytes": 4460508,
+      "sha256": "06a8d137e7f78831a339144f720cbb2b97404b2edbb3bb2ba1f9759a22920742"
+    },
+    {
+      "name": "terrain_rmuc2027.f32",
+      "path": "D:\\Robomaster code\\drone\\simulation\\models\\terrain\\rmuc_2027\\terrain_triangles.f32",
+      "bytes": 27967968,
+      "sha256": "a5184e52c004b2baa0ef4db5141f4b8dc7fe86f63e16de623d05135e4050d4c6"
+    },
+    {
+      "name": "poses.json",
+      "path": "D:\\Robomaster code\\drone\\logs\\research-20261023-generic-ab\\poses.json",
+      "bytes": 356954,
+      "sha256": "c524f2bc54e83d0204cdefd5fc2918522d6dd61b9f47a5779bb8f4aa1baf1ba4"
+    }
+  ],
+  "runs": [
+    {
+      "at": "2026-10-23T17:46:39.607167+08:00",
+      "profiles": [
+        "camera15",
+        "camera30"
+      ],
+      "resume": false
+    }
+  ],
+  "build": {
+    "compiler": "/home/devcontainers/.local/share/drone-lab-toolchain/gcc/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-g++",
+    "cpu": "generic",
+    "cxx_flags": "-I/home/devcontainers/.cache/drone-nano-opencv-8475a135c75f/headers",
+    "binary_sha256": "ef44d695b6ebd742d944725a46c9ecc68b8fec82163d0de8fdedd00e0b0890db"
+  },
+  "remote_arch": "riscv64",
+  "device": {
+    "uname": "Linux licheervnano-8455 5.10.4-tag- #14 PREEMPT Thu Jan 22 14:08:28 CST 2026 riscv64 GNU/Linux",
+    "nproc": 1,
+    "mem_total_kib": 130868
+  },
+  "clk_tck": null,
+  "clk_tck_source": "unavailable",
+  "memory_budget": {
+    "mem_total_kib": 130868,
+    "commit_limit_kib": 65432,
+    "swap_total_kib": 0,
+    "overcommit_memory": 0,
+    "overcommit_ratio": 50,
+    "full_terrain_triangles": 776888
+  },
+  "remote_checksums": {
+    "algorithm_load_test": "ef44d695b6ebd742d944725a46c9ecc68b8fec82163d0de8fdedd00e0b0890db",
+    "armor.ppm": "9e43dd96682fe51c502447b32440cfcd3bb22620c23e137d3e93516cb7a14072",
+    "guide.ppm": "2c435779df3e94ceebf779770c219ca26bb81023b059694336c357aeaef9dcc3",
+    "terrain_historical.f32": "06a8d137e7f78831a339144f720cbb2b97404b2edbb3bb2ba1f9759a22920742",
+    "terrain_rmuc2027.f32": "a5184e52c004b2baa0ef4db5141f4b8dc7fe86f63e16de623d05135e4050d4c6",
+    "poses.json": "c524f2bc54e83d0204cdefd5fc2918522d6dd61b9f47a5779bb8f4aa1baf1ba4"
+  },
+  "commands": [
+    {
+      "profile": "camera15",
+      "seconds": 60,
+      "camera_hz": 15,
+      "argv": [
+        "/root/research-nano/20261023-174638/algorithm_load_test",
+        "--image",
+        "/root/research-nano/20261023-174638/armor.ppm",
+        "--guide-image",
+        "/root/research-nano/20261023-174638/guide.ppm",
+        "--terrain",
+        "/root/research-nano/20261023-174638/terrain_historical.f32",
+        "--poses",
+        "/root/research-nano/20261023-174638/poses.json",
+        "--output",
+        "/root/research-nano/20261023-174638/camera15.json",
+        "--seconds",
+        "60",
+        "--camera-hz",
+        "15",
+        "--tof-hz",
+        "15",
+        "--periodic-async",
+        "1",
+        "--vision-async",
+        "1",
+        "--tof-bounded",
+        "1",
+        "--tof-navigation-slot",
+        "1",
+        "--vision-branches",
+        "fallback"
+      ]
+    },
+    {
+      "profile": "camera30",
+      "seconds": 60,
+      "camera_hz": 30,
+      "argv": [
+        "/root/research-nano/20261023-174638/algorithm_load_test",
+        "--image",
+        "/root/research-nano/20261023-174638/armor.ppm",
+        "--guide-image",
+        "/root/research-nano/20261023-174638/guide.ppm",
+        "--terrain",
+        "/root/research-nano/20261023-174638/terrain_historical.f32",
+        "--poses",
+        "/root/research-nano/20261023-174638/poses.json",
+        "--output",
+        "/root/research-nano/20261023-174638/camera30.json",
+        "--seconds",
+        "60",
+        "--camera-hz",
+        "30",
+        "--tof-hz",
+        "15",
+        "--periodic-async",
+        "1",
+        "--vision-async",
+        "1",
+        "--tof-bounded",
+        "1",
+        "--tof-navigation-slot",
+        "1",
+        "--vision-branches",
+        "fallback"
+      ]
+    }
+  ]
+}

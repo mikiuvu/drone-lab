@@ -21,6 +21,7 @@ simulation/runtime/
 simulation/bin/
 simulation/models/generated*/
 simulation/models/terrain/
+simulation/models/meshes/
 simulation/assets/
 simulation/docs/*.png
 simulation/docs/*.ppm
@@ -41,3 +42,24 @@ docs/*.pdf
 docs/setup-status.json
 simulation/gazebo/*verification.json
 Robomaster codedronedownloadssitl-git*/
+
+# 预研产物：只保留复现所需的小型机器可读文件，原始日志、轨迹与构建产物不入库。
+!/logs/
+/logs/*
+!/logs/research-*/
+/logs/research-*/*
+!/logs/research-*/*/
+!/logs/research-*/summary.json
+!/logs/research-*/manifest.json
+!/logs/research-*/device.txt
+!/logs/research-*/poses.json
+/logs/research-*/*/*
+!/logs/research-*/*/summary.json
+!/logs/research-*/*/manifest.json
+!/logs/research-*/*/device.txt
+!/logs/research-*/*/poses.json
+!/build/
+/build/*
+!/build/research-*/
+/build/research-*/*
+!/build/research-*/localization-transit.json
