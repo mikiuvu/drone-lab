@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "ideal": {
+      "noise_std_m": 0.0,
+      "range_sigma_per_m": 0.0,
+      "bias_bound_m": 0.0,
+      "scale_bound": 0.0,
+      "frame_bias_std_m": 0.0,
+      "drop_probability": 0.0
+    },
+    "nominal": {
+      "noise_std_m": 0.01,
+      "range_sigma_per_m": 0.005,
+      "bias_bound_m": 0.015,
+      "scale_bound": 0.005,
+      "frame_bias_std_m": 0.005,
+      "drop_probability": 0.03
+    },
+    "adverse": {
+      "noise_std_m": 0.025,
+      "range_sigma_per_m": 0.015,
+      "bias_bound_m": 0.03,
+      "scale_bound": 0.01,
+      "frame_bias_std_m": 0.015,
+      "drop_probability": 0.1
+    }
+  },
+  "robots": [
+    {
+      "id": "route_hero_0",
+      "role": "hero",
+      "center_m": [0.6, -2.4, 0.5371],
+      "size_m": [0.6, 0.5, 0.6],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "route_infantry_1",
+      "role": "infantry",
+      "center_m": [2.2, -2.4, 0.4631],
+      "size_m": [0.45, 0.4, 0.45],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "route_engineer_2",
+      "role": "engineer",
+      "center_m": [3.6, -2.4, 0.6971],
+      "size_m": [0.65, 0.55, 0.8],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "route_sentry_3",
+      "role": "sentry",
+      "center_m": [5.2, -2.4, 0.2371],
+      "size_m": [0.6, 0.5, 0.6],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "route_infantry_4",
+      "role": "infantry",
+      "center_m": [6.8, -2.4, 0.1621],
+      "size_m": [0.45, 0.4, 0.45],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "route_hero_5",
+      "role": "hero",
+      "center_m": [8.2, -2.4, 0.2371],
+      "size_m": [0.6, 0.5, 0.6],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "route_engineer_6",
+      "role": "engineer",
+      "center_m": [9.0, -2.4, 0.3371],
+      "size_m": [0.65, 0.55, 0.8],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "tray_infantry_7",
+      "role": "infantry",
+      "center_m": [-1.5, -1.0, 0.4988],
+      "size_m": [0.45, 0.4, 0.45],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "contact_sentry_8",
+      "role": "sentry",
+      "center_m": [10.8, -0.2, 0.5],
+      "size_m": [0.6, 0.5, 0.6],
+      "velocity_mps": [0.0, 0.0, 0.0]
+    }
+  ],
+  "research": {
+    "map": "simulation/maps/rmuc_2027.json",
+    "seed": 2027,
+    "default_profile": "nominal",
+    "default_groups": ["route", "tray_near", "contact_near"],
+    "standing_note": "地面占位按地形高度网格落地；兵种包络为工程近似尺寸，不是官方 CAD 外形。",
+    "route": {
+      "y_m": -2.4,
+      "x_span_m": [0.0, 9.0],
+      "tray_near_m": [-1.5, -1.0],
+      "contact_near_m": [10.8, -0.2],
+      "note": "路线沿红方机库至蓝方基地的编队航路 y=-2.4 布置。"
+    },
+    "ground_source": {
+      "grid": "simulation/models/terrain/rmuc_2027/terrain_height_grid.npz",
+      "sampling": "nearest_node",
+      "resolved_m": {
+        "route_hero_0": 0.2371,
+        "route_infantry_1": 0.2381,
+        "route_engineer_2": 0.2971,
+        "route_sentry_3": -0.0629,
+        "route_infantry_4": -0.0629,
+        "route_hero_5": -0.0629,
+        "route_engineer_6": -0.0629,
+        "tray_infantry_7": 0.2738,
+        "contact_sentry_8": 0.2
+      }
+    },
+    "scenario_groups": {
+      "route": [
+        "route_hero_0",
+        "route_infantry_1",
+        "route_engineer_2",
+        "route_sentry_3",
+        "route_infantry_4",
+        "route_hero_5",
+        "route_engineer_6"
+      ],
+      "tray_near": ["tray_infantry_7"],
+      "contact_near": ["contact_sentry_8"],
+      "tray_pressure": ["pressure_engineer_0", "pressure_sentry_1"]
+    },
+    "pressure_robots": [
+      {
+        "id": "pressure_engineer_0",
+        "role": "engineer",
+        "center_m": [-1.0, -1.0, 2.001],
+        "size_m": [0.65, 0.55, 0.8],
+        "velocity_mps": [0.0, 0.0, 0.0],
+        "ground_m": 1.601,
+        "standing": "non_competition_platform",
+        "note": "站在红方无人机托盘平台上，正式比赛不会有地面机器人占用托盘。"
+      },
+      {
+        "id": "pressure_sentry_1",
+        "role": "sentry",
+        "center_m": [-1.2, -1.2, 1.94],
+        "size_m": [0.6, 0.5, 0.6],
+        "velocity_mps": [0.0, 0.0, 0.0],
+        "ground_m": 1.64,
+        "standing": "non_competition_platform",
+        "note": "与 pressure_engineer_0 同在托盘平台，用于制造贴身遮挡压力。"
+      }
+    ],
+    "tof_geometry": {
+      "resolution": [8, 8],
+      "hfov_rad": 0.7853981633974483,
+      "vfov_rad": 0.7853981633974483,
+      "pitch_down_rad": 0.3490658503988659,
+      "min_range_m": 0.02,
+      "max_range_m": 4.0,
+      "cruise_z_m": 2.3,
+      "source": "simulation/models/generated_micro/sensor_contract.json"
+    },
+    "occlusion": {
+      "summary": "巡航高度 2.3 m、俯角 20°、垂直视场 ±22.5° 时，射线扇形在水平距离 d 处覆盖 z ∈ [2.3-0.9163d, 2.3+0.0437d]。",
+      "first_hit_rule": "顶面高度 t 的箱体从 d_min=(2.3-t)/0.9163 起开始遮挡，直到 4 m 轴向量程耗尽。",
+      "bands": [
+        {"id": "route_engineer_2", "top_m": 1.0971, "first_hit_m": 1.31},
+        {"id": "route_hero_0", "top_m": 0.8371, "first_hit_m": 1.6},
+        {"id": "route_infantry_1", "top_m": 0.6881, "first_hit_m": 1.76},
+        {"id": "route_infantry_4", "top_m": 0.3871, "first_hit_m": 2.09},
+        {"id": "contact_sentry_8", "top_m": 0.8, "first_hit_m": 1.64},
+        {"id": "tray_infantry_7", "top_m": 0.7238, "first_hit_m": 1.72},
+        {"id": "pressure_engineer_0", "top_m": 2.401, "first_hit_m": 0.0},
+        {"id": "pressure_sentry_1", "top_m": 2.24, "first_hit_m": 0.07}
+      ],
+      "range_limit_m": 4.0,
+      "notes": [
+        "平地占位顶面约 0.4~1.1 m，只在无人机接近到约 1.3~3.0 m 时遮住下方几行射线。",
+        "托盘平台占位顶面约 2.24~2.40 m，巡航高度上从极近距离起就遮住射线，属于非比赛站位压力工况。",
+        "俯冲段高度降到 0.26 m 时，射线扇形整体贴近地面，平地占位在更远处即可遮挡。"
+      ]
+    },
+    "provenance": [
+      "地形高度取自 simulation/models/terrain/rmuc_2027/terrain_height_grid.npz，最近节点采样。",
+      "航路与托盘位置取自 simulation/maps/rmuc_2027.json 的 team_mission 与 spawns。",
+      "兵种包络为工程占位尺寸，不是 RMUC 官方机体尺寸。"
+    ]
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "producer": "simulation/research/localization_study.cpp",
+  "generator_command": "./simulation/research/build/localization_study --terrain simulation/models/terrain/rmuc_2027/terrain_triangles.f32 --trajectory simulation/runtime/run_20261016_215504/truth_evaluation_only.jsonl --scenarios simulation/research/scenarios.json --output build/research-20261023/localization-transit.json --trace build/research-20261023/localization-transit.trace.jsonl --start 7 --seconds 24 --eval-start 3 --landing-start 90 --landing-seconds 10 --seeds 2027,4099,6151 --jobs 8",
+  "artifacts": [
+    {
+      "path": "build/research-20261023/localization-transit.json",
+      "role": "结构化结果",
+      "bytes": 693548,
+      "sha256": "e88319cd4cbe7d3374953bd877cce2d8915305f217443986b339ba44ab6329b4",
+      "top_level_keys": [
+        "communication_modes",
+        "fusion_modes",
+        "generator",
+        "initialization",
+        "limitations",
+        "paired_by_seed",
+        "profiles",
+        "rates_hz",
+        "runs",
+        "scenario_groups_available",
+        "scenario_groups_excluded",
+        "scenarios",
+        "scenarios_source",
+        "schema",
+        "sensor_model",
+        "sensor_noise",
+        "terrain",
+        "tof_error_model",
+        "tof_geometry",
+        "trajectory",
+        "vehicle0_tof_blackout_s",
+        "windows"
+      ]
+    },
+    {
+      "path": "build/research-20261023/localization-transit.trace.jsonl",
+      "role": "评分窗内每 0.1 s 的估计、真值、误差与标志",
+      "bytes": 31389460,
+      "sha256": "e5b89dca1d77ffdb32d0289a8f4c876cc5b891d4be980a3e3e11baf0e061d2c3",
+      "lines": 147744,
+      "fields": [
+        "w",
+        "s",
+        "k",
+        "c",
+        "f",
+        "t",
+        "v",
+        "ex",
+        "ey",
+        "ez",
+        "tx",
+        "ty",
+        "e",
+        "xyv",
+        "stv",
+        "pvv",
+        "m"
+      ]
+    },
+    {
+      "path": "simulation/research/scenarios.json",
+      "role": "共享场景、剖面与机器人定义（只读输入）",
+      "bytes": 6470,
+      "sha256": "b08e28a61735b55ba434e81429823bfd3ad638e485e996037ef46427fc18d86b"
+    },
+    {
+      "path": "simulation/research/tof_error_model.hpp",
+      "role": "共享 ToF 误差模型（只读输入）",
+      "bytes": 13636,
+      "sha256": "149f752c9c386c0f3eccdf6616584087aa32742e66b7d3407b6751c17b7cffca"
+    },
+    {
+      "path": "simulation/runtime/run_20261016_215504/truth_evaluation_only.jsonl",
+      "role": "真值轨迹输入（只读输入）",
+      "bytes": 2722432
+    },
+    {
+      "path": "simulation/models/terrain/rmuc_2027/terrain_triangles.f32",
+      "role": "静态地形网格输入（只读输入）",
+      "bytes": 27967968,
+      "triangles_raw": 776888,
+      "triangles_loaded": 728933
+    }
+  ],
+  "design": {
+    "windows": [
+      {
+        "name": "transit",
+        "start_s": 7.0,
+        "seconds": 24.0,
+        "evaluation_start_s": 3.0,
+        "clamped_to_record": false
+      },
+      {
+        "name": "landing",
+        "start_s": 90.0,
+        "seconds": 10.0,
+        "evaluation_start_s": 3.0,
+        "clamped_to_record": false
+      }
+    ],
+    "scenarios": [
+      "ideal",
+      "noise",
+      "occluders",
+      "combined",
+      "adverse",
+      "blackout"
+    ],
+    "seeds": [
+      2027,
+      4099,
+      6151
+    ],
+    "communication_modes": [
+      "intermittent",
+      "off",
+      "on"
+    ],
+    "fusion_modes": [
+      "tof_flow_imu_height",
+      "tof_imu_height"
+    ],
+    "runs_per_window": 108,
+    "runs_total": 216,
+    "samples_per_run_min": 4004,
+    "samples_per_run_max": 9604,
+    "sensor_model_entries": 36,
+    "paired_by_seed_entries": 72,
+    "fingerprint_unique_per_window_scenario_seed": true
+  },
+  "run_fields": {
+    "xy_rmse_m": "评分窗内全部样本的世界 XY RMSE，单位 m",
+    "xy_p50_m": "XY 误差中位数，单位 m",
+    "xy_p95_m": "XY 误差 P95，单位 m",
+    "max_xy_error_m": "XY 误差最大值，单位 m",
+    "xy_valid_fraction": "xy_valid 样本占全部样本的比例",
+    "xy_structural_fraction": "xy_structural_valid 样本占全部样本的比例",
+    "xy_peer_fraction": "xy_peer_valid 样本占全部样本的比例",
+    "false_valid_fraction": "误差大于 0.1 m 且 xy_valid 的样本占全部样本的比例",
+    "common_drift_rmse_m": "四机误差均值的 RMSE，单位 m",
+    "pair_relative_rmse_m": "机间距离误差的 RMSE，单位 m",
+    "tof_calls": "fuseTof 调用次数",
+    "tof_accepted": "fuseTof 接受次数",
+    "uwb_calls": "fuseUwb 调用次数；off 条件恒为 0",
+    "uwb_accepted": "fuseUwb 接受次数",
+    "uwb_rejections": "按 FusionReport.reason 计数的拒绝次数",
+    "collaboration_evidence": "accepted_updates 或 no_accepted_updates",
+    "input_checksum": "同一 (窗口, 场景, 种子) 下跨通信与融合模式一致的 FNV-1a 指纹",
+    "vehicles": "逐机的 rmse、p50、p95、max、有效比例、结构比例、最长失效秒数、初值偏移"
+  },
+  "sensor_model_fields": {
+    "rays": "该 (窗口, 场景, 种子) 的 ToF 射线总数",
+    "robot_occluded_rays": "被机器人 AABB 挡在真实表面前方的射线数",
+    "robot_occluded_fraction": "遮挡射线占全部射线的比例",
+    "no_return": "量程内无回波、判为无效的像素数",
+    "dropped": "被丢弃概率判为无效的像素数",
+    "out_of_range": "加噪后越出量程、判为无效的像素数",
+    "vehicle0_blackout": "0 号机 ToF 黑障期间强制无效的像素数",
+    "valid_returns": "有效返回像素数",
+    "terrain_error_*": "有效且未被遮挡的返回减真实几何深度的分布，单位 m"
+  },
+  "paired_fields": {
+    "xy_rmse_on_m": "开启通信的 RMSE",
+    "xy_rmse_off_m": "关闭通信的 RMSE",
+    "xy_rmse_intermittent_m": "间歇通信的 RMSE",
+    "delta_rmse_on_minus_off_m": "按种子配对的 on 减 off 差值",
+    "delta_rmse_intermittent_minus_off_m": "按种子配对的 intermittent 减 off 差值",
+    "delta_valid_on_minus_off": "按种子配对的有效比例差值",
+    "uwb_accepted_on": "开启通信时接受的队友更新数",
+    "collaboration_evidence_on": "该次运行是否具备协同证据"
+  },
+  "repetition_unit": "独立种子（3 个）；同一运行内的帧不作为独立重复",
+  "limitations": [
+    "真值日志只提供位置与 yaw，roll/pitch 固定为 0，属于仅 yaw 姿态重建",
+    "传感器与估计器先验共用同一静态地形网格，结构定位精度不代表真实建图误差",
+    "高度辅助使用带噪真值高度，不是真实高度传感器；两种融合模式均为 ToF+IMU+高度辅助",
+    "机器人以 AABB 射线交点只进入传感器模型，不进入估计器先验；高空飞行时地面机器人遮挡比例可能为 0",
+    "共享 schema 中的 tray_pressure 组是托盘平台上的非比赛站位，未纳入六个场景；其遮挡压力不代表正式比赛",
+    "UWB 距离与方位由真值相对几何加噪生成，仅用于合成量测；队友位姿来自各估计器快照",
+    "初始位置与航向偏移固定，若门控不收敛即为该配置下的实际结果"
+  ]
+}

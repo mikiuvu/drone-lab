@@ -2,7 +2,6 @@
  * @file sensor_gateway.cc
  * @brief 将 Gazebo 深度图转为 ToF UDP 观测，将彩色图发布为带时间戳的最新 PPM 文件。
  */
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -16,11 +15,13 @@
 #include <limits>
 #include <mutex>
 #include <memory>
-#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+// 与离线消融实验共用的 ToF 误差模型；相对路径使本文件不需要额外的包含目录。
+#include "../../research/tof_error_model.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -165,6 +166,30 @@ class SensorGateway final
         if (!requireValue("--tof-mixed-pixel-threshold-m", value)) return false;
         tofMixedPixelThresholdM_ = std::stod(value);
       }
+      else if (argument == "--tof-range-sigma-per-m")
+      {
+        std::string value;
+        if (!requireValue("--tof-range-sigma-per-m", value)) return false;
+        tofRangeSigmaPerM_ = std::stod(value);
+      }
+      else if (argument == "--tof-bias-bound-m")
+      {
+        std::string value;
+        if (!requireValue("--tof-bias-bound-m", value)) return false;
+        tofBiasBoundM_ = std::stod(value);
+      }
+      else if (argument == "--tof-scale-bound")
+      {
+        std::string value;
+        if (!requireValue("--tof-scale-bound", value)) return false;
+        tofScaleBound_ = std::stod(value);
+      }
+      else if (argument == "--tof-frame-bias-std-m")
+      {
+        std::string value;
+        if (!requireValue("--tof-frame-bias-std-m", value)) return false;
+        tofFrameBiasStdM_ = std::stod(value);
+      }
       else if (argument == "--seed")
       {
         std::string value;
@@ -185,9 +210,16 @@ class SensorGateway final
       std::cerr << "vehicle count or UDP port is outside the supported range\n";
       return false;
     }
-    if (tofNoiseStdM_ < 0.0 || tofInvalidProbability_ < 0.0 ||
-        tofInvalidProbability_ > 1.0 || tofMixedPixelProbability_ < 0.0 ||
-        tofMixedPixelProbability_ > 1.0 || tofMixedPixelThresholdM_ < 0.0)
+    // 命令行参数组装成共享剖面；缺省值等于本程序原有参数，不改变默认行为。
+    profile_ = drone_sim::research::TofNoiseProfile{
+        tofNoiseStdM_, tofRangeSigmaPerM_, tofBiasBoundM_, tofScaleBound_,
+        tofFrameBiasStdM_, tofInvalidProbability_};
+    edgePolicy_ = drone_sim::research::TofEdgePolicy{
+        true, tofMixedPixelProbability_, tofMixedPixelThresholdM_};
+    if (!drone_sim::research::TofProfileIsValid(profile_) ||
+        !std::isfinite(tofMixedPixelProbability_) || tofMixedPixelProbability_ < 0.0 ||
+        tofMixedPixelProbability_ > 1.0 || !std::isfinite(tofMixedPixelThresholdM_) ||
+        tofMixedPixelThresholdM_ < 0.0)
     {
       std::cerr << "ToF noise and probability values are invalid\n";
       return false;
@@ -265,6 +297,10 @@ class SensorGateway final
         << "  --tof-invalid-probability P default 0.03\n"
         << "  --tof-mixed-pixel-probability P default 0.05\n"
         << "  --tof-mixed-pixel-threshold-m M default 0.10\n"
+        << "  --tof-range-sigma-per-m M default 0.0\n"
+        << "  --tof-bias-bound-m M   default 0.0\n"
+        << "  --tof-scale-bound S    default 0.0\n"
+        << "  --tof-frame-bias-std-m M default 0.0\n"
         << "  --seed N                default 0x544f465f53494d\n";
   }
 
@@ -343,8 +379,8 @@ class SensorGateway final
 
     // 1. 先保存原始深度和有效性，边缘判定始终使用未加噪的邻域。
     const auto simUs = SimTimeUs(_msg);
-    std::array<double, 64> depth{};
-    std::array<bool, 64> sourceValid{};
+    std::array<double, drone_sim::research::kTofPixelCount> depth{};
+    std::array<bool, drone_sim::research::kTofPixelCount> sourceValid{};
     for (int y = 0; y < 8; ++y)
     {
       for (int x = 0; x < 8; ++x)
@@ -354,53 +390,29 @@ class SensorGateway final
       }
     }
 
-    // 2. 用车辆、传感器及帧时间派生局部随机源，使回调先后顺序不影响同帧结果。
-    std::mt19937_64 random(seed_ + static_cast<uint64_t>(_vehicle) * 1009ULL +
-        static_cast<uint64_t>(_sensor) * 9176ULL + static_cast<uint64_t>(simUs) * 104729ULL);
-    std::bernoulli_distribution invalid(tofInvalidProbability_);
-    std::bernoulli_distribution mixed(tofMixedPixelProbability_);
-    std::normal_distribution<double> noise(0.0, tofNoiseStdM_);
+    // 2. 共享误差模型按 (种子, 车辆, 传感器, 帧时间, 像素) 派生随机量，
+    //    回调先后顺序不影响同帧结果；量程外像素沿用本程序的限幅行为。
+    const auto frame = drone_sim::research::ApplyTofFrame(
+        profile_, edgePolicy_, seed_, _vehicle, _sensor, simUs, depth, sourceValid,
+        tofMinM_, tofMaxM_, drone_sim::research::TofRangePolicy::kClamp);
 
     std::ostringstream json;
     json << std::setprecision(9)
          << "{\"schema\":1,\"kind\":\"tof\",\"vehicle\":" << _vehicle
          << ",\"sensor\":" << _sensor
          << ",\"sim_time_us\":" << SimTimeUs(_msg) << ",\"distance_m\":[";
-    std::array<bool, 64> valid{};
-    std::array<double, 64> output{};
-    for (int index = 0; index < 64; ++index)
+    for (int index = 0; index < drone_sim::research::kTofPixelCount; ++index)
     {
-      // 3. 四邻域深度突变标记混合像素候选；随机失效后仅对有效深度加高斯噪声并限幅。
-      bool edgeMixed = false;
-      const int x = index % 8;
-      const int y = index / 8;
-      constexpr std::array<std::array<int, 2>, 4> kNeighbors{{
-          {{-1, 0}}, {{1, 0}}, {{0, -1}}, {{0, 1}}}};
-      for (const auto &neighbor : kNeighbors)
-      {
-        const int nx = x + neighbor[0];
-        const int ny = y + neighbor[1];
-        if (nx < 0 || nx >= 8 || ny < 0 || ny >= 8)
-          continue;
-        const int neighborIndex = ny * 8 + nx;
-        if (sourceValid[index] && sourceValid[neighborIndex] &&
-            std::abs(depth[index] - depth[neighborIndex]) > tofMixedPixelThresholdM_)
-          edgeMixed = true;
-      }
-      valid[index] = sourceValid[index] && !invalid(random) &&
-                     !(edgeMixed && mixed(random));
-      output[index] = valid[index]
-          ? std::clamp(depth[index] + noise(random), tofMinM_, tofMaxM_) : 0.0;
       if (index != 0)
         json << ',';
-      json << output[index];
+      json << frame.distance_m[index];
     }
     json << "],\"valid\":[";
-    for (int index = 0; index < 64; ++index)
+    for (int index = 0; index < drone_sim::research::kTofPixelCount; ++index)
     {
       if (index != 0)
         json << ',';
-      json << (valid[index] ? "true" : "false");
+      json << (frame.valid[index] ? "true" : "false");
     }
     json << "]}\n";
     Send(_vehicle, json.str());
@@ -566,10 +578,21 @@ class SensorGateway final
   // ToF 有效深度下限/上限与噪声标准差使用 m；失效概率无单位。
   private: double tofMinM_{kDefaultTofMinM};
   private: double tofMaxM_{kDefaultTofMaxM};
-  private: double tofNoiseStdM_{0.003};
-  private: double tofInvalidProbability_{0.03};
-  private: double tofMixedPixelProbability_{0.05};
-  private: double tofMixedPixelThresholdM_{0.10}; // 四邻域边缘深度差门限，单位 m。
+  // 缺省值直接引用共享误差模型常量，保证默认参数只有一处定义。
+  private: double tofNoiseStdM_{drone_sim::research::kDefaultTofNoiseStdM};
+  private: double tofInvalidProbability_{drone_sim::research::kDefaultTofDropProbability};
+  private: double tofMixedPixelProbability_{
+      drone_sim::research::kDefaultTofMixedPixelProbability};
+  // 四邻域边缘深度差门限，单位 m。
+  private: double tofMixedPixelThresholdM_{
+      drone_sim::research::kDefaultTofMixedPixelThresholdM};
+  // 共享剖面的新增项；未显式传参时保持原有的纯白噪声行为。
+  private: double tofRangeSigmaPerM_{0.0};
+  private: double tofBiasBoundM_{0.0};
+  private: double tofScaleBound_{0.0};
+  private: double tofFrameBiasStdM_{0.0};
+  private: drone_sim::research::TofNoiseProfile profile_;
+  private: drone_sim::research::TofEdgePolicy edgePolicy_;
   private: uint64_t seed_{0x544f465f53494dULL};
   private: std::unique_ptr<std::mutex[]> cameraMutex_;
   private: std::unique_ptr<std::atomic<uint64_t>[]> cameraSequence_;
