@@ -301,11 +301,11 @@ ToF+IMU+高度辅助、完全关闭 的配对差值中位数 0.141 m，四分位
 $ErrorActionPreference = 'Stop'
 $reportPython = '<workspace 依赖运行时>/python.exe'
 $poppler = '<workspace 依赖运行时>/native/poppler/Library/bin'
-& '.venv/Scripts/python.exe' -X utf8 'scripts/build_research_report.py' figures
+& '.venv/Scripts/python.exe' -X utf8 'scripts/build_research_20261023_report.py' figures
 if ($LASTEXITCODE -ne 0) { throw '图表生成失败' }
-& '.venv/Scripts/python.exe' -X utf8 'scripts/build_research_report.py' markdown
+& '.venv/Scripts/python.exe' -X utf8 'scripts/build_research_20261023_report.py' markdown
 if ($LASTEXITCODE -ne 0) { throw 'Markdown 生成失败' }
-& $reportPython -X utf8 'scripts/build_research_report.py' pdf
+& $reportPython -X utf8 'scripts/build_research_20261023_report.py' pdf
 if ($LASTEXITCODE -ne 0) { throw 'PDF 生成失败' }
 & "$poppler\pdftoppm.exe" -png -r 110 'docs/research-20261023/report.pdf' 'tmp/report-pages/page'
 if ($LASTEXITCODE -ne 0) { throw 'PDF 页面渲染失败' }

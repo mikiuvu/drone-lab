@@ -25,7 +25,7 @@
 | A | 已产出 | simulation/research/scenarios.json、scene.py、tof_error_model.hpp，说明见 docs/research-20261023/tof-sources.md |
 | B | 已产出，1 组配置未完成 | scripts/run_research_nano.py、logs/research-20261023/nano-20261023-133926/、docs/research-20261023/nano-findings.md；rmuc2027_15 因内核内存不足终止 |
 | C | 已产出 | simulation/research/localization_study.cpp、build/research-20261023/localization-transit.json、docs/research-20261023/localization-findings.md |
-| D | 已产出 | docs/research-20261023/report.md、report.pdf、figures/，生成器为 scripts/build_research_report.py |
+| D | 已产出 | docs/research-20261023/report.md、report.pdf、figures/，生成器为 scripts/build_research_20261023_report.py |
 
 ## 实验设计
 
